@@ -1,5 +1,5 @@
-import { ChannelsStatusSnapshot } from "../types.ts";
-import type { ChannelsState, SimplexInviteMode } from "./channels.types.ts";
+import type { ChannelsStatusSnapshot } from "../types.ts";
+import type { ChannelsState } from "./channels.types.ts";
 
 
 export type { ChannelsState };
@@ -91,37 +91,5 @@ export async function logoutWhatsApp(state: ChannelsState) {
     state.whatsappLoginMessage = String(err);
   } finally {
     state.whatsappBusy = false;
-  }
-}
-
-export async function createSimplexInvite(state: ChannelsState, mode: SimplexInviteMode) {
-  if (!state.client || !state.connected || state.simplexInviteBusy) {
-    return;
-  }
-  state.simplexInviteBusy = true;
-  state.simplexInviteMode = mode;
-  state.simplexInviteLink = null;
-  state.simplexInviteQrDataUrl = null;
-  state.simplexInviteError = null;
-  try {
-    const res = await state.client.request<{ link?: string | null; qrDataUrl?: string | null }>(
-      "simplex.invite.create",
-      {
-        mode,
-      },
-    );
-    const link = typeof res?.link === "string" ? res.link.trim() : "";
-    const qrDataUrl =
-      typeof res?.qrDataUrl === "string" && res.qrDataUrl.trim() ? res.qrDataUrl.trim() : null;
-    if (!link) {
-      state.simplexInviteError = "Invite created, but no link was returned.";
-      return;
-    }
-    state.simplexInviteLink = link;
-    state.simplexInviteQrDataUrl = qrDataUrl;
-  } catch (err) {
-    state.simplexInviteError = String(err);
-  } finally {
-    state.simplexInviteBusy = false;
   }
 }

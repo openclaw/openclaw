@@ -12,26 +12,6 @@ export function renderSimplexCard(params: {
 }) {
   const { props, simplex, simplexAccounts, accountCountLabel } = params;
   const hasMultipleAccounts = simplexAccounts.length > 1;
-  const inviteMode = props.simplexInviteMode ?? "connect";
-  const inviteLabel = inviteMode === "address" ? "Address link" : "Invite link";
-  const inviteBusy = props.simplexInviteBusy;
-  const inviteLink = props.simplexInviteLink;
-  const inviteQrDataUrl = props.simplexInviteQrDataUrl;
-  const inviteError = props.simplexInviteError;
-  const copyInviteLink = async (): Promise<void> => {
-    if (!inviteLink) {
-      return;
-    }
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard API unavailable");
-      }
-      await navigator.clipboard.writeText(inviteLink);
-      props.onSimplexInviteError(null);
-    } catch (err) {
-      props.onSimplexInviteError(`Copy failed: ${String(err)}`);
-    }
-  };
 
   const renderAccountCard = (account: ChannelAccountSnapshot) => {
     const label = account.name || account.accountId;
@@ -132,56 +112,6 @@ export function renderSimplexCard(params: {
         simplex?.lastError
           ? html`<div class="callout danger" style="margin-top: 12px;">
             ${simplex.lastError}
-          </div>`
-          : nothing
-      }
-
-      <div class="row" style="margin-top: 12px; flex-wrap: wrap;">
-        <button
-          class="btn"
-          ?disabled=${inviteBusy}
-          @click=${() => props.onSimplexInvite("connect")}
-        >
-          ${inviteBusy && inviteMode === "connect" ? "Creating…" : "Create invite link"}
-        </button>
-        <button
-          class="btn"
-          ?disabled=${inviteBusy}
-          @click=${() => props.onSimplexInvite("address")}
-        >
-          ${inviteBusy && inviteMode === "address" ? "Creating…" : "Create address link"}
-        </button>
-      </div>
-
-      ${
-        inviteError
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-            ${inviteError}
-          </div>`
-          : nothing
-      }
-
-      ${
-        inviteLink
-          ? html`<div class="callout" style="margin-top: 12px;">
-            <div class="row" style="justify-content: space-between; gap: 12px;">
-              <div class="muted">${inviteLabel}</div>
-              <button
-                class="btn btn--sm"
-                @click=${() => void copyInviteLink()}
-              >
-                Copy
-              </button>
-            </div>
-            <pre class="code-block" style="margin-top: 8px;">${inviteLink}</pre>
-          </div>`
-          : nothing
-      }
-
-      ${
-        inviteQrDataUrl
-          ? html`<div class="qr-wrap" style="margin-top: 12px;">
-            <img src=${inviteQrDataUrl} alt="SimpleX QR" />
           </div>`
           : nothing
       }

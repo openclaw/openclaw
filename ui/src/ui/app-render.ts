@@ -243,11 +243,6 @@ export function renderApp(state: AppViewState) {
                 whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                 whatsappConnected: state.whatsappLoginConnected,
                 whatsappBusy: state.whatsappBusy,
-                simplexInviteBusy: state.simplexInviteBusy,
-                simplexInviteMode: state.simplexInviteMode,
-                simplexInviteLink: state.simplexInviteLink,
-                simplexInviteQrDataUrl: state.simplexInviteQrDataUrl,
-                simplexInviteError: state.simplexInviteError,
                 configSchema: state.configSchema,
                 configSchemaLoading: state.configSchemaLoading,
                 configForm: state.configForm,
@@ -261,10 +256,6 @@ export function renderApp(state: AppViewState) {
                 onWhatsAppWait: () => state.handleWhatsAppWait(),
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
                 onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSimplexInvite: (mode) => state.handleSimplexInvite(mode),
-                onSimplexInviteError: (message) => {
-                  state.simplexInviteError = message;
-                },
                 onConfigSave: () => state.handleChannelConfigSave(),
                 onConfigReload: () => state.handleChannelConfigReload(),
                 onNostrProfileEdit: (accountId, profile) =>

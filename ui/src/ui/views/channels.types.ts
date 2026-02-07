@@ -27,11 +27,6 @@ export type ChannelsProps = {
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
   whatsappBusy: boolean;
-  simplexInviteBusy: boolean;
-  simplexInviteMode: "connect" | "address" | null;
-  simplexInviteLink: string | null;
-  simplexInviteQrDataUrl: string | null;
-  simplexInviteError: string | null;
   configSchema: unknown;
   configSchemaLoading: boolean;
   configForm: Record<string, unknown> | null;
@@ -44,8 +39,6 @@ export type ChannelsProps = {
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;
-  onSimplexInvite: (mode: "connect" | "address") => void;
-  onSimplexInviteError: (message: string | null) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;
