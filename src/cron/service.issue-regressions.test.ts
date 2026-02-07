@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
+import { recomputeNextRuns, createJob } from "./service/jobs.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
 
@@ -342,5 +343,150 @@ describe("Cron issue regressions", () => {
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
 
     await store.cleanup();
+  });
+
+  it("preserves past-due nextRunAtMs during recomputeNextRuns (#11184)", async () => {
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const past = now - 60_000;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/dummy.json",
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    const job: CronJob = {
+      id: "past-job",
+      name: "past-job",
+      enabled: true,
+      createdAtMs: past - 1000,
+      updatedAtMs: past - 1000,
+      schedule: { kind: "every", everyMs: 3600_000, anchorMs: past },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: past },
+    };
+
+    state.store = {
+      version: 1,
+      jobs: [job],
+    };
+
+    recomputeNextRuns(state);
+
+    expect(job.state.nextRunAtMs).toBe(past);
+  });
+
+  it("schedules newly added jobs with past anchors to run immediately (#11217)", async () => {
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const past = now - 60_000;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/dummy.json",
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    state.store = { version: 1, jobs: [] };
+
+    const job = createJob(state, {
+      name: "new-past-job",
+      schedule: { kind: "every", everyMs: 3600_000, anchorMs: past },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(past);
+  });
+
+  it("retries immediately after cooldown if lastStatus is not ok", async () => {
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const past = now - 60_000;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/dummy.json",
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    const job: CronJob = {
+      id: "fail-job",
+      name: "fail-job",
+      enabled: true,
+      createdAtMs: past - 1000,
+      updatedAtMs: past - 1000,
+      schedule: { kind: "every", everyMs: 3600_000, anchorMs: past },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs: past,
+        lastRunAtMs: now - 6_000,
+        lastStatus: "error",
+      },
+    };
+
+    state.store = {
+      version: 1,
+      jobs: [job],
+    };
+
+    const { computeJobNextRunAtMs } = await import("./service/jobs.js");
+    const next = computeJobNextRunAtMs(job, now);
+
+    expect(next).toBe(past);
+  });
+
+  it("uses cooldown window for repeated failures instead of 0ms retry", async () => {
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const past = now - 60_000;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/dummy.json",
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    const job: CronJob = {
+      id: "fail-cooldown-job",
+      name: "fail-cooldown-job",
+      enabled: true,
+      createdAtMs: past - 1000,
+      updatedAtMs: past - 1000,
+      schedule: { kind: "every", everyMs: 3600_000, anchorMs: past },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        nextRunAtMs: past,
+        lastRunAtMs: now - 1_000,
+        lastStatus: "error",
+      },
+    };
+
+    state.store = {
+      version: 1,
+      jobs: [job],
+    };
+
+    const { computeJobNextRunAtMs } = await import("./service/jobs.js");
+    const next = computeJobNextRunAtMs(job, now);
+
+    expect(next).toBeTypeOf("number");
+    expect(next).toBeGreaterThan(now);
+    expect(next).not.toBe(past);
   });
 });

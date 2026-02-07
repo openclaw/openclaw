@@ -19,6 +19,7 @@ import {
 } from "./normalize.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const FAILED_RETRY_COOLDOWN_MS = 5_000;
 
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
@@ -58,13 +59,38 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   if (!job.enabled) {
     return undefined;
   }
+
+  // --- PAST-DUE PRESERVATION ---
+  // If we already have a nextRunAtMs in the past, and it hasn't successfully
+  // completed for that run, keep it so the scheduler fires it immediately.
+  const currentNext = job.state.nextRunAtMs;
+  if (typeof currentNext === "number" && currentNext <= nowMs) {
+    const lastRun = job.state.lastRunAtMs;
+    const hasRunForThisSlot = typeof lastRun === "number" && lastRun >= currentNext;
+    if (!hasRunForThisSlot) {
+      return currentNext;
+    }
+    if (job.state.lastStatus !== "ok") {
+      const sinceLastRunMs =
+        typeof lastRun === "number" ? nowMs - lastRun : Number.POSITIVE_INFINITY;
+      const shouldCooldown = sinceLastRunMs >= 0 && sinceLastRunMs < FAILED_RETRY_COOLDOWN_MS;
+      if (!shouldCooldown) {
+        return currentNext;
+      }
+    }
+  }
+
   if (job.schedule.kind === "every") {
     const anchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
       fallbackAnchorMs: job.createdAtMs,
     });
-    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
+    // For initial scheduling (no current next run), allow picking the past anchor
+    // if it's already reached, so it fires immediately.
+    const allowPast = currentNext === undefined;
+    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs, { allowPast });
   }
+
   if (job.schedule.kind === "at") {
     // One-shot jobs stay due until they successfully finish.
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
@@ -84,7 +110,10 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
             : null;
     return atMs !== null ? atMs : undefined;
   }
-  return computeNextRunAtMs(job.schedule, nowMs);
+
+  // For cron expressions, also allow picking a past run if we are just initializing.
+  const allowPast = currentNext === undefined;
+  return computeNextRunAtMs(job.schedule, nowMs, { allowPast });
 }
 
 export function recomputeNextRuns(state: CronServiceState): boolean {

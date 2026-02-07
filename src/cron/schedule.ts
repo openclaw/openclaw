@@ -10,7 +10,11 @@ function resolveCronTimezone(tz?: string) {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+export function computeNextRunAtMs(
+  schedule: CronSchedule,
+  nowMs: number,
+  options?: { allowPast?: boolean },
+): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
@@ -27,6 +31,9 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     if (atMs === null) {
       return undefined;
     }
+    if (options?.allowPast) {
+      return atMs;
+    }
     return atMs > nowMs ? atMs : undefined;
   }
 
@@ -37,6 +44,10 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
+    if (options?.allowPast) {
+      const steps = Math.floor(elapsed / everyMs);
+      return anchor + steps * everyMs;
+    }
     const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
     return anchor + steps * everyMs;
   }
@@ -49,6 +60,20 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
+  if (options?.allowPast) {
+    // To find the "current" or "last" run, we can look back a bit.
+    // Croner doesn't have a direct "lastRun" that is efficient without a reference.
+    // But we can check if nowMs itself is a run time, or search backwards.
+    // However, the requirement is "past-due preservation", so maybe we don't
+    // need computeNextRunAtMs to return a past time for cron expressions
+    // unless it's explicitly for initial scheduling.
+    // Let's try to find the most recent run before or at nowMs.
+    const prev = cron.previousRun(new Date(nowMs + 1));
+    if (prev) {
+      return prev.getTime();
+    }
+  }
+
   let cursor = nowMs;
   for (let attempt = 0; attempt < 3; attempt++) {
     const next = cron.nextRun(new Date(cursor));
