@@ -173,12 +173,14 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText });
   }
 
-  // When enforceFinalTag is active, the subscribe layer already filtered out
-  // non-<final> content — skip the raw-assistant fallback to avoid leaking thinking.
-  const fallbackAnswerText =
-    params.lastAssistant && !params.enforceFinalTag
-      ? extractAssistantText(params.lastAssistant)
-      : "";
+  // When enforceFinalTag is active and the subscribe layer stripped non-<final>
+  // content, use extractAssistantText as fallback ONLY if the raw text looks like
+  // a genuine reply (not thinking/tool output).  Some models omit <final> tags
+  // for short replies; blocking them entirely causes silent delivery failures.
+  const rawFallback = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const looksLikeThinking =
+    rawFallback.startsWith("[") || rawFallback.startsWith("<") || /^\s*\{/.test(rawFallback);
+  const fallbackAnswerText = params.enforceFinalTag && looksLikeThinking ? "" : rawFallback;
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
