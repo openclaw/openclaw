@@ -161,6 +161,34 @@ export async function runCronIsolatedAgentTurn(params: {
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
+
+  // For isolated sessions, prefer subagents.model (per-agent then global)
+  // over the primary model, matching sessions_spawn behavior.
+  const subagentsModelRaw =
+    (typeof agentConfigOverride?.subagents?.model === "string"
+      ? agentConfigOverride.subagents.model.trim()
+      : undefined) ||
+    (typeof params.cfg.agents?.defaults?.subagents?.model === "string"
+      ? (params.cfg.agents.defaults.subagents.model as string).trim()
+      : undefined);
+  if (subagentsModelRaw) {
+    const subagentsResolved = resolveAllowedModelRef({
+      cfg: cfgWithAgentDefaults,
+      catalog: await (async () => {
+        if (!catalog) {
+          catalog = await loadModelCatalog({ config: cfgWithAgentDefaults });
+        }
+        return catalog;
+      })(),
+      raw: subagentsModelRaw,
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
+    });
+    if (!("error" in subagentsResolved)) {
+      provider = subagentsResolved.ref.provider;
+      model = subagentsResolved.ref.model;
+    }
+  }
   const loadCatalog = async () => {
     if (!catalog) {
       catalog = await loadModelCatalog({ config: cfgWithAgentDefaults });
