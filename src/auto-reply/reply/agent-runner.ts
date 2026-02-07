@@ -489,10 +489,21 @@ export async function runReplyAgent(params: {
       cliSessionId,
     });
 
+    // Collect raw reply text for idle reminder (before any filtering).
+    // Even if payloads are empty/NO_REPLY/HEARTBEAT_OK, we still start the idle reminder.
+    const rawReplyText = payloadArray
+      .map((p) => p.text ?? "")
+      .filter(Boolean)
+      .join("\n");
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      // Start idle reminder even when no payloads (e.g. NO_REPLY / empty)
+      if (!isHeartbeat && sessionKey && storePath) {
+        startIdleReminder({ sessionKey, storePath, lastReplyText: rawReplyText });
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -517,6 +528,10 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // Start idle reminder even when payloads are filtered out (e.g. NO_REPLY)
+      if (!isHeartbeat && sessionKey && storePath) {
+        startIdleReminder({ sessionKey, storePath, lastReplyText: rawReplyText });
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -719,13 +734,14 @@ export async function runReplyAgent(params: {
       }
     }
 
-    // Start idle reminder for non-heartbeat runs with actual payloads
-    // This triggers a simulated heartbeat if the agent goes idle after responding
-    if (!isHeartbeat && sessionKey && storePath && finalPayloads.length > 0) {
-      const lastReplyText = finalPayloads
-        .map((p) => p.text ?? "")
-        .filter(Boolean)
-        .join("\n");
+    // Start idle reminder for all non-heartbeat runs (even if reply was NO_REPLY/empty).
+    // The idle reminder tracks the last N replies for follow-up context.
+    if (!isHeartbeat && sessionKey && storePath) {
+      const lastReplyText =
+        finalPayloads
+          .map((p) => p.text ?? "")
+          .filter(Boolean)
+          .join("\n") || rawReplyText;
       startIdleReminder({ sessionKey, storePath, lastReplyText });
     }
 

@@ -4,13 +4,15 @@
  * + deliverOutboundPayloads directly to avoid guard clauses.
  *
  * Flow:
- * 1. agent 回复后 → startIdleReminder(sessionKey, count=0)
+ * 1. agent run 完成后 (任何回复, 包括 NO_REPLY/HEARTBEAT_OK/空) → startIdleReminder
+ *    - 维护最近 3 条回复的滚动缓冲区
  * 2. 3 分钟后:
  *    a. 读 session entry → 拿 lastChannel/lastTo/lastAccountId
  *    b. 读 transcript 末尾 → 如果有新的非 HEARTBEAT_OK 内容 → 重置 timer
- *    c. 如果没有新内容 → 调用 getReplyFromConfig + deliverOutboundPayloads
- *    d. count++ → 如果 count < 3, 再设 3 分钟 timer
- * 3. 用户发消息 → agent 回复 → startIdleReminder 重置 count
+ *    c. 如果没有新内容 → 调用 getReplyFromConfig + deliverOutboundPayloads (附带最近3条回复)
+ *    d. count++ → 如果 count < MAX, 再设 3 分钟 timer
+ * 3. 只有 idle reminder 自己收到 HEARTBEAT_OK → 才停止计时 + 清除状态
+ * 4. 用户发消息 → agent 回复 → startIdleReminder 重置 count, 追加新回复到缓冲区
  */
 
 import fs from "node:fs";
@@ -40,11 +42,20 @@ const log = createSubsystemLogger("idle-reminder");
 const DEFAULT_IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 const MAX_REMIND_COUNT = 1;
 
-/** Build the idle reminder prompt, embedding the agent's last reply for context. */
-function buildIdleReminderPrompt(lastReplyText: string): string {
-  const replyBlock = lastReplyText.trim()
-    ? `Here is your previous last reply:\n"""\n${lastReplyText.trim()}\n"""\n\n`
-    : "";
+const MAX_STORED_REPLIES = 3;
+
+/** Build the idle reminder prompt, embedding the agent's last N replies for context. */
+function buildIdleReminderPrompt(lastReplyTexts: string[]): string {
+  const nonEmpty = lastReplyTexts.filter((t) => t.trim());
+  if (nonEmpty.length === 0) {
+    return "Check if there's anything you should follow up on with the user. Say it, then DO it — words without action = nothing happened. If nothing to follow up, reply HEARTBEAT_OK.";
+  }
+  const count = nonEmpty.length;
+  const replyLines = nonEmpty.map((t, i) => {
+    const label = i === nonEmpty.length - 1 ? `reply${i + 1}(latest)` : `reply${i + 1}`;
+    return `${label}\n${t.trim()}`;
+  });
+  const replyBlock = `Here is your previous last ${count} reply:\n"""\n${replyLines.join("\n")}\n\n"""\n\n`;
   return `${replyBlock}Check if there's anything you should follow up on with the user. Say it, then DO it — words without action = nothing happened. If nothing to follow up, reply HEARTBEAT_OK.`;
 }
 
@@ -57,8 +68,8 @@ type IdleReminderState = {
   count: number;
   /** Byte offset of transcript file when timer started / last checked. */
   lastTranscriptSize: number;
-  /** The agent's last reply text that triggered this idle cycle. */
-  lastReplyText: string;
+  /** Rolling buffer of the agent's last N reply texts (newest last). */
+  lastReplyTexts: string[];
 };
 
 // Track active idle reminders per session
@@ -66,7 +77,8 @@ const activeReminders = new Map<string, IdleReminderState>();
 
 /**
  * Start or reset the idle reminder timer for a session.
- * Called after agent sends a non-heartbeat reply with actual payloads.
+ * Called after every non-heartbeat agent run completes (regardless of reply content).
+ * Maintains a rolling buffer of the last 3 reply texts for follow-up context.
  */
 export function startIdleReminder(params: {
   sessionKey: string;
@@ -80,11 +92,18 @@ export function startIdleReminder(params: {
   const { sessionKey, timeoutMs = DEFAULT_IDLE_TIMEOUT_MS } = params;
   const storePath = params.storePath ?? resolveStorePath(undefined, {});
 
-  // Clear existing timer if any
+  // Clear existing timer if any; carry over previous reply texts
   const existing = activeReminders.get(sessionKey);
   if (existing?.timer) {
     clearTimeout(existing.timer);
   }
+
+  // Build rolling buffer: carry over previous replies, append new one, keep max N
+  const previousTexts = existing?.lastReplyTexts ?? [];
+  const newReplyText = (params.lastReplyText ?? "").trim();
+  const updatedTexts = newReplyText
+    ? [...previousTexts, newReplyText].slice(-MAX_STORED_REPLIES)
+    : previousTexts;
 
   // Snapshot transcript size so we can detect new content later
   const lastTranscriptSize = resolveTranscriptSize(sessionKey, storePath);
@@ -96,7 +115,7 @@ export function startIdleReminder(params: {
     timeoutMs,
     count: 0,
     lastTranscriptSize,
-    lastReplyText: params.lastReplyText ?? "",
+    lastReplyTexts: updatedTexts,
   };
 
   state.timer = setTimeout(() => {
@@ -267,7 +286,7 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
   });
 
   try {
-    await sendSimulatedHeartbeat(sessionKey, state.storePath, state.lastReplyText);
+    await sendSimulatedHeartbeat(sessionKey, state.storePath, state.lastReplyTexts);
   } catch (err) {
     log.error("simulated heartbeat failed", { sessionKey, error: String(err) });
   }
@@ -293,7 +312,7 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
 async function sendSimulatedHeartbeat(
   sessionKey: string,
   storePath: string,
-  lastReplyText: string,
+  lastReplyTexts: string[],
 ): Promise<void> {
   const cfg: OpenClawConfig = loadConfig();
   const store = loadSessionStore(storePath);
@@ -312,8 +331,8 @@ async function sendSimulatedHeartbeat(
 
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
 
-  // Build idle reminder prompt with agent's last reply for context
-  const prompt = buildIdleReminderPrompt(lastReplyText);
+  // Build idle reminder prompt with agent's last N replies for context
+  const prompt = buildIdleReminderPrompt(lastReplyTexts);
   const ctx = {
     Body: prompt,
     From: sender,
