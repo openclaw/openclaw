@@ -354,7 +354,11 @@ export async function runAgentTurnWithFallback(params: {
                   const toolName = typeof evt.data.name === "string" ? evt.data.name : "";
                   const toolCallId =
                     typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
-                  void params.opts.onToolStatus({ toolName, toolCallId });
+                  const input =
+                    evt.data.args != null && typeof evt.data.args === "object"
+                      ? (evt.data.args as Record<string, unknown>)
+                      : undefined;
+                  void params.opts.onToolStatus({ toolName, toolCallId, input });
                 }
               }
               // Track auto-compaction completion

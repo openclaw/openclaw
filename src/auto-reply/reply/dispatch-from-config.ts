@@ -3,6 +3,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -20,23 +21,6 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
-
-const TOOL_STATUS_LABELS: Record<string, string> = {
-  exec: "Running a command",
-  read_file: "Reading a file",
-  write_file: "Writing a file",
-  web_search: "Searching the web",
-  memory_search: "Searching memory",
-  memory_get: "Reading memory",
-  computer_use: "Using the computer",
-};
-
-function formatToolStatusLabel(toolName: string): string | undefined {
-  if (!toolName) {
-    return undefined;
-  }
-  return TOOL_STATUS_LABELS[toolName] ?? `Using ${toolName.replace(/_/g, " ")}`;
-}
 
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
 
@@ -313,19 +297,19 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
-        onToolStatus: params.replyOptions?.toolFeedback
-          ? (info: { toolName: string; toolCallId: string }) => {
-              const label = formatToolStatusLabel(info.toolName);
-              if (!label) {
-                return;
+        onToolStatus:
+          params.replyOptions?.onToolStatus ??
+          (params.replyOptions?.toolFeedback
+            ? (info: { toolName: string; toolCallId: string; input?: Record<string, unknown> }) => {
+                const display = resolveToolDisplay({ name: info.toolName, args: info.input });
+                const summary = formatToolSummary(display);
+                const payload: ReplyPayload = { text: `*${summary}*` };
+                if (shouldRouteToOriginating) {
+                  return sendPayloadAsync(payload, undefined, false);
+                }
+                dispatcher.sendBlockReply(payload);
               }
-              const payload: ReplyPayload = { text: `*${label}*` };
-              if (shouldRouteToOriginating) {
-                return sendPayloadAsync(payload, undefined, false);
-              }
-              dispatcher.sendBlockReply(payload);
-            }
-          : params.replyOptions?.onToolStatus,
+            : undefined),
         onToolResult:
           ctx.ChatType !== "group" && ctx.CommandSource !== "native"
             ? (payload: ReplyPayload) => {
