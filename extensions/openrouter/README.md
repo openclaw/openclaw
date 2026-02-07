@@ -17,17 +17,17 @@ OpenClaw provider plugin for [OpenRouter](https://openrouter.ai) with free model
 
 > Note: Free model availability changes frequently. Check https://openrouter.ai/models for current list.
 
-| Model | Context | Notes |
-|-------|---------|-------|
-| `openrouter/auto` | varies | Auto-select best free model |
-| `qwen/qwen3-next-80b-a3b-instruct:free` | 262k | General purpose |
-| `qwen/qwen3-coder:free` | 262k | Code-focused |
-| `stepfun/step-3.5-flash:free` | 256k | Fast |
-| `deepseek/deepseek-r1-0528:free` | 164k | Reasoning |
-| `meta-llama/llama-3.3-70b-instruct:free` | 128k | High quality |
-| `nvidia/nemotron-3-nano-30b-a3b:free` | 256k | NVIDIA |
-| `arcee-ai/trinity-mini:free` | 131k | Compact |
-| `openai/gpt-oss-120b:free` | 131k | GPT-style |
+| Model                                    | Context | Notes                       |
+| ---------------------------------------- | ------- | --------------------------- |
+| `openrouter/auto`                        | varies  | Auto-select best free model |
+| `qwen/qwen3-next-80b-a3b-instruct:free`  | 262k    | General purpose             |
+| `qwen/qwen3-coder:free`                  | 262k    | Code-focused                |
+| `stepfun/step-3.5-flash:free`            | 256k    | Fast                        |
+| `deepseek/deepseek-r1-0528:free`         | 164k    | Reasoning                   |
+| `meta-llama/llama-3.3-70b-instruct:free` | 128k    | High quality                |
+| `nvidia/nemotron-3-nano-30b-a3b:free`    | 256k    | NVIDIA                      |
+| `arcee-ai/trinity-mini:free`             | 131k    | Compact                     |
+| `openai/gpt-oss-120b:free`               | 131k    | GPT-style                   |
 
 ## Installation
 
@@ -69,6 +69,7 @@ For private usage, consider paid models or local Ollama.
 ### "Rate limited"
 
 Free tier has lower rate limits. Options:
+
 - Wait and retry
 - Add paid credits for higher limits
 - Switch to Ollama for unlimited local usage

@@ -16,14 +16,14 @@ OpenClaw provider plugin for local LLM inference via [Ollama](https://ollama.com
 
 ## Supported Models
 
-| Model | Context | Notes |
-|-------|---------|-------|
-| `mistral:latest` | 32k | Fast, general purpose |
-| `llama3.2:latest` | 128k | Large context |
-| `phi4-mini:latest` | 16k | Small, fast |
-| `deepseek-r1:7b` | 32k | Reasoning model |
-| `qwen2.5-coder:latest` | 32k | Code-focused |
-| `codellama:latest` | 16k | Code generation |
+| Model                  | Context | Notes                 |
+| ---------------------- | ------- | --------------------- |
+| `mistral:latest`       | 32k     | Fast, general purpose |
+| `llama3.2:latest`      | 128k    | Large context         |
+| `phi4-mini:latest`     | 16k     | Small, fast           |
+| `deepseek-r1:7b`       | 32k     | Reasoning model       |
+| `qwen2.5-coder:latest` | 32k     | Code-focused          |
+| `codellama:latest`     | 16k     | Code generation       |
 
 ## Installation
 
@@ -50,6 +50,7 @@ openclaw models fallbacks add ollama/llama3.2:latest
 ### "Connection refused"
 
 Ollama isn't running:
+
 ```bash
 ollama serve
 ```
@@ -57,6 +58,7 @@ ollama serve
 ### "Model not found"
 
 Pull the model first:
+
 ```bash
 ollama pull mistral
 ```
@@ -64,6 +66,7 @@ ollama pull mistral
 ### "Context overflow"
 
 Use a model with larger context:
+
 ```bash
 openclaw models set ollama/llama3.2:latest  # 128k context
 ```

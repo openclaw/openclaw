@@ -1,8 +1,8 @@
 {
   "name": "@clawdbot/ollama",
   "version": "2026.2.7",
-  "type": "module",
   "description": "Clawdbot Ollama local LLM provider plugin",
+  "type": "module",
   "clawdbot": {
     "extensions": [
       "./index.ts"

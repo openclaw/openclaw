@@ -224,10 +224,7 @@ const openrouterPlugin = {
                 },
               },
               defaultModel: defaultModelRef,
-              notes: [
-                "Using API key from environment",
-                "All free models enabled by default",
-              ],
+              notes: ["Using API key from environment", "All free models enabled by default"],
             };
           },
         },
