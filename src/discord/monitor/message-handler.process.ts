@@ -1,7 +1,13 @@
 import { ChannelType } from "@buape/carbon";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadAgentIdentityFromWorkspace } from "../../agents/identity-file.js";
+import {
+  resolveAckReaction,
+  resolveAgentIdentity,
+  resolveHumanDelayConfig,
+} from "../../agents/identity.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -48,12 +54,7 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import {
-  DEFAULT_ACK_DELAY_MS,
-  generateSmartAck,
-  type SmartAckConfig,
-  type SmartAckResult,
-} from "./smart-ack.js";
+import { startSmartAck, type SmartAckConfig, type SmartAckContext } from "./smart-ack.js";
 import { createSmartStatus } from "./smart-status.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
@@ -545,116 +546,114 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       })
     : null;
 
-  // Smart ack: classify the message with Haiku BEFORE main dispatch.
-  // FULL responses (jokes, greetings, casual chat) are sent directly, skipping Opus.
-  // ACK responses are held and sent as interim feedback if the main model takes too long.
+  // Sonnet triage: classify as simple (FULL) or complex (ACK).
+  // For simple messages, Sonnet's response is delivered directly and Opus is skipped.
+  // For complex messages, an immediate status update is shown while Opus works.
   const smartAckConfig = discordConfig?.smartAck;
   const smartAckEnabled =
-    smartAckConfig !== false &&
-    (smartAckConfig === true ||
-      smartAckConfig === undefined ||
-      (typeof smartAckConfig === "object" && smartAckConfig?.enabled !== false));
-  const smartAckParsedConfig =
-    typeof smartAckConfig === "object" ? (smartAckConfig as SmartAckConfig) : undefined;
+    smartAckConfig === true ||
+    (typeof smartAckConfig === "object" && smartAckConfig?.enabled !== false);
 
-  let smartAckResult: SmartAckResult | null = null;
+  // Build rich context for the triage model.
+  let triageContext: SmartAckContext | undefined;
   if (smartAckEnabled) {
-    // Show typing while Haiku classifies the message (can take a few seconds).
-    sendTyping({ client, channelId: typingChannelId }).catch((err) => {
-      logVerbose(`discord: typing before smart ack failed: ${String(err)}`);
-    });
-    smartAckResult = await generateSmartAck({
-      message: text,
-      senderName: sender.name,
-      cfg,
-      config: smartAckParsedConfig,
-    });
+    const configIdentity = resolveAgentIdentity(cfg, route.agentId);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, route.agentId);
+    const fileIdentity = loadAgentIdentityFromWorkspace(workspaceDir);
+    triageContext = {
+      agentName: configIdentity?.name ?? fileIdentity?.name,
+      agentVibe: fileIdentity?.vibe,
+      agentCreature: fileIdentity?.creature,
+      conversationContext: combinedBody,
+      channelSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
+      isDirectMessage,
+    };
   }
 
-  // Simple messages: send the Haiku response directly and skip the main model entirely.
-  // Typing was already sent before generateSmartAck(), and Discord auto-clears it on
-  // message delivery, so no additional typing call is needed here.
-  if (smartAckResult?.isFull) {
-    if (earlyTypingInterval) {
-      clearInterval(earlyTypingInterval);
-      earlyTypingInterval = undefined;
-    }
-    if (smartStatusFilter) {
-      smartStatusFilter.dispose();
-    }
-    deleteStatusMessage();
-    const replyToId = replyReference.use();
-    await deliverDiscordReply({
-      replies: [{ text: smartAckResult.text }],
-      target: deliverTarget,
-      token,
-      accountId,
-      rest: client.rest,
-      runtime,
-      replyToId,
-      textLimit,
-      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-      tableMode,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
-    });
-    replyReference.markSent();
-    removeAckReactionAfterReply({
-      removeAfterReply: removeAckAfterReply,
-      ackReactionPromise,
-      ackReactionValue: ackReaction,
-      remove: async () => {
-        await removeReactionDiscord(message.channelId, message.id, ackReaction, {
-          rest: client.rest,
-        });
-      },
-      onError: (err) => {
-        logAckFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: `${message.channelId}/${message.id}`,
-          error: err,
-        });
-      },
-    });
-    if (isGuildMessage) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: guildHistories,
-        historyKey: message.channelId,
-        limit: historyLimit,
+  const smartAckController = smartAckEnabled
+    ? startSmartAck({
+        message: text,
+        senderName: sender.name,
+        cfg,
+        config: typeof smartAckConfig === "object" ? (smartAckConfig as SmartAckConfig) : undefined,
+        context: triageContext,
+      })
+    : null;
+
+  // Await triage result. If FULL, deliver directly and skip Opus dispatch.
+  if (smartAckController) {
+    const triageResult = await smartAckController.result;
+    if (triageResult?.isFull) {
+      // Short-circuit: Sonnet answered fully. Deliver and clean up.
+      logVerbose(`smart-ack: short-circuit with full response (${triageResult.text.length} chars)`);
+
+      const replyToId = replyReference.use();
+      await deliverDiscordReply({
+        replies: [{ text: triageResult.text }],
+        target: deliverTarget,
+        token,
+        accountId,
+        rest: client.rest,
+        runtime,
+        replyToId,
+        textLimit,
+        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+        tableMode,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
-    }
-    return;
-  }
 
-  // ACK case: set up delayed sending for interim feedback if the main model takes too long.
-  const ackDelayMs = smartAckParsedConfig?.delayMs ?? DEFAULT_ACK_DELAY_MS;
-  let smartAckMessageId: string | undefined;
-  let smartAckChannelId: string | undefined;
-  let smartAckCancelled = false;
-  let smartAckDelayTimer: ReturnType<typeof setTimeout> | undefined;
-  if (smartAckResult && !smartAckResult.isFull) {
-    const ackText = smartAckResult.text;
-    smartAckDelayTimer = setTimeout(async () => {
-      if (smartAckCancelled) {
-        return;
+      // Clean up all resources.
+      if (earlyTypingInterval) {
+        clearInterval(earlyTypingInterval);
+        earlyTypingInterval = undefined;
       }
-      try {
-        // Suppress smart-status updates briefly so the ack isn't immediately overwritten.
-        smartStatusFilter?.suppress(10000);
-        deleteStatusMessage();
-        const result = await sendMessageDiscord(deliverTarget, ackText, {
-          token,
-          accountId,
-          rest: client.rest,
+      if (smartStatusFilter) {
+        smartStatusFilter.dispose();
+      }
+      deleteStatusMessage();
+      markDispatchIdle();
+
+      // Cancel job classification if still running.
+      if (jobClassificationController) {
+        jobClassificationController.cancel();
+      }
+
+      // Remove ack reaction after reply.
+      removeAckReactionAfterReply({
+        removeAfterReply: removeAckAfterReply,
+        ackReactionPromise,
+        ackReactionValue: ackReaction,
+        remove: async () => {
+          await removeReactionDiscord(message.channelId, message.id, ackReaction, {
+            rest: client.rest,
+          });
+        },
+        onError: (err) => {
+          logAckFailure({
+            log: logVerbose,
+            channel: "discord",
+            target: `${message.channelId}/${message.id}`,
+            error: err,
+          });
+        },
+      });
+
+      if (isGuildMessage) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: guildHistories,
+          historyKey: message.channelId,
+          limit: historyLimit,
         });
-        if (!smartAckCancelled) {
-          smartAckMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
-          smartAckChannelId = result.channelId;
-        }
-      } catch (err) {
-        logVerbose(`discord: smart ack delivery failed: ${String(err)}`);
       }
-    }, ackDelayMs);
+
+      return; // Skip Opus dispatch entirely.
+    }
+
+    // Complex path: show the ack as a status message immediately while Opus works.
+    if (triageResult?.text) {
+      smartStatusFilter?.suppress(10000);
+      void updateStatusMessage(triageResult.text);
+    }
   }
 
   // Await job classification and create/update job entry.
@@ -719,12 +718,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     smartStatusFilter.dispose();
   }
   deleteStatusMessage();
-  // Cancel smart ack delay and delete its message (main response arrived).
-  smartAckCancelled = true;
-  if (smartAckDelayTimer) {
-    clearTimeout(smartAckDelayTimer);
-  }
-  // ACK messages are intentionally kept as conversation history (not deleted).
   // Mark job as completed after dispatch finishes.
   if (currentJobId) {
     await updateJob({

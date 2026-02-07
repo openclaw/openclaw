@@ -6,22 +6,16 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 
 const log = createSubsystemLogger("discord/smart-ack");
 
-// Default to Haiku via CLI for fast acknowledgments using Max subscription
-const DEFAULT_ACK_MODEL = "haiku";
-const DEFAULT_ACK_TIMEOUT_MS = 8000;
-const DEFAULT_ACK_DELAY_MS = 3000;
+// Default to Sonnet for triage: fast enough (~3-5s) with strong context understanding.
+const DEFAULT_ACK_MODEL = "sonnet";
+const DEFAULT_ACK_TIMEOUT_MS = 15000;
 
 export type SmartAckConfig = {
-  /** Enable smart contextual acknowledgments. */
+  /** Enable smart contextual triage. */
   enabled?: boolean;
-  /**
-   * Delay in milliseconds before sending acknowledgment.
-   * Only sends if main response hasn't arrived. Default: 30000 (30 seconds).
-   */
-  delayMs?: number;
-  /** Model for acknowledgment generation via Claude CLI. Default: haiku. */
+  /** Model for triage via Claude CLI. Default: sonnet. */
   model?: string;
-  /** Timeout for acknowledgment generation in ms. Default: 8000. */
+  /** Timeout for triage generation in ms. Default: 15000. */
   timeoutMs?: number;
 };
 
@@ -30,6 +24,22 @@ export type SmartAckResult = {
   text: string;
   /** Whether this is a full response (true) or interim acknowledgment (false). */
   isFull: boolean;
+};
+
+/** Rich context for the triage model to make context-aware decisions. */
+export type SmartAckContext = {
+  /** Agent name from identity config or workspace. */
+  agentName?: string;
+  /** Agent personality vibe (e.g., "warm", "sharp"). */
+  agentVibe?: string;
+  /** Agent creature type (e.g., "ghost", "familiar"). */
+  agentCreature?: string;
+  /** Conversation context (formatted body with history for guilds, raw text for DMs). */
+  conversationContext?: string;
+  /** Channel-level system prompt, if any. */
+  channelSystemPrompt?: string;
+  /** Whether this is a direct message. */
+  isDirectMessage?: boolean;
 };
 
 type ClaudeCliResponse = {
@@ -56,22 +66,76 @@ function parseCliResponse(stdout: string): string | null {
   }
 }
 
+function buildTriagePrompt(params: {
+  message: string;
+  senderName?: string;
+  context?: SmartAckContext;
+}): string {
+  const { message, senderName, context } = params;
+  const parts: string[] = [];
+
+  // Identity block
+  const surface = context?.isDirectMessage ? "DM" : "server";
+  parts.push(`You are a helpful AI assistant responding in a Discord ${surface}.`);
+  if (senderName) {
+    parts.push(`The user's name is ${senderName}.`);
+  }
+  if (context?.agentName) {
+    parts.push(`Your name is ${context.agentName}.`);
+  }
+  if (context?.agentVibe) {
+    parts.push(`Your personality is ${context.agentVibe}.`);
+  }
+  if (context?.agentCreature) {
+    parts.push(`You are a ${context.agentCreature}.`);
+  }
+
+  // Channel system prompt
+  if (context?.channelSystemPrompt) {
+    parts.push(`\n\nChannel guidelines:\n${context.channelSystemPrompt}`);
+  }
+
+  // Conversation context (includes history for guild channels)
+  if (context?.conversationContext && context.conversationContext !== message) {
+    parts.push(`\n\nRecent conversation context:\n${context.conversationContext}`);
+  }
+
+  // Classification instructions
+  parts.push(
+    `\n\nClassify this message and respond appropriately.\n\n` +
+      `If you can fully answer in 1-3 sentences: prefix your response with "FULL: " and give a complete, ` +
+      `friendly reply. This applies to greetings, thanks, casual chat, short factual questions, ` +
+      `acknowledgments, and anything you can confidently answer from the conversation context.\n` +
+      `If it needs deeper work: prefix your response with "ACK: " and give a brief acknowledgment ` +
+      `showing you understand the request (e.g. "Working on..." or "Let me look into..."). ` +
+      `This applies to technical questions, code requests, multi-step tasks, research, ` +
+      `or anything requiring tools, file access, or information beyond what you have.\n\n` +
+      `You MUST start your response with either "FULL: " or "ACK: " and nothing else.\n\n` +
+      `Writing style: never use em-dashes or hyphens as grammatical punctuation. ` +
+      `Use commas, periods, or semicolons instead.\n\n` +
+      `User's message:\n${message}`,
+  );
+
+  return parts.join(" ");
+}
+
 /**
- * Generate a contextual acknowledgment message using Claude CLI with Haiku.
+ * Generate a triage response using Claude CLI with Sonnet.
  * Uses the Max subscription instead of per-token API charges.
  *
  * For simple messages (greetings, thanks, casual chat), returns a full response
- * that can replace the main model run. For complex requests, returns an interim
- * acknowledgment formatted in italics.
+ * that short-circuits the main Opus dispatch. For complex requests, returns an
+ * interim acknowledgment while Opus works.
  */
 export async function generateSmartAck(params: {
   message: string;
   senderName?: string;
   cfg: OpenClawConfig;
   config?: SmartAckConfig;
+  context?: SmartAckContext;
   signal?: AbortSignal;
 }): Promise<SmartAckResult | null> {
-  const { message, senderName, config, signal } = params;
+  const { message, senderName, config, context, signal } = params;
 
   if (signal?.aborted) {
     return null;
@@ -80,21 +144,7 @@ export async function generateSmartAck(params: {
   const model = config?.model ?? DEFAULT_ACK_MODEL;
   const timeoutMs = config?.timeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
 
-  const nameContext = senderName ? `The user's name is ${senderName}. ` : "";
-
-  const prompt =
-    `You are a helpful AI assistant responding in a Discord server. ${nameContext}` +
-    `Decide if you can fully answer this message in 1-2 sentences, or if it needs deeper work.\n\n` +
-    `If you can fully answer: prefix your response with "FULL: " and give a complete, friendly reply ` +
-    `(1-2 sentences). This applies to greetings, thanks, casual chat, short factual questions, ` +
-    `and acknowledgments.\n` +
-    `If it needs deeper work: prefix your response with "ACK: " and give a brief acknowledgment ` +
-    `showing you understand the request (e.g. "Working on..." or "Let me look into..."). ` +
-    `This applies to technical questions, code requests, multi-step tasks, or research. ` +
-    `Do NOT answer these, just acknowledge them.\n\n` +
-    `You MUST start your response with either "FULL: " or "ACK: " and nothing else.\n\n` +
-    `Writing style: never use em-dashes or hyphens as grammatical punctuation. Use commas, periods, or semicolons instead.\n\n` +
-    `User's message:\n${message}`;
+  const prompt = buildTriagePrompt({ message, senderName, context });
 
   // Build CLI args for claude command
   const args = ["--model", model, "-p", prompt, "--output-format", "json", "--max-turns", "1"];
@@ -150,7 +200,7 @@ export async function generateSmartAck(params: {
     return { text: cleanText, isFull };
   } catch (err) {
     if (signal?.aborted) {
-      logVerbose("smart-ack: generation aborted (main response arrived first or timeout)");
+      logVerbose("smart-ack: generation aborted");
     } else {
       log.warn(`smart-ack: generation failed: ${formatErrorMessage(err)}`);
     }
@@ -158,4 +208,36 @@ export async function generateSmartAck(params: {
   }
 }
 
-export { DEFAULT_ACK_DELAY_MS };
+export type SmartAckController = {
+  /** Cancel the smart ack triage. */
+  cancel: () => void;
+  /** Wait for the triage result. Resolves as soon as the model responds. */
+  result: Promise<SmartAckResult | null>;
+};
+
+/**
+ * Start a smart triage generation. Returns a controller with the result promise
+ * that resolves as soon as the model responds (no delay). Can be cancelled if
+ * the caller no longer needs the result.
+ */
+export function startSmartAck(params: {
+  message: string;
+  senderName?: string;
+  cfg: OpenClawConfig;
+  config?: SmartAckConfig;
+  context?: SmartAckContext;
+}): SmartAckController {
+  const abortController = new AbortController();
+
+  const result = generateSmartAck({
+    ...params,
+    signal: abortController.signal,
+  });
+
+  return {
+    cancel: () => {
+      abortController.abort();
+    },
+    result,
+  };
+}

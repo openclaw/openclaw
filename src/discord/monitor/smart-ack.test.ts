@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock dependencies before importing the module under test
 vi.mock("../../globals.js", () => ({
@@ -20,7 +20,7 @@ vi.mock("../../process/exec.js", () => ({
 }));
 
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { generateSmartAck } from "./smart-ack.js";
+import { generateSmartAck, startSmartAck } from "./smart-ack.js";
 
 const mockedRun = vi.mocked(runCommandWithTimeout);
 
@@ -29,6 +29,10 @@ function cliJsonResult(text: string) {
 }
 
 const baseCfg = {} as Parameters<typeof generateSmartAck>[0]["cfg"];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("generateSmartAck prefix parsing", () => {
   it("strips FULL: prefix and returns isFull=true", async () => {
@@ -87,6 +91,132 @@ describe("generateSmartAck prefix parsing", () => {
       cfg: baseCfg,
       signal: controller.signal,
     });
+    expect(result).toBeNull();
+  });
+});
+
+describe("generateSmartAck triage behavior", () => {
+  it("uses sonnet as default model", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hello!"));
+    await generateSmartAck({ message: "hi", cfg: baseCfg });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const modelIndex = args.indexOf("--model");
+    expect(modelIndex).toBeGreaterThan(-1);
+    expect(args[modelIndex + 1]).toBe("sonnet");
+  });
+
+  it("allows overriding model via config", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hello!"));
+    await generateSmartAck({
+      message: "hi",
+      cfg: baseCfg,
+      config: { model: "haiku" },
+    });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const modelIndex = args.indexOf("--model");
+    expect(args[modelIndex + 1]).toBe("haiku");
+  });
+
+  it("includes agent identity in prompt when context is provided", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hey friend!"));
+    await generateSmartAck({
+      message: "hi",
+      cfg: baseCfg,
+      context: {
+        agentName: "Claw",
+        agentVibe: "warm and friendly",
+        agentCreature: "digital lobster",
+        isDirectMessage: true,
+      },
+    });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const promptIndex = args.indexOf("-p");
+    const prompt = args[promptIndex + 1] ?? "";
+    expect(prompt).toContain("Your name is Claw.");
+    expect(prompt).toContain("warm and friendly");
+    expect(prompt).toContain("digital lobster");
+    expect(prompt).toContain("Discord DM");
+  });
+
+  it("includes conversation context in prompt", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Sure thing!"));
+    await generateSmartAck({
+      message: "thanks",
+      cfg: baseCfg,
+      context: {
+        conversationContext: "[Discord DM] Alice: Can you help me with something?\nBot: Of course!",
+        isDirectMessage: true,
+      },
+    });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const promptIndex = args.indexOf("-p");
+    const prompt = args[promptIndex + 1] ?? "";
+    expect(prompt).toContain("Recent conversation context:");
+    expect(prompt).toContain("Can you help me with something?");
+  });
+
+  it("includes channel system prompt for guild messages", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Welcome!"));
+    await generateSmartAck({
+      message: "hello",
+      cfg: baseCfg,
+      context: {
+        channelSystemPrompt: "Be extra polite in this channel.",
+        isDirectMessage: false,
+      },
+    });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const promptIndex = args.indexOf("-p");
+    const prompt = args[promptIndex + 1] ?? "";
+    expect(prompt).toContain("Channel guidelines:");
+    expect(prompt).toContain("Be extra polite");
+    expect(prompt).toContain("Discord server");
+  });
+
+  it("skips conversation context when it matches the message", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hello!"));
+    await generateSmartAck({
+      message: "hi",
+      cfg: baseCfg,
+      context: {
+        conversationContext: "hi",
+        isDirectMessage: true,
+      },
+    });
+    const args = mockedRun.mock.calls[0]?.[0];
+    const promptIndex = args.indexOf("-p");
+    const prompt = args[promptIndex + 1] ?? "";
+    expect(prompt).not.toContain("Recent conversation context:");
+  });
+});
+
+describe("startSmartAck controller", () => {
+  it("resolves immediately without delay", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hello!"));
+    const controller = startSmartAck({
+      message: "hi",
+      cfg: baseCfg,
+    });
+    const result = await controller.result;
+    expect(result).toEqual({ text: "Hello!", isFull: true });
+  });
+
+  it("returns null when cancelled before CLI completes", async () => {
+    // Mock that resolves after a short delay, giving us time to cancel.
+    mockedRun.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(cliJsonResult("FULL: Hello!")), 50);
+        }),
+    );
+    const controller = startSmartAck({
+      message: "hi",
+      cfg: baseCfg,
+    });
+    // Cancel immediately (before the 50ms mock resolves).
+    controller.cancel();
+    const result = await controller.result;
+    // generateSmartAck checks signal.aborted after CLI returns and returns null.
     expect(result).toBeNull();
   });
 });

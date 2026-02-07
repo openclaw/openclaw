@@ -88,16 +88,11 @@ export type DiscordIntentsConfig = {
 };
 
 export type DiscordSmartAckConfig = {
-  /** Enable smart contextual acknowledgments. */
+  /** Enable smart contextual triage. */
   enabled?: boolean;
-  /**
-   * Delay in milliseconds before sending acknowledgment.
-   * Only sends if main response hasn't arrived. Default: 30000 (30 seconds).
-   */
-  delayMs?: number;
-  /** Model for acknowledgment generation via Claude CLI. Default: haiku. */
+  /** Model for triage via Claude CLI. Default: sonnet. */
   model?: string;
-  /** Timeout for acknowledgment generation in ms. Default: 8000. */
+  /** Timeout for triage generation in ms. Default: 15000. */
   timeoutMs?: number;
 };
 
@@ -196,10 +191,11 @@ export type DiscordAccountConfig = {
    */
   startupRecovery?: boolean | number;
   /**
-   * Smart contextual acknowledgment using a fast model (Haiku).
-   * Generates a context-aware response if main model takes too long.
-   * - true: Enable with default settings (30s delay)
-   * - object: Configure delay, model, and timeout
+   * Smart triage using a fast model (Sonnet).
+   * For simple messages, generates a full response without Opus dispatch.
+   * For complex messages, generates an immediate status update while Opus works.
+   * - true: Enable with default settings
+   * - object: Configure model and timeout
    */
   smartAck?: boolean | DiscordSmartAckConfig;
   /**
