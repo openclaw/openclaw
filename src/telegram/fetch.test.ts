@@ -63,6 +63,8 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("returns wrapped fetch that passes dispatcher option", async () => {
+    // Force autoSelectFamily=false to ensure dispatcher is used
+    vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", "1");
     const fetchMock = vi.fn(async () => ({ ok: true }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const { resolveTelegramFetch } = await loadModule();
