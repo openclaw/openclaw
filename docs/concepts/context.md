@@ -100,6 +100,20 @@ The system prompt is **OpenClaw-owned** and rebuilt each run. It includes:
 
 Full breakdown: [System Prompt](/concepts/system-prompt).
 
+## Artifact references (ArtifactRef)
+
+To reduce repeated context bloat, OpenClaw may replace very large injected text with an **ArtifactRef** line, for example:
+
+```
+ArtifactRef: <sha256-id> (type=text/markdown, sha256=…, bytes=…, createdAt=…)
+```
+
+When you see an `ArtifactRef`, you can fetch the full stored text via the internal tool:
+
+- `artifacts.get` with input `{ "id": "<sha256-id>" }`
+
+The tool returns the artifact metadata and content text (content is capped and may be truncated).
+
 ## Injected workspace files (Project Context)
 
 By default, OpenClaw injects a fixed set of workspace files (if present):

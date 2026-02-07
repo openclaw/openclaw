@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ArtifactRegistry } from "../../artifacts/artifact-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
@@ -159,12 +160,23 @@ export async function ensureSessionHeader(params: {
   await fs.writeFile(file, `${JSON.stringify(entry)}\n`, "utf-8");
 }
 
-export function buildBootstrapContextFiles(
+export async function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    artifactRefs?: {
+      enabled: boolean;
+      thresholdChars: number;
+      registry: ArtifactRegistry;
+      mime?: string;
+      maxBytes?: number;
+    };
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const result: EmbeddedContextFile[] = [];
+
   for (const file of files) {
     if (file.missing) {
       result.push({
@@ -173,7 +185,43 @@ export function buildBootstrapContextFiles(
       });
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, maxChars);
+
+    const raw = (file.content ?? "").trimEnd();
+    if (!raw.trim()) {
+      continue;
+    }
+
+    const refs = opts?.artifactRefs;
+    if (refs?.enabled && raw.length >= refs.thresholdChars) {
+      // Store the full content, but only inject a compact reference into the prompt.
+      // This avoids repeatedly sending large, mostly-static bootstrap blobs.
+      const metaPromise = refs.registry.storeText({
+        content: raw,
+        mime: (refs.mime as any) ?? "text/markdown",
+        maxBytes: refs.maxBytes,
+      });
+
+      // Keep a small, human/model-friendly summary (head+tail) to preserve some context.
+      const summary = trimBootstrapContent(raw, file.name, Math.min(maxChars, 4000));
+
+      // NOTE: metaPromise is awaited synchronously (no parallelism needed in a small loop).
+      // eslint-disable-next-line no-await-in-loop
+      const meta = await metaPromise;
+
+      result.push({
+        path: file.name,
+        content: [
+          `ArtifactRef: ${meta.id} (type=${meta.mime}, sha256=${meta.sha256}, bytes=${meta.sizeBytes}, createdAt=${meta.createdAt})`,
+          "",
+          "Summary (head/tail excerpt):",
+          "",
+          summary.content,
+        ].join("\n"),
+      });
+      continue;
+    }
+
+    const trimmed = trimBootstrapContent(raw, file.name, maxChars);
     if (!trimmed.content) {
       continue;
     }

@@ -4,9 +4,12 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { createArtifactRegistry } from "../../../artifacts/artifact-registry.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -27,10 +30,13 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { validateHotStateBudget } from "../../context-budget.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { buildHotState, enforceHotStateTokenCap } from "../../hot-state.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { inferOutputRole, resolveOutputBudget } from "../../output-budget.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -44,6 +50,12 @@ import {
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "../../pi-tools.js";
+import {
+  capturePromptMetrics,
+  detectPromptRegressions,
+  formatPromptMetricsLog,
+} from "../../prompt-metrics.js";
+import { validateResult } from "../../result-validator.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -346,11 +358,33 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
+    // Hot State: dispatcher-owned JSON blob, always included (size capped).
+    // Important: keep this OUT of the user prompt so transcript persistence/order tests stay stable.
+    const hotState = buildHotState({
+      session_id: params.sessionId,
+      session_key: params.sessionKey ?? undefined,
+      run_id: params.runId,
+      risk_level: "low",
+    });
+    const cappedHotState = enforceHotStateTokenCap({ hotState, maxTokens: 1000 });
+
+    // Budget validation: fail closed if hot state violates limits.
+    const budgetCheck = validateHotStateBudget(cappedHotState.hotState);
+    if (!budgetCheck.passed) {
+      log.warn(
+        `Hot state budget violated (${budgetCheck.violations.length} violations): ${budgetCheck.violations.map((v) => v.message).join("; ")}`,
+      );
+    }
+
+    const extraSystemPrompt = [params.extraSystemPrompt, cappedHotState.json]
+      .filter(Boolean)
+      .join("\n\n");
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
@@ -397,6 +431,27 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     const systemPromptText = systemPromptOverride();
+
+    // Prompt metrics: capture per-turn observability data for optimization tracking.
+    const artifactRefFiles = contextFiles.filter((f) =>
+      f.content.startsWith("ArtifactRef:"),
+    ).length;
+    const promptMetrics = capturePromptMetrics({
+      sessionId: params.sessionId,
+      runId: params.runId,
+      hotState: cappedHotState.hotState,
+      hotStateTruncated: cappedHotState.wasTruncated,
+      systemPromptChars: systemPromptText.length,
+      userContentChars: params.prompt?.length ?? 0,
+      artifactRefBootstrapFiles: artifactRefFiles,
+      budgetViolationCount: budgetCheck.violations.length,
+      budgetPassed: budgetCheck.passed,
+    });
+    log.info(formatPromptMetricsLog(promptMetrics));
+    const promptRegressionWarnings = detectPromptRegressions(promptMetrics);
+    for (const warning of promptRegressionWarnings) {
+      log.warn(`prompt-regression: ${warning}`);
+    }
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -744,6 +799,8 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Hot State is injected into the system prompt (see above). Keep user prompt stable.
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
@@ -810,10 +867,30 @@ export async function runEmbeddedAttempt(
             });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
+          // Resolve output budget based on role (M2: output budget enforcement)
+          const outputRole = inferOutputRole({
+            sessionKey: params.sessionKey,
+            subagentLabel: params.subagentLabel,
+          });
+          const maxTokens = outputRole
+            ? resolveOutputBudget({
+                role: outputRole,
+                configOverrides: params.config?.agents?.outputBudgets,
+              })
+            : undefined;
+
+          // Build prompt options with images and max_tokens
+          const promptOptions: { images?: ImageContent[]; max_tokens?: number } = {};
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            promptOptions.images = imageResult.images;
+          }
+          if (maxTokens !== undefined) {
+            promptOptions.max_tokens = maxTokens;
+          }
+
+          // Call prompt with enforced output budget
+          if (Object.keys(promptOptions).length > 0) {
+            await abortable(activeSession.prompt(effectivePrompt, promptOptions));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
@@ -881,6 +958,55 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+
+      // M2: Result validation (output budget + diff-only enforcement)
+      if (lastAssistant?.text && !promptError) {
+        try {
+          const artifactRegistry = createArtifactRegistry({
+            rootDir: path.join(resolveStateDir(process.env), "artifacts"),
+          });
+
+          const validationResult = await validateResult({
+            output: lastAssistant.text,
+            sessionKey: params.sessionKey,
+            subagentLabel: params.subagentLabel,
+            taskDescription: effectivePrompt,
+            budgetOverrides: params.config?.agents?.outputBudgets,
+            artifactRegistry,
+          });
+
+          if (!validationResult.valid) {
+            if (validationResult.reason === "budget_exceeded") {
+              log.warn(
+                `Output budget exceeded: role=${validationResult.role} ` +
+                  `actual=${validationResult.violation.actualTokens} ` +
+                  `max=${validationResult.violation.maxTokens} ` +
+                  `artifactId=${validationResult.artifactId || "none"} ` +
+                  `runId=${params.runId}`,
+              );
+              // Fallback output stored as artifact, summary returned
+              // (Not modifying message here to preserve original response for analysis)
+            } else if (validationResult.reason === "diff_only_violation") {
+              log.error(
+                `Diff-only violation: ${validationResult.diffResult.reason} ` +
+                  `suggestion=${validationResult.diffResult.suggestion} ` +
+                  `runId=${params.runId}`,
+              );
+              // Hard reject per spec - could throw here, but logging for observability first
+            }
+          } else {
+            log.debug(
+              `Result validation passed: role=${validationResult.role} ` +
+                `tokens=${validationResult.outputTokens} ` +
+                `budgetTokens=${validationResult.budgetTokens} ` +
+                `runId=${params.runId}`,
+            );
+          }
+        } catch (validationError) {
+          // Don't fail the entire run if validation has an internal error
+          log.error(`Result validation error: ${validationError} runId=${params.runId}`);
+        }
+      }
 
       const toolMetasNormalized = toolMetas
         .filter(
