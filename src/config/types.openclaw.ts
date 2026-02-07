@@ -107,6 +107,20 @@ export type OpenClawConfig = {
   execution?: ExecutionConfig;
   /** Debugging configuration (short-term testing flags and channel overrides). */
   debugging?: DebuggingConfig;
+  /** Experiential capture system configuration. */
+  experiential?: {
+    enabled?: boolean;
+    evaluator?: {
+      /** OpenAI-compatible endpoint (default: http://localhost:11434/v1 for Ollama) */
+      endpoint?: string;
+      /** Model to use for significance evaluation (default: qwen2.5:7b-instruct) */
+      model?: string;
+    };
+    storage?: {
+      /** Path to the experiential SQLite database */
+      dbPath?: string;
+    };
+  };
   overseer?: any; // TODO: Add proper OverseerConfig type
   onboarding?: any; // TODO: Add proper OnboardingConfig type
 };
