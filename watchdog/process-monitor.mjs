@@ -324,15 +324,22 @@ export class ProcessMonitor {
       this.process = null;
     });
 
-    // Start health checking after grace period
-    setTimeout(() => {
-      if (this.process && !this.stopped) {
-        this.startHealthCheck();
-      }
-    }, STARTUP_GRACE_PERIOD_MS);
-
     // Write PID file
     this.writePidFile(this.process.pid);
+
+    // Poll until the gateway is accepting connections, then log ready.
+    this.waitForReady().then((ok) => {
+      if (ok && this.process && !this.stopped) {
+        this.onProgress(`OpenClaw is ready on port ${this.port}`);
+        this.startHealthCheck();
+      } else if (!this.stopped) {
+        // Grace period expired without becoming healthy; start health checks anyway
+        // so the normal failure/restart logic can kick in.
+        if (this.process) {
+          this.startHealthCheck();
+        }
+      }
+    });
 
     return true;
   }
@@ -432,6 +439,34 @@ export class ProcessMonitor {
     if (!this.stopped) {
       await this.start();
     }
+  }
+
+  /**
+   * Poll the gateway port until it accepts a TCP connection.
+   * Returns true if ready within the startup grace period, false on timeout.
+   */
+  async waitForReady(pollMs = 1000) {
+    const deadline = Date.now() + STARTUP_GRACE_PERIOD_MS;
+    while (Date.now() < deadline) {
+      if (!this.process || this.stopped) {
+        return false;
+      }
+      const listening = await new Promise((resolve) => {
+        const sock = net.createConnection({ port: this.port, host: "127.0.0.1" });
+        sock.on("connect", () => {
+          sock.destroy();
+          resolve(true);
+        });
+        sock.on("error", () => {
+          resolve(false);
+        });
+      });
+      if (listening) {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return false;
   }
 
   /**
