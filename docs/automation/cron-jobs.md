@@ -40,7 +40,7 @@ openclaw cron add \
   --delete-after-run
 
 openclaw cron list
-openclaw cron run <job-id> --force
+openclaw cron run <job-id>
 openclaw cron runs --id <job-id>
 ```
 
@@ -123,8 +123,8 @@ local timezone is used.
 Main jobs enqueue a system event and optionally wake the heartbeat runner.
 They must use `payload.kind = "systemEvent"`.
 
-- `wakeMode: "next-heartbeat"` (default): event waits for the next scheduled heartbeat.
-- `wakeMode: "now"`: event triggers an immediate heartbeat run.
+- `wakeMode: "now"` (default): event triggers an immediate heartbeat run.
+- `wakeMode: "next-heartbeat"`: event waits for the next scheduled heartbeat.
 
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
@@ -288,7 +288,7 @@ Notes:
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
   `delivery`.
-- `wakeMode` defaults to `"next-heartbeat"` when omitted.
+- `wakeMode` defaults to `"now"` when omitted.
 
 ### cron.update params
 
@@ -420,10 +420,11 @@ openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
-Manual run (debug):
+Manual run (force is the default, use `--due` to only run when due):
 
 ```bash
-openclaw cron run <jobId> --force
+openclaw cron run <jobId>
+openclaw cron run <jobId> --due
 ```
 
 Edit an existing job (patch fields):

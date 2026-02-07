@@ -22,14 +22,28 @@ export function resolveCronStorePath(storePath?: string) {
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON5.parse(raw);
-    const jobs = Array.isArray(parsed?.jobs) ? (parsed?.jobs as never[]) : [];
+    let parsed: unknown;
+    try {
+      parsed = JSON5.parse(raw);
+    } catch (err) {
+      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
+    const parsedRecord =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
     return {
       version: 1,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
-  } catch {
-    return { version: 1, jobs: [] };
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return { version: 1, jobs: [] };
+    }
+    throw err;
   }
 }
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatAgo, stripThinkingTags } from "./format.ts";
 
 describe("formatAgo", () => {
-  it("returns 'just now' for timestamps less than 60s in the future", () => {
-    expect(formatAgo(Date.now() + 30_000)).toBe("just now");
+  it("returns 'in <1m' for timestamps less than 60s in the future", () => {
+    expect(formatAgo(Date.now() + 30_000)).toBe("in <1m");
   });
 
   it("returns 'Xm from now' for future timestamps", () => {

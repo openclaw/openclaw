@@ -10,6 +10,7 @@ export {
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
 export const DEFAULT_ACCOUNT_ID = "default";
+export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 // Pre-compiled regex
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -56,6 +57,17 @@ export function toAgentStoreSessionKey(params: {
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+}
+
+export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return "missing";
+  }
+  if (parseAgentSessionKey(raw)) {
+    return "agent";
+  }
+  return raw.toLowerCase().startsWith("agent:") ? "malformed_agent" : "legacy_or_alias";
 }
 
 export function normalizeAgentId(value: string | undefined | null): string {

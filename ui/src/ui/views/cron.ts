@@ -1,15 +1,12 @@
 import { html, nothing } from "lit";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
 import type { CronFormState } from "../ui-types.ts";
-import { formatMs } from "../format.ts";
-import {
-  formatCronPayload,
-  formatCronSchedule,
-  formatCronState,
-  formatNextRun,
-} from "../presenter.ts";
+import { formatAgo, formatMs } from "../format.ts";
+import { pathForTab } from "../navigation.ts";
+import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 
 export type CronProps = {
+  basePath: string;
   loading: boolean;
   status: CronStatus | null;
   jobs: CronJob[];
@@ -59,6 +56,10 @@ function resolveChannelLabel(props: CronProps, channel: string): string {
 
 export function renderCron(props: CronProps) {
   const channelOptions = buildChannelOptions(props);
+  const selectedJob =
+    props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
+  const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "(select a job)";
+  const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
@@ -167,8 +168,8 @@ export function renderCron(props: CronProps) {
                   wakeMode: (e.target as HTMLSelectElement).value as CronFormState["wakeMode"],
                 })}
             >
-              <option value="next-heartbeat">Next heartbeat</option>
               <option value="now">Now</option>
+              <option value="next-heartbeat">Next heartbeat</option>
             </select>
           </label>
           <label class="field">
@@ -289,19 +290,19 @@ export function renderCron(props: CronProps) {
 
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Run history</div>
-      <div class="card-sub">Latest runs for ${props.runsJobId ?? "(select a job)"}.</div>
+      <div class="card-sub">Latest runs for ${selectedRunTitle}.</div>
       ${
         props.runsJobId == null
           ? html`
               <div class="muted" style="margin-top: 12px">Select a job to inspect run history.</div>
             `
-          : props.runs.length === 0
+          : orderedRuns.length === 0
             ? html`
                 <div class="muted" style="margin-top: 12px">No runs yet.</div>
               `
             : html`
               <div class="list" style="margin-top: 12px;">
-                ${props.runs.map((entry) => renderRun(entry))}
+                ${orderedRuns.map((entry) => renderRun(entry, props.basePath))}
               </div>
             `
       }
@@ -380,23 +381,27 @@ function renderScheduleFields(props: CronProps) {
 
 function renderJob(job: CronJob, props: CronProps) {
   const isSelected = props.runsJobId === job.id;
-  const itemClass = `list-item list-item-clickable${isSelected ? " list-item-selected" : ""}`;
+  const itemClass = `list-item list-item-clickable cron-job${isSelected ? " list-item-selected" : ""}`;
   return html`
     <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
       <div class="list-main">
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
-        <div class="muted">${formatCronPayload(job)}</div>
-        ${job.agentId ? html`<div class="muted">Agent: ${job.agentId}</div>` : nothing}
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${job.enabled ? "enabled" : "disabled"}</span>
+        ${renderJobPayload(job)}
+        ${job.agentId ? html`<div class="muted cron-job-agent">Agent: ${job.agentId}</div>` : nothing}
+      </div>
+      <div class="list-meta">
+        ${renderJobState(job)}
+      </div>
+      <div class="cron-job-footer">
+        <div class="chip-row cron-job-chips">
+          <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
+            ${job.enabled ? "enabled" : "disabled"}
+          </span>
           <span class="chip">${job.sessionTarget}</span>
           <span class="chip">${job.wakeMode}</span>
         </div>
-      </div>
-      <div class="list-meta">
-        <div>${formatCronState(job)}</div>
-        <div class="row" style="justify-content: flex-end; margin-top: 8px;">
+        <div class="row cron-job-actions">
           <button
             class="btn"
             ?disabled=${props.busy}
@@ -425,7 +430,7 @@ function renderJob(job: CronJob, props: CronProps) {
               props.onLoadRuns(job.id);
             }}
           >
-            Runs
+            History
           </button>
           <button
             class="btn danger"
@@ -443,7 +448,83 @@ function renderJob(job: CronJob, props: CronProps) {
   `;
 }
 
-function renderRun(entry: CronRunLogEntry) {
+function renderJobPayload(job: CronJob) {
+  if (job.payload.kind === "systemEvent") {
+    return html`<div class="cron-job-detail">
+      <span class="cron-job-detail-label">System</span>
+      <span class="muted cron-job-detail-value">${job.payload.text}</span>
+    </div>`;
+  }
+
+  const delivery = job.delivery;
+  const deliveryTarget =
+    delivery?.channel || delivery?.to
+      ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+      : "";
+
+  return html`
+    <div class="cron-job-detail">
+      <span class="cron-job-detail-label">Prompt</span>
+      <span class="muted cron-job-detail-value">${job.payload.message}</span>
+    </div>
+    ${
+      delivery
+        ? html`<div class="cron-job-detail">
+            <span class="cron-job-detail-label">Delivery</span>
+            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+          </div>`
+        : nothing
+    }
+  `;
+}
+
+function formatStateRelative(ms?: number) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) {
+    return "n/a";
+  }
+  return formatAgo(ms);
+}
+
+function renderJobState(job: CronJob) {
+  const status = job.state?.lastStatus ?? "n/a";
+  const statusClass =
+    status === "ok"
+      ? "cron-job-status-ok"
+      : status === "error"
+        ? "cron-job-status-error"
+        : status === "skipped"
+          ? "cron-job-status-skipped"
+          : "cron-job-status-na";
+  const nextRunAtMs = job.state?.nextRunAtMs;
+  const lastRunAtMs = job.state?.lastRunAtMs;
+
+  return html`
+    <div class="cron-job-state">
+      <div class="cron-job-state-row">
+        <span class="cron-job-state-key">Status</span>
+        <span class=${`cron-job-status-pill ${statusClass}`}>${status}</span>
+      </div>
+      <div class="cron-job-state-row">
+        <span class="cron-job-state-key">Next</span>
+        <span class="cron-job-state-value" title=${formatMs(nextRunAtMs)}>
+          ${formatStateRelative(nextRunAtMs)}
+        </span>
+      </div>
+      <div class="cron-job-state-row">
+        <span class="cron-job-state-key">Last</span>
+        <span class="cron-job-state-value" title=${formatMs(lastRunAtMs)}>
+          ${formatStateRelative(lastRunAtMs)}
+        </span>
+      </div>
+    </div>
+  `;
+}
+
+function renderRun(entry: CronRunLogEntry, basePath: string) {
+  const chatUrl =
+    typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
+      ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
+      : null;
   return html`
     <div class="list-item">
       <div class="list-main">
@@ -453,6 +534,11 @@ function renderRun(entry: CronRunLogEntry) {
       <div class="list-meta">
         <div>${formatMs(entry.ts)}</div>
         <div class="muted">${entry.durationMs ?? 0}ms</div>
+        ${
+          chatUrl
+            ? html`<div><a class="session-link" href=${chatUrl}>Open run chat</a></div>`
+            : nothing
+        }
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
       </div>
     </div>

@@ -35,7 +35,7 @@ If you have multiple profiles, pass `--browser-profile <name>` (the default is `
 ## X/Twitter: recommended flow
 
 - **Read/search/threads:** use the **bird** CLI skill (no browser, stable).
-  - Repo: https://github.com/steipete/bird
+  - Repo: [https://github.com/steipete/bird](https://github.com/steipete/bird)
 - **Post updates:** use the **host** browser (manual login).
 
 ## Sandboxing + host browser access

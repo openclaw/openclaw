@@ -9,7 +9,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Table of contents
 
-- [Quick start and first-run setup](#quick-start-and-firstrun-setup)
+- [Quick start and first-run setup]
   - [Im stuck whats the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
@@ -37,7 +37,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
   - [Where do I find an Anthropic setup-token?](#where-do-i-find-an-anthropic-setuptoken)
-  - [Do you support Claude subscription auth (Claude Code OAuth)?](#do-you-support-claude-subscription-auth-claude-code-oauth)
+  - [Do you support Claude subscription auth (Claude Pro or Max)?](#do-you-support-claude-subscription-auth-claude-pro-or-max)
   - [Why am I seeing `HTTP 429: rate_limit_error` from Anthropic?](#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
   - [Is AWS Bedrock supported?](#is-aws-bedrock-supported)
   - [How does Codex auth work?](#how-does-codex-auth-work)
@@ -74,7 +74,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Cron or reminders do not fire. What should I check?](#cron-or-reminders-do-not-fire-what-should-i-check)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
   - [Can OpenClaw run tasks on a schedule or continuously in the background?](#can-openclaw-run-tasks-on-a-schedule-or-continuously-in-the-background)
-  - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacosonly-skills-from-linux)
+  - [Can I run Apple macOS-only skills from Linux?](#can-i-run-apple-macos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
   - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
 - [Sandboxing and memory](#sandboxing-and-memory)
@@ -102,7 +102,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
   - [Can the OpenClaw browser run headless?](#can-the-openclaw-browser-run-headless)
   - [How do I use Brave for browser control?](#how-do-i-use-brave-for-browser-control)
-- [Remote gateways + nodes](#remote-gateways-nodes)
+- [Remote gateways and nodes](#remote-gateways-and-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
   - [How can my agent access my computer if the Gateway is hosted remotely?](#how-can-my-agent-access-my-computer-if-the-gateway-is-hosted-remotely)
   - [Tailscale is connected but I get no replies. What now?](#tailscale-is-connected-but-i-get-no-replies-what-now)
@@ -119,7 +119,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How does OpenClaw load environment variables?](#how-does-openclaw-load-environment-variables)
   - ["I started the Gateway via the service and my env vars disappeared." What now?](#i-started-the-gateway-via-the-service-and-my-env-vars-disappeared-what-now)
   - [I set `COPILOT_GITHUB_TOKEN`, but models status shows "Shell env: off." Why?](#i-set-copilotgithubtoken-but-models-status-shows-shell-env-off-why)
-- [Sessions & multiple chats](#sessions-multiple-chats)
+- [Sessions and multiple chats](#sessions-and-multiple-chats)
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
   - [Do sessions reset automatically if I never send `/new`?](#do-sessions-reset-automatically-if-i-never-send-new)
   - [Is there a way to make a team of OpenClaw instances one CEO and many agents](#is-there-a-way-to-make-a-team-of-openclaw-instances-one-ceo-and-many-agents)
@@ -179,7 +179,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `openclaw gateway restart` vs `openclaw gateway`](#eli5-openclaw-gateway-restart-vs-openclaw-gateway)
   - [What's the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
-- [Media & attachments](#media-attachments)
+- [Media and attachments](#media-and-attachments)
   - [My skill generated an image/PDF, but nothing was sent](#my-skill-generated-an-imagepdf-but-nothing-was-sent)
 - [Security and access control](#security-and-access-control)
   - [Is it safe to expose OpenClaw to inbound DMs?](#is-it-safe-to-expose-openclaw-to-inbound-dms)
@@ -252,10 +252,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    Repairs/migrates config/state + runs health checks. See [Doctor](/gateway/doctor).
 
 7. **Gateway snapshot**
+
    ```bash
    openclaw health --json
    openclaw health --verbose   # shows the target URL + config path on errors
    ```
+
    Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
 
 ## Quick start and first-run setup
@@ -266,8 +268,8 @@ Use a local AI agent that can **see your machine**. That is far more effective t
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
 remote helpers cannot inspect.
 
-- **Claude Code**: https://www.anthropic.com/claude-code/
-- **OpenAI Codex**: https://openai.com/codex/
+- **Claude Code**: [https://www.anthropic.com/claude-code/](https://www.anthropic.com/claude-code/)
+- **OpenAI Codex**: [https://openai.com/codex/](https://openai.com/codex/)
 
 These tools can read the repo, run commands, inspect logs, and help fix your machine-level
 setup (PATH, services, permissions, auth files). Give them the **full source checkout** via
@@ -285,8 +287,8 @@ Tip: ask the agent to **plan and supervise** the fix (step-by-step), then execut
 necessary commands. That keeps changes small and easier to audit.
 
 If you discover a real bug or fix, please file a GitHub issue or send a PR:
-https://github.com/openclaw/openclaw/issues
-https://github.com/openclaw/openclaw/pulls
+[https://github.com/openclaw/openclaw/issues](https://github.com/openclaw/openclaw/issues)
+[https://github.com/openclaw/openclaw/pulls](https://github.com/openclaw/openclaw/pulls)
 
 Start with these commands (share outputs when asking for help):
 
@@ -432,7 +434,7 @@ Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#
 ### Where do I see what is new in the latest version
 
 Check the GitHub changelog:
-https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md
+[https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
 Newest entries are at the top. If the top section is marked **Unreleased**, the next dated
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
@@ -443,10 +445,10 @@ section is the latest shipped version. Entries are grouped by **Highlights**, **
 Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
 Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
 detail: [Troubleshooting](/help/troubleshooting#docsopenclawai-shows-an-ssl-error-comcastxfinity).
-Please help us unblock it by reporting here: https://spa.xfinity.com/check_url_status.
+Please help us unblock it by reporting here: [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status).
 
 If you still can't reach the site, the docs are mirrored on GitHub:
-https://github.com/openclaw/openclaw/tree/main/docs
+[https://github.com/openclaw/openclaw/tree/main/docs](https://github.com/openclaw/openclaw/tree/main/docs)
 
 ### What's the difference between stable and beta
 
@@ -460,7 +462,7 @@ that same version to `latest`**. That's why beta and stable can point at the
 **same version**.
 
 See what changed:
-https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md
+[https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
 ### How do I install the beta version and whats the difference between beta and dev
 
@@ -478,7 +480,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
 ```
 
 Windows installer (PowerShell):
-https://openclaw.ai/install.ps1
+[https://openclaw.ai/install.ps1](https://openclaw.ai/install.ps1)
 
 More detail: [Development channels](/install/development-channels) and [Installer flags](/install/installer).
 
@@ -559,9 +561,11 @@ Two common Windows issues:
 
 - Your npm global bin folder is not on PATH.
 - Check the path:
+
   ```powershell
   npm config get prefix
   ```
+
 - Ensure `<prefix>\\bin` is on PATH (on most systems it is `%AppData%\\npm`).
 - Close and reopen PowerShell after updating PATH.
 
@@ -685,7 +689,7 @@ claude setup-token
 
 Copy the token it prints, then choose **Anthropic token (paste setup-token)** in the wizard. If you want to run it on the gateway host, use `openclaw models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `openclaw models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
 
-### Do you support Claude subscription auth (Claude Pro/Max)
+### Do you support Claude subscription auth (Claude Pro or Max)
 
 Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
@@ -988,7 +992,7 @@ Advantages:
 - **Always-on Gateway** (run on a VPS, interact from anywhere)
 - **Nodes** for local browser/screen/camera/exec
 
-Showcase: https://openclaw.ai/showcase
+Showcase: [https://openclaw.ai/showcase](https://openclaw.ai/showcase)
 
 ## Skills and automation
 
@@ -1046,7 +1050,7 @@ Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-v
 ### How do I install skills on Linux
 
 Use **ClawHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
-Browse skills at https://clawhub.com.
+Browse skills at [https://clawhub.com](https://clawhub.com).
 
 Install the ClawHub CLI (pick one package manager):
 
@@ -1069,7 +1073,7 @@ Yes. Use the Gateway scheduler:
 Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
 [Heartbeat](/gateway/heartbeat).
 
-**Can I run Apple macOS only skills from Linux**
+### Can I run Apple macOS-only skills from Linux?
 
 Not directly. macOS skills are gated by `metadata.openclaw.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `apple-notes`, `apple-reminders`, `things-mac`) will not load unless you override the gating.
 
@@ -1085,13 +1089,16 @@ Run the Gateway on Linux, pair a macOS node (menubar app), and set **Node Run Co
 Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wrappers that run on a Mac. Then override the skill to allow Linux so it stays eligible.
 
 1. Create an SSH wrapper for the binary (example: `memo` for Apple Notes):
+
    ```bash
    #!/usr/bin/env bash
    set -euo pipefail
    exec ssh -T user@mac-host /opt/homebrew/bin/memo "$@"
    ```
+
 2. Put the wrapper on `PATH` on the Linux host (for example `~/bin/memo`).
 3. Override the skill metadata (workspace or `~/.openclaw/skills`) to allow Linux:
+
    ```markdown
    ---
    name: apple-notes
@@ -1099,6 +1106,7 @@ Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wra
    metadata: { "openclaw": { "os": ["darwin", "linux"], "requires": { "bins": ["memo"] } } }
    ---
    ```
+
 4. Start a new session so the skills snapshot refreshes.
 
 ### Do you have a Notion or HeyGen integration
@@ -1449,7 +1457,7 @@ Headless uses the **same Chromium engine** and works for most automation (forms,
 Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway.
 See the full config examples in [Browser](/tools/browser#use-brave-or-another-chromium-based-browser).
 
-## Remote gateways + nodes
+## Remote gateways and nodes
 
 ### How do commands propagate between Telegram the gateway and nodes
 
@@ -1473,6 +1481,7 @@ Typical setup:
 4. Open the macOS app locally and connect in **Remote over SSH** mode (or direct tailnet)
    so it can register as a node.
 5. Approve the node on the Gateway:
+
    ```bash
    openclaw nodes pending
    openclaw nodes approve <requestId>
@@ -1610,10 +1619,12 @@ This sets your workspace and restricts who can trigger the bot.
 Minimal steps:
 
 1. **Install + login on the VPS**
+
    ```bash
    curl -fsSL https://tailscale.com/install.sh | sh
    sudo tailscale up
    ```
+
 2. **Install + login on your Mac**
    - Use the Tailscale app and sign in to the same tailnet.
 3. **Enable MagicDNS (recommended)**
@@ -1640,6 +1651,7 @@ Recommended setup:
 2. **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
    The app will tunnel the Gateway port and connect as a node.
 3. **Approve the node** on the gateway:
+
    ```bash
    openclaw nodes pending
    openclaw nodes approve <requestId>
@@ -1702,9 +1714,11 @@ If the Gateway runs as a service (launchd/systemd), it won't inherit your shell
 environment. Fix by doing one of these:
 
 1. Put the token in `~/.openclaw/.env`:
+
    ```
    COPILOT_GITHUB_TOKEN=...
    ```
+
 2. Or enable shell import (`env.shellEnv.enabled: true`).
 3. Or add it to your config `env` block (applies only if missing).
 
@@ -1717,7 +1731,7 @@ openclaw models status
 Copilot tokens are read from `COPILOT_GITHUB_TOKEN` (also `GH_TOKEN` / `GITHUB_TOKEN`).
 See [/concepts/model-providers](/concepts/model-providers) and [/environment](/environment).
 
-## Sessions & multiple chats
+## Sessions and multiple chats
 
 ### How do I start a fresh conversation
 
@@ -1801,6 +1815,7 @@ Use one of these:
   or `/compact <instructions>` to guide the summary.
 
 - **Reset** (fresh session ID for the same chat key):
+
   ```
   /new
   /reset
@@ -2071,9 +2086,11 @@ Fix checklist:
 3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.1` or
    `minimax/MiniMax-M2.1-lightning`.
 4. Run:
+
    ```bash
    openclaw models list
    ```
+
    and pick from the list (or `/model list` in chat).
 
 See [MiniMax](/providers/minimax) and [Models](/concepts/models).
@@ -2238,9 +2255,11 @@ can't find it in its auth store.
 - **If you want to use an API key instead**
   - Put `ANTHROPIC_API_KEY` in `~/.openclaw/.env` on the **gateway host**.
   - Clear any pinned order that forces a missing profile:
+
     ```bash
     openclaw models auth order clear --provider anthropic
     ```
+
 - **Confirm you're running commands on the gateway host**
   - In remote mode, auth profiles live on the gateway machine, not your laptop.
 
@@ -2624,7 +2643,7 @@ you want a one-off, foreground run.
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for channel auth, model routing, and RPC errors.
 
-## Media & attachments
+## Media and attachments
 
 ### My skill generated an imagePDF but nothing was sent
 

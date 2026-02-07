@@ -39,12 +39,13 @@ otherwise -> reply
 ![Group message flow](/images/groups-flow.svg)
 
 If you want...
-| Goal | What to set |
-|------|-------------|
-| Allow all groups but only reply on @mentions | `groups: { "*": { requireMention: true } }` |
-| Disable all group replies | `groupPolicy: "disabled"` |
-| Only specific groups | `groups: { "<group-id>": { ... } }` (no `"*"` key) |
-| Only you can trigger in groups | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+
+| Goal                                         | What to set                                                |
+| -------------------------------------------- | ---------------------------------------------------------- |
+| Allow all groups but only reply on @mentions | `groups: { "*": { requireMention: true } }`                |
+| Disable all group replies                    | `groupPolicy: "disabled"`                                  |
+| Only specific groups                         | `groups: { "<group-id>": { ... } }` (no `"*"` key)         |
+| Only you can trigger in groups               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
 
 ## Session keys
 
