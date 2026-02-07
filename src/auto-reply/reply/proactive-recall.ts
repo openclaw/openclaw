@@ -72,7 +72,7 @@ interface TimeTunnelModule {
     query: string,
     opts?: { limit?: number; minScore?: number },
   ) => VecSearchResult[];
-  searchKnowledge: (
+  searchKnowledgeVec: (
     query: string,
     opts?: { limit?: number; category?: string },
   ) => KnowledgeResult[];
@@ -93,7 +93,8 @@ async function loadTimeTunnel(): Promise<TimeTunnelModule | null> {
       search: mod.search,
       checkReminders: typeof mod.checkReminders === "function" ? mod.checkReminders : () => [],
       searchSemantic: typeof mod.searchSemantic === "function" ? mod.searchSemantic : () => [],
-      searchKnowledge: typeof mod.searchKnowledge === "function" ? mod.searchKnowledge : () => [],
+      searchKnowledgeVec:
+        typeof mod.searchKnowledgeVec === "function" ? mod.searchKnowledgeVec : () => [],
     };
     return timeTunnelModule;
   } catch {
@@ -391,7 +392,7 @@ export async function buildProactiveRecall(
     // Knowledge base search (vector-based)
     let knowledgeResults: KnowledgeResult[] = [];
     try {
-      knowledgeResults = mod.searchKnowledge(messageBody, { limit: 3 });
+      knowledgeResults = mod.searchKnowledgeVec(messageBody, { limit: 3 });
     } catch {
       // knowledge search may not be available
     }

@@ -7982,7 +7982,7 @@ export default {
   // Convenience wrappers (auto-inject db)
   embedMessage,
   searchSemantic,
-  searchKnowledge,
+  searchKnowledgeVec,
 };
 
 /**
@@ -8009,11 +8009,11 @@ export function searchSemantic(query, options = {}) {
 /**
  * 便利函式：搜索知識庫向量（自動注入 db）
  */
-export function searchKnowledge(query, options = {}) {
+export function searchKnowledgeVec(query, options = {}) {
   try {
     return vecModule.semanticSearchKnowledge(getDb(), query, options);
   } catch (err) {
-    console.warn("[time-tunnel] searchKnowledge error:", err.message);
+    console.warn("[time-tunnel] searchKnowledgeVec error:", err.message);
     return [];
   }
 }
