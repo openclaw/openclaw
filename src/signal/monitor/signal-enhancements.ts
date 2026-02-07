@@ -98,10 +98,10 @@ export type SignalEnhancementDeps = Pick<
 //
 // fetchAttachment/fetchSticker both call saveMediaBuffer → ~/.openclaw/media/inbound/
 // Files there are NOT TTL-cleaned (cleanup only targets ~/.openclaw/media/ root).
-// We just record the path in signal-media-cache.json for later lookup.
+// We record the path in signal-media-precache.json for later lookup.
 //
-// For stickers fetched via RPC that don't go through fetchAttachment,
-// we save to a fallback dir: ~/.openclaw/media/inbound/signal_precache/
+// All precache data (index + fallback files) lives under:
+//   ~/.openclaw/media/inbound/signal_precache/
 
 const PRECACHE_DIR = path.join(resolveConfigDir(), "media", "inbound", "signal_precache");
 
@@ -110,7 +110,7 @@ const PRECACHE_DIR = path.join(resolveConfigDir(), "media", "inbound", "signal_p
 type MediaCacheEntry = { path: string; contentType?: string; savedAt: number };
 type MediaCacheData = Record<string, MediaCacheEntry>;
 
-const MEDIA_CACHE_FILE = path.join(resolveConfigDir(), "media", "signal-media-cache.json");
+const MEDIA_CACHE_FILE = path.join(PRECACHE_DIR, "signal-media-precache.json");
 const MEDIA_CACHE_MAX_SIZE = 50_000;
 const MEDIA_CACHE_MAX_AGE_MS = 3650 * 24 * 60 * 60 * 1000; // ~10 years
 
