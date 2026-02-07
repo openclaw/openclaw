@@ -75,6 +75,8 @@ const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 const DEFAULT_ONCHAR_PREFIXES = [">", "!"];
+// WebSocket ping interval to keep the connection alive (Mattermost closes idle connections)
+const WS_PING_INTERVAL_MS = 30_000;
 
 const recentInboundMessages = createDedupeCache({
   ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
@@ -906,6 +908,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const ws = new WebSocket(wsUrl);
     const onAbort = () => ws.close();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
 
     return await new Promise((resolve) => {
       ws.on("open", () => {
@@ -930,6 +933,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           payload = JSON.parse(raw) as MattermostEventPayload;
         } catch {
           return;
+        }
+        // Start ping interval after successful authentication (hello event)
+        if (payload.event === "hello" && !pingInterval) {
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.ping();
+            }
+          }, WS_PING_INTERVAL_MS);
         }
         if (payload.event !== "posted") {
           return;
@@ -959,6 +970,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
 
       ws.on("close", (code, reason) => {
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = null;
+        }
         const message = reason.length > 0 ? reason.toString("utf8") : "";
         opts.statusSink?.({
           connected: false,
