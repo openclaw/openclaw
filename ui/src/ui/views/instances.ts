@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { PresenceEntry } from "../types.ts";
+import { t } from "../i18n/i18n-manager.ts";
 import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 
 export type InstancesProps = {
@@ -15,11 +16,11 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
-          <div class="card-sub">Presence beacons from the gateway and clients.</div>
+          <div class="card-title">${t("instances.title")}</div>
+          <div class="card-sub">${t("instances.subtitle")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       ${
@@ -40,7 +41,7 @@ export function renderInstances(props: InstancesProps) {
         ${
           props.entries.length === 0
             ? html`
-                <div class="muted">No instances reported yet.</div>
+                <div class="muted">${t("instances.noInstances")}</div>
               `
             : props.entries.map((entry) => renderEntry(entry))
         }
@@ -57,13 +58,13 @@ function renderEntry(entry: PresenceEntry) {
   const scopesLabel =
     scopes.length > 0
       ? scopes.length > 3
-        ? `${scopes.length} scopes`
-        : `scopes: ${scopes.join(", ")}`
+        ? t("instances.scopesCount", { count: scopes.length })
+        : t("instances.scopesList", { list: scopes.join(", ") })
       : null;
   return html`
     <div class="list-item">
       <div class="list-main">
-        <div class="list-title">${entry.host ?? "unknown host"}</div>
+        <div class="list-title">${entry.host ?? t("instances.unknownHost")}</div>
         <div class="list-sub">${formatPresenceSummary(entry)}</div>
         <div class="chip-row">
           <span class="chip">${mode}</span>
@@ -81,8 +82,8 @@ function renderEntry(entry: PresenceEntry) {
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">Last input ${lastInput}</div>
-        <div class="muted">Reason ${entry.reason ?? ""}</div>
+        <div class="muted">${t("instances.lastInput", { time: lastInput })}</div>
+        <div class="muted">${t("instances.reason", { reason: entry.reason ?? "" })}</div>
       </div>
     </div>
   `;

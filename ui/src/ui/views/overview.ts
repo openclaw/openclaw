@@ -123,11 +123,11 @@ export function renderOverview(props: OverviewProps) {
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
-        <div class="card-title">Gateway Access</div>
-        <div class="card-sub">Where the dashboard connects and how it authenticates.</div>
+        <div class="card-title">${t("overview.accessTitle")}</div>
+        <div class="card-sub">${t("overview.accessSubtitle")}</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
-            <span>WebSocket URL</span>
+            <span>${t("overview.wsUrl")}</span>
             <input
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
@@ -138,7 +138,7 @@ export function renderOverview(props: OverviewProps) {
             />
           </label>
           <label class="field">
-            <span>Gateway Token</span>
+            <span>${t("overview.gatewayToken")}</span>
             <input
               .value=${props.settings.token}
               @input=${(e: Event) => {
@@ -149,7 +149,7 @@ export function renderOverview(props: OverviewProps) {
             />
           </label>
           <label class="field">
-            <span>Password (not stored)</span>
+            <span>${t("overview.password")}</span>
             <input
               type="password"
               .value=${props.password}
@@ -157,11 +157,11 @@ export function renderOverview(props: OverviewProps) {
                 const v = (e.target as HTMLInputElement).value;
                 props.onPasswordChange(v);
               }}
-              placeholder="system or shared password"
+              placeholder=${t("overview.passwordPlaceholder")}
             />
           </label>
           <label class="field">
-            <span>Default Session Key</span>
+            <span>${t("overview.defaultSessionKey")}</span>
             <input
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
@@ -174,13 +174,13 @@ export function renderOverview(props: OverviewProps) {
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted">Click Connect to apply connection changes.</span>
+          <span class="muted">${t("overview.connectHint")}</span>
         </div>
       </div>
 
       <div class="card">
         <div class="card-title">${t("overview.snapshot")}</div>
-        <div class="card-sub">Latest gateway handshake information.</div>
+        <div class="card-sub">${t("overview.snapshotSubtitle")}</div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
             <div class="stat-label">${t("common.status")}</div>
@@ -193,11 +193,11 @@ export function renderOverview(props: OverviewProps) {
             <div class="stat-value">${uptime}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Tick Interval</div>
+            <div class="stat-label">${t("overview.tickInterval")}</div>
             <div class="stat-value">${tick}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Last Channels Refresh</div>
+            <div class="stat-label">${t("overview.lastChannelsRefresh")}</div>
             <div class="stat-value">
               ${props.lastChannelsRefresh ? formatAgo(props.lastChannelsRefresh) : "n/a"}
             </div>
@@ -212,7 +212,7 @@ export function renderOverview(props: OverviewProps) {
             </div>`
             : html`
                 <div class="callout" style="margin-top: 14px">
-                  Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
+                  ${t("overview.channelsHint")}
                 </div>
               `
         }
@@ -223,39 +223,39 @@ export function renderOverview(props: OverviewProps) {
       <div class="card stat-card">
         <div class="stat-label">${t("navigation.instances")}</div>
         <div class="stat-value">${props.presenceCount}</div>
-        <div class="muted">Presence beacons in the last 5 minutes.</div>
+        <div class="muted">${t("overview.presenceSubtitle")}</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">${t("navigation.sessions")}</div>
         <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
-        <div class="muted">Recent session keys tracked by the gateway.</div>
+        <div class="muted">${t("overview.sessionsSubtitle")}</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">${t("navigation.cron")}</div>
         <div class="stat-value">
           ${props.cronEnabled == null ? "n/a" : props.cronEnabled ? t("common.enabled") : t("common.disabled")}
         </div>
-        <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
+        <div class="muted">${t("overview.cronNextWake")} ${formatNextRun(props.cronNext)}</div>
       </div>
     </section>
 
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">${t("overview.notes")}</div>
-      <div class="card-sub">Quick reminders for remote control setups.</div>
+      <div class="card-sub">${t("overview.notesSubtitle")}</div>
       <div class="note-grid" style="margin-top: 14px;">
         <div>
-          <div class="note-title">Tailscale serve</div>
+          <div class="note-title">${t("overview.tailscaleTitle")}</div>
           <div class="muted">
-            Prefer serve mode to keep the gateway on loopback with tailnet auth.
+            ${t("overview.tailscaleNote")}
           </div>
         </div>
         <div>
-          <div class="note-title">Session hygiene</div>
-          <div class="muted">Use /new or sessions.patch to reset context.</div>
+          <div class="note-title">${t("overview.sessionHygieneTitle")}</div>
+          <div class="muted">${t("overview.sessionHygieneNote")}</div>
         </div>
         <div>
-          <div class="note-title">Cron reminders</div>
-          <div class="muted">Use isolated sessions for recurring runs.</div>
+          <div class="note-title">${t("overview.cronRemindersTitle")}</div>
+          <div class="muted">${t("overview.cronRemindersNote")}</div>
         </div>
       </div>
     </section>
