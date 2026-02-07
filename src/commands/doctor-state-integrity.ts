@@ -201,8 +201,10 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(stateDir);
-      if ((stat.mode & 0o077) !== 0) {
+      const dirLstat = fs.lstatSync(stateDir);
+      const isDirSymlink = dirLstat.isSymbolicLink();
+      const stat = isDirSymlink ? dirLstat : fs.statSync(stateDir);
+      if (!isDirSymlink && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -222,8 +224,13 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(configPath);
-      if ((stat.mode & 0o077) !== 0) {
+      const configLstat = fs.lstatSync(configPath);
+      const isSymlink = configLstat.isSymbolicLink();
+      // Skip permission checks for symlinks (e.g. Nix-managed configs).
+      // Symlinks always report 777 and the target (e.g. /nix/store/) is
+      // intentionally world-readable, so the warning is a false positive.
+      const stat = isSymlink ? configLstat : fs.statSync(configPath);
+      if (!isSymlink && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
