@@ -16,6 +16,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsBatchSpawnTool } from "./tools/sessions-batch-spawn-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
+import { createSessionsInboxTool } from "./tools/sessions-inbox-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import {
   createSessionsProgressTool,
@@ -126,6 +127,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
+    }),
+    createSessionsInboxTool({
+      agentSessionKey: options?.agentSessionKey,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,

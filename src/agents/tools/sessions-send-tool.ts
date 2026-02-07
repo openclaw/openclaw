@@ -16,6 +16,7 @@ import {
 import { resolveAgentRole } from "../agent-scope.js";
 import { registerDelegation } from "../delegation-registry.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { deliverToInbox } from "./agent-inbox.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
@@ -267,6 +268,22 @@ export function createSessionsSendTool(opts?: {
           });
         } catch {
           // Non-critical — don't fail the send
+        }
+      }
+
+      // Deliver to inbox immediately so target agent can read it via sessions_inbox
+      // without waiting for the full agent run (LLM inference) to complete.
+      if (isCrossAgent && requesterAgentId && targetAgentId) {
+        try {
+          deliverToInbox({
+            fromAgentId: requesterAgentId,
+            fromSessionKey: requesterInternalKey ?? `agent:${requesterAgentId}:main`,
+            toAgentId: targetAgentId,
+            toSessionKey: resolvedKey,
+            message,
+          });
+        } catch {
+          // Non-critical
         }
       }
 
