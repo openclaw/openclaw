@@ -59,3 +59,11 @@ export {
   useSessionShortcuts,
   type UseSessionShortcutsOptions,
 } from "./useSessionShortcuts";
+export {
+  useGlobalSearch,
+  fuzzyMatch,
+  CATEGORY_META,
+  type SearchResult,
+  type SearchCategory,
+  type GlobalSearchOptions,
+} from "./useGlobalSearch";
