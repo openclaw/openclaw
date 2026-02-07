@@ -111,6 +111,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingSequence = 0;
   let streamingMessageSent = false;
   let streamingAccumulatedText = ""; // Accumulated text for current card
+  let streamingDisabled = false; // Disable after CardKit failure for this dispatcher
   const STREAMING_CARD_MAX_CHARS = 3000; // Start a new card after this many chars
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -137,8 +138,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
         // ── CardKit streaming path ──
-        // When blockStreaming is on and card mode, use CardKit entity for unlimited updates
-        if (useCard && (feishuCfg as Record<string, unknown>)?.streaming !== false) {
+        // Only use CardKit when streaming is enabled AND not disabled by prior failure
+        if (useCard && !streamingDisabled && (feishuCfg as Record<string, unknown>)?.streaming !== false) {
           try {
             // Accumulate text
             streamingAccumulatedText += text;
@@ -190,10 +191,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             return;
           } catch (err) {
             // Fallback to regular card send if CardKit fails
+            // Disable streaming for the rest of this dispatcher to avoid duplicated content
             params.runtime.log?.(
-              `feishu[${account.accountId}] deliver: CardKit failed, falling back: ${String(err)}`,
+              `feishu[${account.accountId}] deliver: CardKit failed, disabling streaming: ${String(err)}`,
             );
             streamingCardId = null;
+            streamingAccumulatedText = "";
+            streamingDisabled = true;
           }
         }
 

@@ -337,7 +337,10 @@ export async function sendStreamingCardFeishu(params: {
     if (response.code !== 0) {
       throw new Error(`Feishu streaming card reply failed: ${response.msg || `code ${response.code}`}`);
     }
-    messageId = response.data?.message_id ?? "unknown";
+    if (!response.data?.message_id) {
+      throw new Error("Feishu streaming card reply succeeded but returned no message_id");
+    }
+    messageId = response.data.message_id;
   } else {
     const response = await client.im.message.create({
       params: { receive_id_type: receiveIdType },
@@ -346,7 +349,10 @@ export async function sendStreamingCardFeishu(params: {
     if (response.code !== 0) {
       throw new Error(`Feishu streaming card send failed: ${response.msg || `code ${response.code}`}`);
     }
-    messageId = response.data?.message_id ?? "unknown";
+    if (!response.data?.message_id) {
+      throw new Error("Feishu streaming card send succeeded but returned no message_id");
+    }
+    messageId = response.data.message_id;
   }
 
   // Step 2: Convert message_id → card_id
