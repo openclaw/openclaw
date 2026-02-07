@@ -249,12 +249,14 @@ describe("resolveConfigSecrets", () => {
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
   });
 
-  it("throws coming-soon error for keyring provider", async () => {
+  it("throws error for keyring provider on non-macOS", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "keyring" },
     };
-    await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
+    // On Linux (CI/test), this throws because macOS Keychain isn't available
+    // On macOS, it would attempt to unlock the keychain
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(/keyring|keychain/i);
   });
 
   it("throws coming-soon error for doppler provider", async () => {

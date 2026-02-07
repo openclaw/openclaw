@@ -48,6 +48,16 @@ export interface SecretsConfig {
     mountPath?: string;
   };
 
+  /** OS Keyring / macOS Keychain options. */
+  keyring?: {
+    /** Path to the keychain file (macOS only). Defaults to ~/Library/Keychains/openclaw.keychain-db. */
+    keychainPath?: string;
+    /** Password to unlock the keychain. Defaults to empty string. */
+    keychainPassword?: string;
+    /** Account name for keychain items. Defaults to "openclaw". */
+    account?: string;
+  };
+
   /**
    * Optional mapping of secret names to config paths.
    * Reserved for future use (e.g. auto-mapping secrets to config locations).

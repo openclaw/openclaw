@@ -247,7 +247,7 @@ function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): Secrets
     case "aws":
       return createAwsSecretsProvider(config.aws);
     case "keyring":
-      return createKeyringSecretsProvider();
+      return createKeyringSecretsProvider(config.keyring);
     case "1password":
       return createOnePasswordSecretsProvider();
     case "doppler":

@@ -549,6 +549,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        keyring: z
+          .object({
+            keychainPath: z.string().optional(),
+            keychainPassword: z.string().optional(),
+            account: z.string().optional(),
+          })
+          .strict()
+          .optional(),
         mapping: z.record(z.string(), z.string()).optional(),
       })
       .strict()
