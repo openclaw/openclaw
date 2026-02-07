@@ -111,7 +111,7 @@ out to QMD for retrieval. Key points:
 **Prereqs**
 
 - Disabled by default. Opt in per-config (`memory.backend = "qmd"`).
-- Install the QMD CLI separately (`bun install -g github.com/tobi/qmd` or grab
+- Install the QMD CLI separately (`bun install -g https://github.com/tobi/qmd` or grab
   a release) and make sure the `qmd` binary is on the gateway’s `PATH`.
 - QMD needs an SQLite build that allows extensions (`brew install sqlite` on
   macOS).
