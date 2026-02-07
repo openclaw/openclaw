@@ -36,6 +36,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "deepseek-api-key"
   | "qianfan-api-key"
   | "skip";
 export type GatewayAuthChoice = "token" | "password";
@@ -82,6 +83,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  deepseekApiKey?: string;
   qianfanApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;

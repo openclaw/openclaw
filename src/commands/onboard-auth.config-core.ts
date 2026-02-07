@@ -6,8 +6,10 @@ import {
 } from "../agents/cloudflare-ai-gateway.js";
 import {
   buildQianfanProvider,
+  buildDeepseekProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+  DEEPSEEK_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -35,6 +37,8 @@ import {
   buildXaiModelDefinition,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
@@ -785,6 +789,77 @@ export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: QIANFAN_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyDeepseekProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[DEEPSEEK_DEFAULT_MODEL_REF] = {
+    ...models[DEEPSEEK_DEFAULT_MODEL_REF],
+    alias: models[DEEPSEEK_DEFAULT_MODEL_REF]?.alias ?? "DeepSeek V3",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.deepseek;
+  const defaultProvider = buildDeepseekProvider();
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === DEEPSEEK_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.deepseek = {
+    ...existingProviderRest,
+    baseUrl: defaultProvider.baseUrl,
+    api: defaultProvider.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyDeepseekConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyDeepseekProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: DEEPSEEK_DEFAULT_MODEL_REF,
         },
       },
     },

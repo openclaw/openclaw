@@ -23,6 +23,8 @@ type AuthChoiceFlagOptions = Pick<
   | "minimaxApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "deepseekApiKey"
+  | "qianfanApiKey"
 >;
 
 const AUTH_CHOICE_FLAG_MAP = [
@@ -45,6 +47,8 @@ const AUTH_CHOICE_FLAG_MAP = [
   { flag: "xaiApiKey", authChoice: "xai-api-key", label: "--xai-api-key" },
   { flag: "minimaxApiKey", authChoice: "minimax-api", label: "--minimax-api-key" },
   { flag: "opencodeZenApiKey", authChoice: "opencode-zen", label: "--opencode-zen-api-key" },
+  { flag: "deepseekApiKey", authChoice: "deepseek-api-key", label: "--deepseek-api-key" },
+  { flag: "qianfanApiKey", authChoice: "qianfan-api-key", label: "--qianfan-api-key" },
 ] satisfies ReadonlyArray<AuthChoiceFlag>;
 
 export type AuthChoiceInference = {

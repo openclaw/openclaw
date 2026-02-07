@@ -91,6 +91,18 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+export const DEEPSEEK_DEFAULT_MODEL_ID = "deepseek-chat";
+export const DEEPSEEK_REASONER_MODEL_ID = "deepseek-reasoner";
+const DEEPSEEK_DEFAULT_CONTEXT_WINDOW = 64000;
+const DEEPSEEK_DEFAULT_MAX_TOKENS = 8192;
+const DEEPSEEK_DEFAULT_COST = {
+  input: 0.14, // $0.14 / 1M tokens (cache miss)
+  output: 0.28, // $0.28 / 1M tokens
+  cacheRead: 0.014, // $0.014 / 1M tokens (cache hit)
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -441,6 +453,33 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildDeepseekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: DEEPSEEK_DEFAULT_MODEL_ID,
+        name: "DeepSeek V3",
+        reasoning: false,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: DEEPSEEK_REASONER_MODEL_ID,
+        name: "DeepSeek R1",
+        reasoning: true,
+        input: ["text"],
+        cost: DEEPSEEK_DEFAULT_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -541,6 +580,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const deepseekKey =
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+  if (deepseekKey) {
+    providers.deepseek = { ...buildDeepseekProvider(), apiKey: deepseekKey };
   }
 
   return providers;
