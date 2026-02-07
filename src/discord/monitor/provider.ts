@@ -1,4 +1,4 @@
-import { Client } from "@buape/carbon";
+import { type BaseListener, Client } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
@@ -549,7 +549,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ? new DiscordPresenceListener({ logger, accountId: account.accountId })
     : null;
 
-  const initialListeners = [messageListener, reactionListener, reactionRemoveListener];
+  const initialListeners: BaseListener[] = [messageListener, reactionListener, reactionRemoveListener];
   if (presenceListener) {
     initialListeners.push(presenceListener);
   }
