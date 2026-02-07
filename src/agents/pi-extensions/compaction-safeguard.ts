@@ -19,6 +19,7 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const DEFAULT_RESERVE_TOKENS = 4096;
 
 type ToolFailure = {
   toolCallId: string;
@@ -26,6 +27,23 @@ type ToolFailure = {
   summary: string;
   meta?: string;
 };
+
+type ReserveTokenSettings = {
+  reserveTokens?: unknown;
+  reserveTokensFloor?: unknown;
+};
+
+function resolveReserveTokens(settings?: ReserveTokenSettings): number {
+  const raw = settings?.reserveTokens;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.max(1, Math.floor(raw));
+  }
+  const floor = settings?.reserveTokensFloor;
+  if (typeof floor === "number" && Number.isFinite(floor) && floor > 0) {
+    return Math.max(1, Math.floor(floor));
+  }
+  return DEFAULT_RESERVE_TOKENS;
+}
 
 function normalizeFailureText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -250,7 +268,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   model,
                   apiKey,
                   signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                  reserveTokens: resolveReserveTokens(preparation.settings),
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions,
@@ -272,7 +290,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
-      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
+      const reserveTokens = resolveReserveTokens(preparation.settings);
 
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
@@ -343,4 +361,6 @@ export const __testing = {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  resolveReserveTokens,
+  DEFAULT_RESERVE_TOKENS,
 } as const;

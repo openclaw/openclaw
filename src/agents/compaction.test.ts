@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  __testing,
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
@@ -42,6 +43,21 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 3);
     expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
+  });
+});
+
+describe("areReserveTokensEquivalent", () => {
+  it("treats NaN values as equivalent", () => {
+    expect(__testing.areReserveTokensEquivalent(Number.NaN, Number.NaN)).toBe(true);
+  });
+
+  it("does not treat NaN as equal to numbers", () => {
+    expect(__testing.areReserveTokensEquivalent(Number.NaN, 42)).toBe(false);
+  });
+
+  it("respects strict equality for normal values", () => {
+    expect(__testing.areReserveTokensEquivalent(1024, 1024)).toBe(true);
+    expect(__testing.areReserveTokensEquivalent(1024, 2048)).toBe(false);
   });
 });
 

@@ -24,6 +24,17 @@ function normalizeParts(parts: number, messageCount: number): number {
   return Math.min(Math.max(1, Math.floor(parts)), Math.max(1, messageCount));
 }
 
+function normalizeReserveTokens(reserveTokens: number): number {
+  if (typeof reserveTokens === "number" && Number.isFinite(reserveTokens) && reserveTokens > 0) {
+    return Math.max(1, Math.floor(reserveTokens));
+  }
+  return 1;
+}
+
+function areReserveTokensEquivalent(left: number, right: number): boolean {
+  return left === right || (Number.isNaN(left) && Number.isNaN(right));
+}
+
 export function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
@@ -185,14 +196,17 @@ export async function summarizeWithFallback(params: {
   previousSummary?: string;
 }): Promise<string> {
   const { messages, contextWindow } = params;
+  const reserveTokens = normalizeReserveTokens(params.reserveTokens);
+  const reserveTokensUnchanged = areReserveTokensEquivalent(reserveTokens, params.reserveTokens);
+  const normalizedParams = reserveTokensUnchanged ? params : { ...params, reserveTokens };
 
   if (messages.length === 0) {
-    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
+    return normalizedParams.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
   // Try full summarization first
   try {
-    return await summarizeChunks(params);
+    return await summarizeChunks(normalizedParams);
   } catch (fullError) {
     console.warn(
       `Full summarization failed, trying partial: ${
@@ -220,7 +234,7 @@ export async function summarizeWithFallback(params: {
   if (smallMessages.length > 0) {
     try {
       const partialSummary = await summarizeChunks({
-        ...params,
+        ...normalizedParams,
         messages: smallMessages,
       });
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
@@ -371,3 +385,7 @@ export function pruneHistoryForContextShare(params: {
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
 }
+
+export const __testing = {
+  areReserveTokensEquivalent,
+} as const;
