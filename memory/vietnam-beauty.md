@@ -577,11 +577,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `e89b750 docs: T021 Worker E2E test — DERMAEL mask full pipeline verification (02-07)`
 - `eece16c docs: T020 Phase A+B deploy verification (6/6 PASS) + STATUS update (02-07)`
 - `d152c4c docs: I030 M01 server integration (Phase B) + STATUS update (02-07)`
 - `ce45857 feat: Phase B — M01 Faceless Salesman server integration (02-07)`
 - `e083a29 feat(web): Phase A - TikTok video pipeline UI integration (02-07)`
-- `dab987d feat(api): extend pipeline to 10 steps + add generate-video endpoint (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-07*
