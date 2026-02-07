@@ -10,6 +10,7 @@ export type SegmentKind =
   | "media-hint"
   | "warroom-briefing"
   | "narrative-guide"
+  | "recall"
   | "thread-starter"
   | "system-event"
   | "abort-hint"

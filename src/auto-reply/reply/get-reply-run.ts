@@ -41,6 +41,7 @@ import { extractSessionHintParts } from "./body.js";
 import { type ContextSegment, findSegment, renderSegments } from "./context-segments.js";
 import { buildGroupIntro } from "./groups.js";
 import { buildNarrativeGuide } from "./narrative-engine.js";
+import { buildProactiveRecall } from "./proactive-recall.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildSystemEventsBlock, ensureSkillSnapshot } from "./session-updates.js";
@@ -263,6 +264,13 @@ export async function runPreparedReply(
     sessionKey,
     sessionEntry?.chatName ?? ctx.GroupSubject,
   );
+  // Proactive recall (cached, ~3 min TTL; queries Time Tunnel for relevant history)
+  const recallContext = await buildProactiveRecall(
+    workspaceDir,
+    baseBodyFinal,
+    sessionCtx.SenderName,
+    sessionEntry?.chatName ?? ctx.GroupSubject,
+  );
 
   // Build segments in canonical order
   const contextSegments: ContextSegment[] = [
@@ -270,6 +278,7 @@ export async function runPreparedReply(
     ...(mediaReplyHint ? [{ kind: "media-hint" as const, content: mediaReplyHint }] : []),
     ...(warroomBriefing ? [{ kind: "warroom-briefing" as const, content: warroomBriefing }] : []),
     ...(narrativeGuide ? [{ kind: "narrative-guide" as const, content: narrativeGuide }] : []),
+    ...(recallContext ? [{ kind: "recall" as const, content: recallContext }] : []),
     ...(threadStarterNote ? [{ kind: "thread-starter" as const, content: threadStarterNote }] : []),
     ...(systemEventsBlock ? [{ kind: "system-event" as const, content: systemEventsBlock }] : []),
     ...(hintParts.abortHint ? [{ kind: "abort-hint" as const, content: hintParts.abortHint }] : []),
