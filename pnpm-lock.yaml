@@ -25,8 +25,8 @@ importers:
         specifier: ^3.985.0
         version: 3.985.0
       '@buape/carbon':
-        specifier: 0.14.0
-        version: 0.14.0(hono@4.11.8)
+        specifier: 0.0.0-beta-20260130162700
+        version: 0.0.0-beta-20260130162700(hono@4.11.8)
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.0.0
@@ -822,8 +822,8 @@ packages:
   '@borewit/text-codec@0.2.1':
     resolution: {integrity: sha512-k7vvKPbf7J2fZ5klGRD9AeKfUvojuZIQ3BT5u7Jfv+puwXkUBUT5PVyMDfJZpy30CBDXGMgw7fguK/lpOMBvgw==}
 
-  '@buape/carbon@0.14.0':
-    resolution: {integrity: sha512-mavllPK2iVpRNRtC4C8JOUdJ1hdV0+LDelFW+pjpJaM31MBLMfIJ+f/LlYTIK5QrEcQsXOC+6lU2e0gmgjWhIQ==}
+  '@buape/carbon@0.0.0-beta-20260130162700':
+    resolution: {integrity: sha512-Z3gw1BCrLJHESoSv/4+JMao0+fnhAhCFRrJbVWOGI70uYmzLIwmHwLfSQ8ld3XLGg5Q6gZ1rvWeE+2PeHM1MjA==}
 
   '@cacheable/memory@2.0.7':
     resolution: {integrity: sha512-RbxnxAMf89Tp1dLhXMS7ceft/PGsDl1Ip7T20z5nZ+pwIAsQ1p2izPjVG69oCLv/jfQ7HDPHTWK0c9rcAWXN3A==}
@@ -6139,7 +6139,7 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.14.0(hono@4.11.8)':
+  '@buape/carbon@0.0.0-beta-20260130162700(hono@4.11.8)':
     dependencies:
       '@types/node': 25.2.1
       discord-api-types: 0.38.37
