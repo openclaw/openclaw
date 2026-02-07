@@ -286,7 +286,9 @@ export class VoiceCallWebhookServer {
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    // Use a fixed base for parsing to avoid trusting Host before verification.
+    // We only need pathname + search for routing and query parsing here.
+    const url = new URL(req.url || "/", "http://localhost");
 
     // Check path
     if (!url.pathname.startsWith(webhookPath)) {
@@ -315,11 +317,30 @@ export class VoiceCallWebhookServer {
       throw err;
     }
 
-    // Build webhook context
+    // Build webhook context.
+    //
+    // Important: do not construct ctx.url from the untrusted Host header.
+    // Some providers incorporate the full URL into signature verification.
+    const reqUrl = new URL(req.url || "/", "http://localhost");
+    const ctxUrl = (() => {
+      if (this.config.publicUrl) {
+        const base = new URL(this.config.publicUrl);
+        // Preserve configured base path, only attach the request query.
+        base.search = reqUrl.search;
+        return base.toString();
+      }
+
+      // Fallback to the known listener address from config.
+      const bind = this.config.serve.bind || "127.0.0.1";
+      const base = new URL(`http://${bind}:${this.config.serve.port}${reqUrl.pathname}`);
+      base.search = reqUrl.search;
+      return base.toString();
+    })();
+
     const ctx: WebhookContext = {
       headers: req.headers as Record<string, string | string[] | undefined>,
       rawBody: body,
-      url: `http://${req.headers.host}${req.url}`,
+      url: ctxUrl,
       method: "POST",
       query: Object.fromEntries(url.searchParams),
       remoteAddress: req.socket.remoteAddress ?? undefined,

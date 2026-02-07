@@ -242,7 +242,9 @@ export class TelnyxProvider implements VoiceCallProvider {
               ? Number.parseFloat(rawConfidence)
               : undefined;
 
-        const isFinal = typeof td?.is_final === "boolean" ? td.is_final : false;
+        // Default to "final" when is_final is missing so we don't accidentally suppress
+        // complete transcripts (some Telnyx payloads omit the field).
+        const isFinal = typeof td?.is_final === "boolean" ? td.is_final : true;
 
         return {
           ...baseEvent,
