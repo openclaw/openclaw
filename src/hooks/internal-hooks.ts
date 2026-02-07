@@ -8,7 +8,25 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+/**
+ * Internal hook event types.
+ * - command, session, agent, gateway: existing system-level events
+ * - UserPromptSubmit: fired when user submits a prompt (before processing)
+ * - PreToolUse: fired before a tool is executed
+ * - PostToolUse: fired after a tool execution completes
+ * - Stop: fired when agent processing is stopped
+ * - PreCompact: fired before context compaction
+ */
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "UserPromptSubmit"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "Stop"
+  | "PreCompact";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -24,6 +42,151 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   action: "bootstrap";
   context: AgentBootstrapHookContext;
 };
+
+// ============================================================================
+// Claude Code-style agent-level hook event contexts
+// ============================================================================
+
+/**
+ * Context for UserPromptSubmit event.
+ * Fired when user submits a prompt, before any processing begins.
+ */
+export type UserPromptSubmitContext = {
+  /** The raw user prompt text */
+  prompt: string;
+  /** Session identifier */
+  sessionId: string;
+  /** Agent identifier */
+  agentId?: string;
+  /** Working directory for the agent */
+  workspaceDir?: string;
+  /** Provider being used (e.g., 'anthropic', 'openai') */
+  provider?: string;
+  /** Model being used */
+  model?: string;
+};
+
+export type UserPromptSubmitHookEvent = InternalHookEvent & {
+  type: "UserPromptSubmit";
+  action: "submit";
+  context: UserPromptSubmitContext;
+};
+
+/**
+ * Context for PreToolUse event.
+ * Fired before a tool is executed.
+ */
+export type PreToolUseContext = {
+  /** Tool name (e.g., 'Bash', 'Read', 'Write') */
+  toolName: string;
+  /** Tool input parameters as JSON-serializable object */
+  toolInput: Record<string, unknown>;
+  /** Session identifier */
+  sessionId: string;
+  /** Agent identifier */
+  agentId?: string;
+  /** Working directory for the agent */
+  workspaceDir?: string;
+};
+
+export type PreToolUseHookEvent = InternalHookEvent & {
+  type: "PreToolUse";
+  action: "pre";
+  context: PreToolUseContext;
+};
+
+/**
+ * Context for PostToolUse event.
+ * Fired after a tool execution completes.
+ */
+export type PostToolUseContext = {
+  /** Tool name (e.g., 'Bash', 'Read', 'Write') */
+  toolName: string;
+  /** Tool input parameters that were used */
+  toolInput: Record<string, unknown>;
+  /** Tool output/result (may be truncated for large outputs) */
+  toolOutput?: string;
+  /** Exit code for shell commands, or success indicator */
+  exitCode?: number;
+  /** Whether the tool execution was successful */
+  success: boolean;
+  /** Error message if execution failed */
+  error?: string;
+  /** Execution duration in milliseconds */
+  durationMs?: number;
+  /** Session identifier */
+  sessionId: string;
+  /** Agent identifier */
+  agentId?: string;
+  /** Working directory for the agent */
+  workspaceDir?: string;
+};
+
+export type PostToolUseHookEvent = InternalHookEvent & {
+  type: "PostToolUse";
+  action: "post";
+  context: PostToolUseContext;
+};
+
+/**
+ * Context for Stop event.
+ * Fired when agent processing is stopped (user interrupt or natural completion).
+ */
+export type StopContext = {
+  /** Reason for stopping */
+  reason: "user_interrupt" | "completion" | "error" | "timeout" | "max_turns";
+  /** Session identifier */
+  sessionId: string;
+  /** Agent identifier */
+  agentId?: string;
+  /** Number of turns completed */
+  turnsCompleted?: number;
+  /** Total tokens used in the session */
+  totalTokens?: number;
+  /** Final response text (if available) */
+  finalResponse?: string;
+};
+
+export type StopHookEvent = InternalHookEvent & {
+  type: "Stop";
+  action: "stop";
+  context: StopContext;
+};
+
+/**
+ * Context for PreCompact event.
+ * Fired before context compaction (conversation summarization).
+ */
+export type PreCompactContext = {
+  /** Session identifier */
+  sessionId: string;
+  /** Agent identifier */
+  agentId?: string;
+  /** Current context token count before compaction */
+  currentTokens: number;
+  /** Target token count after compaction */
+  targetTokens: number;
+  /** Number of messages in conversation */
+  messageCount: number;
+};
+
+export type PreCompactHookEvent = InternalHookEvent & {
+  type: "PreCompact";
+  action: "pre";
+  context: PreCompactContext;
+};
+
+// ============================================================================
+// Hook handler types with output support
+// ============================================================================
+
+/**
+ * Handler that can return output to be collected.
+ * Return value will be collected by triggerInternalHookWithOutput.
+ */
+export type InternalHookHandlerWithOutput = (
+  event: InternalHookEvent,
+) => Promise<string | undefined> | string | undefined;
 
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
@@ -140,6 +303,118 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       );
     }
   }
+}
+
+/** Registry of hook handlers that return output */
+const handlersWithOutput = new Map<string, InternalHookHandlerWithOutput[]>();
+
+/**
+ * Register a hook handler that can return output.
+ * Output from handlers will be collected by triggerInternalHookWithOutput.
+ *
+ * @param eventKey - Event type or event:action combination
+ * @param handler - Handler that may return a string output
+ */
+export function registerInternalHookWithOutput(
+  eventKey: string,
+  handler: InternalHookHandlerWithOutput,
+): void {
+  if (!handlersWithOutput.has(eventKey)) {
+    handlersWithOutput.set(eventKey, []);
+  }
+  handlersWithOutput.get(eventKey)!.push(handler);
+}
+
+/**
+ * Unregister a hook handler with output
+ */
+export function unregisterInternalHookWithOutput(
+  eventKey: string,
+  handler: InternalHookHandlerWithOutput,
+): void {
+  const eventHandlers = handlersWithOutput.get(eventKey);
+  if (!eventHandlers) {
+    return;
+  }
+
+  const index = eventHandlers.indexOf(handler);
+  if (index !== -1) {
+    eventHandlers.splice(index, 1);
+  }
+
+  if (eventHandlers.length === 0) {
+    handlersWithOutput.delete(eventKey);
+  }
+}
+
+/**
+ * Clear all registered hooks with output (useful for testing)
+ */
+export function clearInternalHooksWithOutput(): void {
+  handlersWithOutput.clear();
+}
+
+/**
+ * Hook result with deny support.
+ * Used by triggerInternalHookWithOutput to indicate if a hook denied the action.
+ */
+export type InternalHookWithOutputResult = {
+  /** Collected output strings from handlers */
+  outputs: string[];
+  /** Whether any handler denied the action (exit code 2) */
+  denied: boolean;
+  /** Deny reason if denied */
+  denyReason?: string;
+};
+
+/**
+ * Trigger a hook event and collect output from handlers.
+ *
+ * Calls both regular handlers (for side effects) and output handlers (for stdout collection).
+ * Output handlers are treated as returning potential stdout content.
+ *
+ * @param event - The event to trigger
+ * @returns Result with collected outputs and deny status
+ */
+export async function triggerInternalHookWithOutput(
+  event: InternalHookEvent,
+): Promise<InternalHookWithOutputResult> {
+  // First trigger regular handlers for side effects
+  await triggerInternalHook(event);
+
+  // Then collect output from output handlers
+  const typeHandlers = handlersWithOutput.get(event.type) ?? [];
+  const specificHandlers = handlersWithOutput.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
+
+  const result: InternalHookWithOutputResult = {
+    outputs: [],
+    denied: false,
+  };
+
+  if (allHandlers.length === 0) {
+    return result;
+  }
+
+  for (const handler of allHandlers) {
+    try {
+      const output = await handler(event);
+      if (output !== undefined && output !== null && output !== "") {
+        result.outputs.push(output);
+      }
+    } catch (err) {
+      // Special handling: if error message starts with "DENY:", mark as denied
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.startsWith("DENY:")) {
+        result.denied = true;
+        result.denyReason = errMsg.slice(5).trim();
+        break; // Stop processing on deny
+      }
+      console.error(`Hook error [${event.type}:${event.action}]:`, errMsg);
+    }
+  }
+
+  return result;
 }
 
 /**

@@ -110,6 +110,92 @@ export type InternalHooksConfig = {
   installs?: Record<string, HookInstallRecord>;
 };
 
+// ============================================================================
+// Claude Code-style agent-level hooks configuration
+// ============================================================================
+
+/**
+ * Agent-level hook event names (Claude Code-style).
+ * These are triggered at specific points in the agent processing pipeline.
+ */
+export type AgentHookEventName =
+  | "UserPromptSubmit"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "Stop"
+  | "PreCompact";
+
+/**
+ * Single shell command hook definition.
+ * Executes a shell command, passing JSON input to stdin.
+ */
+export type ShellHookCommand = {
+  /** Hook type - always 'command' for shell commands */
+  type: "command";
+  /** Shell command to execute */
+  command: string;
+};
+
+/**
+ * Hook matcher configuration.
+ * Determines when a hook should fire based on tool name or other criteria.
+ */
+export type AgentHookMatcher = {
+  /** Regex or glob pattern to match tool names (for PreToolUse/PostToolUse) */
+  toolPattern?: string;
+  /** Exact tool names to match */
+  toolNames?: string[];
+};
+
+/**
+ * Single agent hook entry with matcher and hooks.
+ */
+export type AgentHookEntry = {
+  /** Optional matcher to filter when this hook fires */
+  matcher?: AgentHookMatcher | string;
+  /** Array of hook commands to execute */
+  hooks: ShellHookCommand[];
+  /** Timeout in milliseconds for each command (default: 30000) */
+  timeoutMs?: number;
+  /** Working directory for command execution */
+  cwd?: string;
+};
+
+/**
+ * Claude Code-style hooks configuration.
+ * Maps event names to arrays of hook entries.
+ *
+ * @example
+ * ```json
+ * {
+ *   "agentHooks": {
+ *     "UserPromptSubmit": [
+ *       {
+ *         "matcher": "",
+ *         "hooks": [{ "type": "command", "command": "cat SOUL.md" }]
+ *       }
+ *     ],
+ *     "PreToolUse": [
+ *       {
+ *         "matcher": { "toolPattern": "Bash.*" },
+ *         "hooks": [{ "type": "command", "command": "echo 'Running bash'" }]
+ *       }
+ *     ]
+ *   }
+ * }
+ * ```
+ */
+export type AgentHooksConfig = {
+  /** Enable agent-level hooks (default: true if entries exist) */
+  enabled?: boolean;
+  /** Hook entries by event name */
+  UserPromptSubmit?: AgentHookEntry[];
+  PreToolUse?: AgentHookEntry[];
+  PostToolUse?: AgentHookEntry[];
+  Stop?: AgentHookEntry[];
+  PreCompact?: AgentHookEntry[];
+};
+
 export type HooksConfig = {
   enabled?: boolean;
   path?: string;
@@ -121,4 +207,6 @@ export type HooksConfig = {
   gmail?: HooksGmailConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
+  /** Claude Code-style agent-level hooks */
+  agentHooks?: AgentHooksConfig;
 };
