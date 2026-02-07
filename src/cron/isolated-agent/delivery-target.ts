@@ -12,6 +12,7 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -28,9 +29,30 @@ export async function resolveDeliveryTarget(
   mode: "explicit" | "implicit";
   error?: Error;
 }> {
-  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const requestedChannelRaw = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const requestedChannelNormalized =
+    requestedChannelRaw === "last"
+      ? "last"
+      : (normalizeMessageChannel(requestedChannelRaw) ?? requestedChannelRaw);
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
-  const allowMismatchedLastTo = requestedChannel === "last";
+  const allowMismatchedLastTo = requestedChannelNormalized === "last";
+
+  // Allow explicitly requesting the internal webchat channel as a messageChannel for the agent,
+  // even though it is not deliverable via outbound providers.
+  if (requestedChannelNormalized === INTERNAL_MESSAGE_CHANNEL) {
+    const channel = INTERNAL_MESSAGE_CHANNEL;
+    const mode = explicitTo ? "explicit" : "implicit";
+    if (!explicitTo) {
+      return { channel, to: undefined, mode };
+    }
+    const docked = resolveOutboundTarget({ channel, to: explicitTo, cfg, mode });
+    return {
+      channel,
+      to: docked.ok ? docked.to : undefined,
+      mode,
+      error: docked.ok ? undefined : docked.error,
+    };
+  }
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -40,7 +62,7 @@ export async function resolveDeliveryTarget(
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
-    requestedChannel,
+    requestedChannel: requestedChannelNormalized,
     explicitTo,
     allowMismatchedLastTo,
   });
@@ -58,7 +80,7 @@ export async function resolveDeliveryTarget(
   const resolved = fallbackChannel
     ? resolveSessionDeliveryTarget({
         entry: main,
-        requestedChannel,
+        requestedChannel: requestedChannelNormalized,
         explicitTo,
         fallbackChannel,
         allowMismatchedLastTo,

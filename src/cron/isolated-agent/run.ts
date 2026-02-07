@@ -98,6 +98,8 @@ export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   error?: string;
+  /** Delivery outcome when a delivery plan was requested. */
+  deliveryResult?: { status: "ok" | "error" | "skipped"; error?: string };
   sessionId?: string;
   sessionKey?: string;
 };
@@ -234,6 +236,11 @@ export async function runCronIsolatedAgentTurn(params: {
     ...result,
     sessionId: runSessionId,
     sessionKey: runSessionKey,
+  });
+  const deliveryResultFromError = (err: unknown) => ({
+    status: "error" as const,
+    // Prefer String(err) to preserve the conventional "Error: ..." prefix for Error objects.
+    error: String(err),
   });
   if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
     const labelSuffix =
@@ -483,29 +490,39 @@ export async function runCronIsolatedAgentTurn(params: {
 
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
+      const deliveryResult = deliveryResultFromError(resolvedDelivery.error);
+      // Special case: WebChat delivery is currently unsupported. We still want the
+      // cron job to be considered successful (agent ran), while surfacing the delivery error.
+      if (resolvedDelivery.channel === "webchat") {
+        logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
+        return withRunSession({ status: "ok", summary, outputText, deliveryResult });
+      }
       if (!deliveryBestEffort) {
         return withRunSession({
           status: "error",
           error: resolvedDelivery.error.message,
           summary,
           outputText,
+          deliveryResult,
         });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, deliveryResult });
     }
     if (!resolvedDelivery.to) {
       const message = "cron delivery target is missing";
+      const deliveryResult = { status: "error" as const, error: message };
       if (!deliveryBestEffort) {
         return withRunSession({
           status: "error",
           error: message,
           summary,
           outputText,
+          deliveryResult,
         });
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, deliveryResult });
     }
     try {
       await deliverOutboundPayloads({
@@ -518,11 +535,34 @@ export async function runCronIsolatedAgentTurn(params: {
         bestEffort: deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
       });
+      return withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryResult: { status: "ok" },
+      });
     } catch (err) {
+      const deliveryResult = deliveryResultFromError(err);
       if (!deliveryBestEffort) {
-        return withRunSession({ status: "error", summary, outputText, error: String(err) });
+        return withRunSession({
+          status: "error",
+          summary,
+          outputText,
+          error: deliveryResult.error,
+          deliveryResult,
+        });
       }
+      return withRunSession({ status: "ok", summary, outputText, deliveryResult });
     }
+  }
+
+  if (deliveryRequested && (skipHeartbeatDelivery || skipMessagingToolDelivery)) {
+    return withRunSession({
+      status: "ok",
+      summary,
+      outputText,
+      deliveryResult: { status: "skipped" },
+    });
   }
 
   return withRunSession({ status: "ok", summary, outputText });

@@ -62,10 +62,11 @@ export function attachMediaRoutes(
       }
       res.send(data);
       // best-effort single-use cleanup after response ends
+      // (no delay: tests and CI environments can be slow; we still wait for `finish`)
       res.on("finish", () => {
         setTimeout(() => {
           fs.rm(realPath).catch(() => {});
-        }, 50);
+        }, 0);
       });
     } catch (err) {
       if (err instanceof SafeOpenError) {
