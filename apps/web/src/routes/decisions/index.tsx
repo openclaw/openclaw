@@ -26,6 +26,7 @@ import { CardSkeleton } from "@/components/composed/LoadingSkeleton";
 import { useDecisions } from "@/hooks/queries/useDecisions";
 import { useDebounce } from "@/hooks/useDebounce";
 import {
+import { RouteErrorFallback } from "@/components/composed";
   Scale,
   Search,
   SlidersHorizontal,
@@ -34,6 +35,7 @@ import {
 
 export const Route = createFileRoute("/decisions/")({
   component: DecisionsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 const outcomeOptions: { value: DecisionOutcome | "all"; label: string }[] = [

@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/composed/StatusBadge";
-import { CardSkeleton } from "@/components/composed";
+import { CardSkeleton , RouteErrorFallback } from "@/components/composed";
 import {
   AgentOverviewTab,
   AgentWorkstreamsTab,
@@ -60,6 +60,7 @@ type AgentDetailTab =
 
 export const Route = createFileRoute("/agents/$agentId")({
   component: AgentDetailPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { tab?: AgentDetailTab; activityId?: string; newSession?: boolean } => {
     const validTabs: AgentDetailTab[] = [
       "overview",

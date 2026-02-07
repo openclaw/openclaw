@@ -52,8 +52,10 @@ import {
 import { useGatewayClient } from "@/providers";
 import type { HealthResponse, StatusResponse, ModelsListResponse } from "@/lib/api";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/debug/")({
   component: DebugPage,
+  errorComponent: RouteErrorFallback,
 });
 
 // Log levels

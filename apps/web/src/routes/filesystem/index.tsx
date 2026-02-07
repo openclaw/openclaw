@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+import { RouteErrorFallback } from "@/components/composed";
   FolderOpen,
   Folder,
   File,
@@ -43,6 +44,7 @@ import {
 
 export const Route = createFileRoute("/filesystem/")({
   component: FilesystemPage,
+  errorComponent: RouteErrorFallback,
 });
 
 // Mock filesystem structure representing ~/.clawdbrain/

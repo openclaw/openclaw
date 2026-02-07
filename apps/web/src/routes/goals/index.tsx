@@ -21,8 +21,10 @@ import { uuidv7 } from "@/lib/ids";
 import { Target, Plus, Search, SlidersHorizontal } from "lucide-react";
 import type { Goal, GoalStatus } from "@/hooks/queries/useGoals";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/goals/")({
   component: GoalsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 type StatusFilter = "all" | GoalStatus;

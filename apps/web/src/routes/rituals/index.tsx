@@ -38,8 +38,10 @@ import {
 } from "lucide-react";
 import type { Ritual, RitualStatus, RitualFrequency } from "@/hooks/queries/useRituals";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/rituals/")({
   component: RitualsPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { ritualId?: string } => {
     const ritualId = typeof search.ritualId === "string" ? search.ritualId : undefined;
     return { ritualId };

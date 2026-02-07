@@ -45,8 +45,10 @@ import {
 } from "@/lib/api";
 import { CalendarClock, Play, RefreshCw, Trash2 } from "lucide-react";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/automations/")({
   component: AutomationsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 type StatusFilter = "all" | AutomationStatus;

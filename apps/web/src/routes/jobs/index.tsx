@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+import { RouteErrorFallback } from "@/components/composed";
   Clock,
   Plus,
   Edit2,
@@ -51,6 +52,7 @@ import {
 
 export const Route = createFileRoute("/jobs/")({
   component: JobsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 // Cron presets

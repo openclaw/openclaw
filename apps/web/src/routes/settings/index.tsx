@@ -19,8 +19,10 @@ import {
 import { SettingsConfigNav, type ConfigSection } from "@/components/domain/settings/SettingsConfigNav";
 import { SettingsConfigMobileNav } from "@/components/domain/settings/SettingsConfigMobileNav";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { section?: ConfigSection; agentId?: string } => {
     const validSections: ConfigSection[] = [
       "health",

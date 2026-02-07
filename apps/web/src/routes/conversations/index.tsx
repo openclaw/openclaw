@@ -10,8 +10,10 @@ import { useCreateConversation } from "@/hooks/mutations/useConversationMutation
 import type { Conversation } from "@/hooks/queries/useConversations";
 import type { Agent } from "@/hooks/queries/useAgents";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/conversations/")({
   component: ConversationsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 function ConversationsPage() {

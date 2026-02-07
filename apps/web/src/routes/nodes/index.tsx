@@ -56,6 +56,7 @@ import type {
 } from "@/lib/api/nodes";
 
 import {
+import { RouteErrorFallback } from "@/components/composed";
   Shield,
   Server,
   Fingerprint,
@@ -74,6 +75,7 @@ import {
 
 export const Route = createFileRoute("/nodes/")({
   component: NodesPage,
+  errorComponent: RouteErrorFallback,
 });
 
 // ---------------------------------------------------------------------------

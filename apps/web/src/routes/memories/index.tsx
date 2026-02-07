@@ -44,8 +44,10 @@ import {
 } from "lucide-react";
 import type { Memory, MemoryType } from "@/hooks/queries/useMemories";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/memories/")({
   component: MemoriesPage,
+  errorComponent: RouteErrorFallback,
 });
 
 type SortOption = "date-desc" | "date-asc" | "relevance";

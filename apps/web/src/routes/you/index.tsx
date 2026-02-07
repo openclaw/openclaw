@@ -18,6 +18,7 @@ import {
 } from "@/components/domain/settings";
 import { useUIStore } from "@/stores/useUIStore";
 
+import { RouteErrorFallback } from "@/components/composed";
 const ALL_SECTIONS = new Set<ProfileSectionType>([
   "profile",
   "interaction-style",
@@ -31,6 +32,7 @@ const ALL_SECTIONS = new Set<ProfileSectionType>([
 
 export const Route = createFileRoute("/you/")({
   component: YouPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { section?: ProfileSectionType } => {
     const section = search.section as ProfileSectionType | undefined;
     return {

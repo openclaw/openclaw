@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CardSkeleton } from "@/components/composed";
+import { CardSkeleton , RouteErrorFallback } from "@/components/composed";
 import {
   AgentStatusRow,
   AgentStatusSummary,
@@ -45,6 +45,7 @@ type SortOption = "recent" | "name" | "status" | "cost" | "tokens";
 
 export const Route = createFileRoute("/agent-status/")({
   component: AgentStatusDashboardPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { health?: HealthFilter } => {
     const validStatuses: HealthFilter[] = ["all", "active", "stalled", "idle", "errored"];
     const health = search.health as HealthFilter | undefined;

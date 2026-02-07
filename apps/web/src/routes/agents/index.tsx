@@ -13,7 +13,7 @@ import {
 import { AgentCard } from "@/components/domain/agents/AgentCard";
 import { CreateAgentWizard } from "@/components/domain/agents/CreateAgentWizard";
 import { NewSessionDialog } from "@/components/domain/agents/NewSessionDialog";
-import { CardSkeleton } from "@/components/composed";
+import { CardSkeleton , RouteErrorFallback } from "@/components/composed";
 import { useAgents } from "@/hooks/queries/useAgents";
 import { useUpdateAgentStatus } from "@/hooks/mutations/useAgentMutations";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -33,6 +33,7 @@ type StatusFilter = "all" | AgentStatus | "waiting";
 
 export const Route = createFileRoute("/agents/")({
   component: AgentsPage,
+  errorComponent: RouteErrorFallback,
   validateSearch: (search: Record<string, unknown>): { status?: StatusFilter } => {
     const validStatuses: StatusFilter[] = ["all", "online", "busy", "paused", "offline", "waiting"];
     const status = search.status as StatusFilter | undefined;

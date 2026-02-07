@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CardSkeleton } from "@/components/composed";
+import { CardSkeleton , RouteErrorFallback } from "@/components/composed";
 import { StatusBadge } from "@/components/composed/StatusBadge";
 import { cn } from "@/lib/utils";
 import { useAgentDashboardData, type AgentDashboardEntry } from "@/hooks/queries/useAgentDashboard";
@@ -23,6 +23,7 @@ import type { AgentHealthStatus } from "@/hooks/queries/useAgentStatus";
 
 export const Route = createFileRoute("/agents/dashboard")({
   component: AgentsDashboardPage,
+  errorComponent: RouteErrorFallback,
 });
 
 const HEALTH_ORDER: Record<AgentHealthStatus, number> = {

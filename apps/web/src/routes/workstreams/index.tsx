@@ -26,8 +26,10 @@ import { TaskDetailPanel } from "@/components/domain/workstreams/TaskDetailPanel
 import { WorkflowVisualization } from "@/components/domain/workflow";
 import type { Task } from "@/hooks/queries/useWorkstreams";
 
+import { RouteErrorFallback } from "@/components/composed";
 export const Route = createFileRoute("/workstreams/")({
   component: WorkstreamsPage,
+  errorComponent: RouteErrorFallback,
 });
 
 type ViewMode = "list" | "dag" | "workflow";
