@@ -19,12 +19,12 @@ test("exec falls back when PTY spawn fails", async () => {
   const { createExecTool } = await import("./bash-tools.exec");
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
-    command: "printf ok",
+    command: "echo ok",
     pty: true,
   });
 
   expect(result.details.status).toBe("completed");
-  const text = result.content?.[0]?.text ?? "";
+  const text = result.content.find((c) => c.type === "text")?.text ?? "";
   expect(text).toContain("ok");
   expect(text).toContain("PTY spawn failed");
 });

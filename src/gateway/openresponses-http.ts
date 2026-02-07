@@ -1,7 +1,7 @@
 /**
  * OpenResponses HTTP Handler
  *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
+ * Implements the OpenResponses `/v1/responses` endpoint for Moltbot Gateway.
  *
  * @see https://www.open-responses.com/
  */
@@ -66,21 +66,17 @@ const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  // Security: Escape < and > to prevent XSS if the content-type is misinterpreted as HTML.
+  const json = JSON.stringify(event).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  res.write(`data: ${json}\n\n`);
 }
 
 function extractTextContent(content: string | ContentPart[]): string {
-  if (typeof content === "string") {
-    return content;
-  }
+  if (typeof content === "string") return content;
   return content
     .map((part) => {
-      if (part.type === "input_text") {
-        return part.text;
-      }
-      if (part.type === "output_text") {
-        return part.text;
-      }
+      if (part.type === "input_text") return part.text;
+      if (part.type === "output_text") return part.text;
       return "";
     })
     .filter(Boolean)
@@ -132,9 +128,7 @@ function applyToolChoice(params: {
   toolChoice: CreateResponseBody["tool_choice"];
 }): { tools: ClientToolDefinition[]; extraSystemPrompt?: string } {
   const { tools, toolChoice } = params;
-  if (!toolChoice) {
-    return { tools };
-  }
+  if (!toolChoice) return { tools };
 
   if (toolChoice === "none") {
     return { tools: [] };
@@ -183,9 +177,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      if (!content) {
-        continue;
-      }
+      if (!content) continue;
 
       if (item.role === "system" || item.role === "developer") {
         systemParts.push(content);
@@ -219,9 +211,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         break;
       }
     }
-    if (currentIndex < 0) {
-      currentIndex = conversationEntries.length - 1;
-    }
+    if (currentIndex < 0) currentIndex = conversationEntries.length - 1;
 
     const currentEntry = conversationEntries[currentIndex]?.entry;
     if (currentEntry) {
@@ -268,9 +258,7 @@ function toUsage(
       }
     | undefined,
 ): Usage {
-  if (!value) {
-    return createEmptyUsage();
-  }
+  if (!value) return createEmptyUsage();
   const input = value.input ?? 0;
   const output = value.output ?? 0;
   const cacheRead = value.cacheRead ?? 0;
@@ -333,9 +321,7 @@ export async function handleOpenResponsesHttpRequest(
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/responses") {
-    return false;
-  }
+  if (url.pathname !== "/v1/responses") return false;
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res);
@@ -361,9 +347,7 @@ export async function handleOpenResponsesHttpRequest(
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const body = await readJsonBodyOrError(req, res, maxBodyBytes);
-  if (body === undefined) {
-    return true;
-  }
+  if (body === undefined) return true;
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(body);
@@ -468,8 +452,12 @@ export async function handleOpenResponsesHttpRequest(
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
   } catch (err) {
+    const isInvalidRequest = err instanceof Error && err.message.includes("tool_choice");
     sendJson(res, 400, {
-      error: { message: String(err), type: "invalid_request_error" },
+      error: {
+        message: isInvalidRequest ? (err as Error).message : "Invalid request",
+        type: "invalid_request_error",
+      },
     });
     return true;
   }
@@ -569,7 +557,7 @@ export async function handleOpenResponsesHttpRequest(
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
-          : "No response from OpenClaw.";
+          : "No response from Moltbot.";
 
       const response = createResponseResource({
         id: responseId,
@@ -588,8 +576,9 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "failed",
         output: [],
-        error: { code: "api_error", message: String(err) },
+        error: { code: "api_error", message: "Internal server error" },
       });
+      defaultRuntime.error(`OpenResponses gateway error: ${String(err)}`);
       sendJson(res, 500, response);
     }
     return true;
@@ -609,15 +598,9 @@ export async function handleOpenResponsesHttpRequest(
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
-    if (closed) {
-      return;
-    }
-    if (!finalizeRequested) {
-      return;
-    }
-    if (!finalUsage) {
-      return;
-    }
+    if (closed) return;
+    if (!finalizeRequested) return;
+    if (!finalUsage) return;
     const usage = finalUsage;
 
     closed = true;
@@ -665,9 +648,7 @@ export async function handleOpenResponsesHttpRequest(
   };
 
   const requestFinalize = (status: ResponseResource["status"], text: string) => {
-    if (finalizeRequested) {
-      return;
-    }
+    if (finalizeRequested) return;
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -706,20 +687,14 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   unsubscribe = onAgentEvent((evt) => {
-    if (evt.runId !== responseId) {
-      return;
-    }
-    if (closed) {
-      return;
-    }
+    if (evt.runId !== responseId) return;
+    if (closed) return;
 
     if (evt.stream === "assistant") {
       const delta = evt.data?.delta;
       const text = evt.data?.text;
       const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
-      if (!content) {
-        return;
-      }
+      if (!content) return;
 
       sawAssistantDelta = true;
       accumulatedText += content;
@@ -737,7 +712,7 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from OpenClaw.";
+        const finalText = accumulatedText || "No response from Moltbot.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -771,9 +746,7 @@ export async function handleOpenResponsesHttpRequest(
       finalUsage = extractUsageFromResult(result);
       maybeFinalize();
 
-      if (closed) {
-        return;
-      }
+      if (closed) return;
 
       // Fallback: if no streaming deltas were received, send the full response
       if (!sawAssistantDelta) {
@@ -864,7 +837,7 @@ export async function handleOpenResponsesHttpRequest(
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from OpenClaw.";
+            : "No response from Moltbot.";
 
         accumulatedText = content;
         sawAssistantDelta = true;
@@ -878,9 +851,7 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     } catch (err) {
-      if (closed) {
-        return;
-      }
+      if (closed) return;
 
       finalUsage = finalUsage ?? createEmptyUsage();
       const errorResponse = createResponseResource({

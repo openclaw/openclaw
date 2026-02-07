@@ -9,7 +9,10 @@ import { initSessionState } from "./session.js";
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-thread-session-"));
-    const sessionsDir = path.join(root, "sessions");
+    const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
     const parentSessionId = "parent-session";
@@ -77,6 +80,8 @@ describe("initSessionState thread forking", () => {
       parentSession?: string;
     };
     expect(parsedHeader.parentSession).toBe(parentSessionFile);
+
+    process.env.OPENCLAW_STATE_DIR = oldStateDir;
   });
 
   it("records topic-specific session files when MessageThreadId is present", async () => {

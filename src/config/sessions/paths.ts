@@ -55,7 +55,21 @@ export function resolveSessionFilePath(
   opts?: { agentId?: string },
 ): string {
   const candidate = entry?.sessionFile?.trim();
-  return candidate ? candidate : resolveSessionTranscriptPath(sessionId, opts?.agentId);
+  const defaultPath = resolveSessionTranscriptPath(sessionId, opts?.agentId);
+  if (!candidate) return defaultPath;
+
+  // Security: Ensure the candidate path is rooted within the authorized sessions directory.
+  // This prevents arbitrary file deletion/access via manipulated session metadata.
+  const sessionsDir = resolveAgentSessionsDir(opts?.agentId);
+  try {
+    const resolvedCandidate = path.resolve(sessionsDir, candidate);
+    const relative = path.relative(sessionsDir, resolvedCandidate);
+    const isSafe = relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+    if (!isSafe) return defaultPath;
+    return resolvedCandidate;
+  } catch {
+    return defaultPath;
+  }
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
