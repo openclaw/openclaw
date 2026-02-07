@@ -300,9 +300,20 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled && nativeSkillsEnabled
       ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
       : [];
+  const uniqueSkillCommands: typeof skillCommands = [];
+  const seenSkillNames = new Set<string>();
+  for (const command of skillCommands) {
+    const lower = command.name.toLowerCase();
+    if (seenSkillNames.has(lower)) {
+      continue;
+    }
+    seenSkillNames.add(lower);
+    uniqueSkillCommands.push(command);
+  }
+
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {
-        skillCommands,
+        skillCommands: uniqueSkillCommands,
         provider: "telegram",
       })
     : [];
