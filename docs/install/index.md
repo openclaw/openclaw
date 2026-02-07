@@ -1,164 +1,172 @@
 ---
-summary: "Install OpenClaw (recommended installer, global install, or from source)"
+summary: "Install OpenClaw — installer script, npm/pnpm, from source, Docker, and more"
 read_when:
-  - Installing OpenClaw
-  - You want to install from GitHub
-title: "Install Overview"
+  - You need an install method other than the Getting Started quickstart
+  - You want to deploy to a cloud platform
+  - You need to update, migrate, or uninstall
+title: "Install"
 ---
 
-# Install Overview
+# Install
 
-Use the installer unless you have a reason not to. It sets up the CLI and runs onboarding.
-
-## Quick install (recommended)
-
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-```
-
-Windows (PowerShell):
-
-```powershell
-iwr -useb https://openclaw.ai/install.ps1 | iex
-```
-
-Next step (if you skipped onboarding):
-
-```bash
-openclaw onboard --install-daemon
-```
+Already followed [Getting Started](/start/getting-started)? You're all set — this page is for alternative install methods, platform-specific instructions, and maintenance.
 
 ## System requirements
 
-- **Node >=22**
-- macOS, Linux, or Windows via WSL2
+- **[Node 22+](/install/node)** (the [installer script](#install-methods) will install it if missing)
+- macOS, Linux, or Windows
 - `pnpm` only if you build from source
 
-## Choose your install path
+<Note>
+On Windows, we strongly recommend running OpenClaw under [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install).
+</Note>
 
-### 1) Installer script (recommended)
+## Install methods
 
-Installs `openclaw` globally via npm and runs onboarding.
+<Tip>
+The **installer script** is the recommended way to install OpenClaw. It handles Node detection, installation, and onboarding in one step.
+</Tip>
 
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-```
+<AccordionGroup>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
+    Downloads the CLI, installs it globally via npm, and launches the onboarding wizard.
 
-Installer flags:
+    <Tabs>
+      <Tab title="macOS / Linux / WSL2">
+        ```bash
+        curl -fsSL https://openclaw.ai/install.sh | bash
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        iwr -useb https://openclaw.ai/install.ps1 | iex
+        ```
+      </Tab>
+    </Tabs>
 
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
-```
+    That's it — the script handles Node detection, installation, and onboarding.
 
-Details: [Installer internals](/install/installer).
+    To skip onboarding and just install the binary:
 
-Non-interactive (skip onboarding):
+    <Tabs>
+      <Tab title="macOS / Linux / WSL2">
+        ```bash
+        curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
+        ```
+      </Tab>
+    </Tabs>
 
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
-```
+    For all flags, env vars, and CI/automation options, see [Installer internals](/install/installer).
 
-### 2) Global install (manual)
+  </Accordion>
 
-If you already have Node:
+  <Accordion title="npm / pnpm" icon="package">
+    If you already have Node 22+ and prefer to manage the install yourself:
 
-```bash
-npm install -g openclaw@latest
-```
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -g openclaw@latest
+        openclaw onboard --install-daemon
+        ```
 
-If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails to install, force prebuilt binaries:
+        <Accordion title="sharp build errors?">
+          If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails, force prebuilt binaries:
 
-```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
-```
+          ```bash
+          SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+          ```
 
-If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the `SHARP_IGNORE_GLOBAL_LIBVIPS=1` workaround above to skip the native build.
+          If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the env var above.
+        </Accordion>
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm add -g openclaw@latest
+        pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
+        openclaw onboard --install-daemon
+        ```
 
-Or with pnpm:
+        <Note>
+        pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages.
+        </Note>
+      </Tab>
+    </Tabs>
 
-```bash
-pnpm add -g openclaw@latest
-pnpm approve-builds -g                # approve openclaw, node-llama-cpp, sharp, etc.
-```
+  </Accordion>
 
-pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages.
+  <Accordion title="From source" icon="github">
+    For contributors or anyone who wants to run from a local checkout.
 
-Then:
+    <Steps>
+      <Step title="Clone and build">
+        Clone the [OpenClaw repo](https://github.com/openclaw/openclaw) and build:
 
-```bash
-openclaw onboard --install-daemon
-```
+        ```bash
+        git clone https://github.com/openclaw/openclaw.git
+        cd openclaw
+        pnpm install
+        pnpm ui:build
+        pnpm build
+        ```
+      </Step>
+      <Step title="Link the CLI">
+        Make the `openclaw` command available globally:
 
-### 3) From source (contributors/dev)
+        ```bash
+        pnpm link --global
+        ```
 
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
-openclaw onboard --install-daemon
-```
+        Alternatively, skip the link and run commands via `pnpm openclaw ...` from inside the repo.
+      </Step>
+      <Step title="Run onboarding">
+        ```bash
+        openclaw onboard --install-daemon
+        ```
+      </Step>
+    </Steps>
 
-Tip: if you don’t have a global install yet, run repo commands via `pnpm openclaw ...`.
+    For deeper development workflows, see [Setup](/start/setup).
 
-For deeper development workflows, see [Setup](/start/setup).
+  </Accordion>
+</AccordionGroup>
 
-### 4) Other install options
+## Other install methods
 
-- Docker: [Docker](/install/docker)
-- Nix: [Nix](/install/nix)
-- Ansible: [Ansible](/install/ansible)
-- Bun (CLI only): [Bun](/install/bun)
+<CardGroup cols={2}>
+  <Card title="Docker" href="/install/docker" icon="container">
+    Containerized or headless deployments.
+  </Card>
+  <Card title="Nix" href="/install/nix" icon="snowflake">
+    Declarative install via Nix.
+  </Card>
+  <Card title="Ansible" href="/install/ansible" icon="server">
+    Automated fleet provisioning.
+  </Card>
+  <Card title="Bun" href="/install/bun" icon="zap">
+    CLI-only usage via the Bun runtime.
+  </Card>
+</CardGroup>
 
 ## After install
 
-- Run onboarding: `openclaw onboard --install-daemon`
-- Quick check: `openclaw doctor`
-- Check gateway health: `openclaw status` + `openclaw health`
-- Open the dashboard: `openclaw dashboard`
-
-## Install method: npm vs git (installer)
-
-The installer supports two methods:
-
-- `npm` (default): `npm install -g openclaw@latest`
-- `git`: clone/build from GitHub and run from a source checkout
-
-### CLI flags
+Verify everything is working:
 
 ```bash
-# Explicit npm
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
-
-# Install from GitHub (source checkout)
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
+openclaw doctor         # check for config issues
+openclaw status         # gateway status
+openclaw dashboard      # open the browser UI
 ```
 
-Common flags:
+## Troubleshooting: `openclaw` not found
 
-- `--install-method npm|git`
-- `--git-dir <path>` (default: `~/openclaw`)
-- `--no-git-update` (skip `git pull` when using an existing checkout)
-- `--no-prompt` (disable prompts; required in CI/automation)
-- `--dry-run` (print what would happen; make no changes)
-- `--no-onboard` (skip onboarding)
-
-### Environment variables
-
-Equivalent env vars (useful for automation):
-
-- `OPENCLAW_INSTALL_METHOD=git|npm`
-- `OPENCLAW_GIT_DIR=...`
-- `OPENCLAW_GIT_UPDATE=0|1`
-- `OPENCLAW_NO_PROMPT=1`
-- `OPENCLAW_DRY_RUN=1`
-- `OPENCLAW_NO_ONBOARD=1`
-- `SHARP_IGNORE_GLOBAL_LIBVIPS=0|1` (default: `1`; avoids `sharp` building against system libvips)
-
-## Troubleshooting: `openclaw` not found (PATH)
-
-Quick diagnosis:
+<Accordion title="PATH diagnosis and fix">
+  Quick diagnosis:
 
 ```bash
 node -v
@@ -167,21 +175,29 @@ npm prefix -g
 echo "$PATH"
 ```
 
-If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `openclaw`).
+If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** in your `$PATH`, your shell can't find global npm binaries (including `openclaw`).
 
-Fix: add it to your shell startup file (zsh: `~/.zshrc`, bash: `~/.bashrc`):
+Fix — add it to your shell startup file (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-# macOS / Linux
 export PATH="$(npm prefix -g)/bin:$PATH"
 ```
 
 On Windows, add the output of `npm prefix -g` to your PATH.
 
 Then open a new terminal (or `rehash` in zsh / `hash -r` in bash).
+</Accordion>
 
 ## Update / uninstall
 
-- Updates: [Updating](/install/updating)
-- Migrate to a new machine: [Migrating](/install/migrating)
-- Uninstall: [Uninstall](/install/uninstall)
+<CardGroup cols={3}>
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
+    Keep OpenClaw up to date.
+  </Card>
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
+    Move to a new machine.
+  </Card>
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
+    Remove OpenClaw completely.
+  </Card>
+</CardGroup>

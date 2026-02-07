@@ -99,6 +99,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/qianfan",
+      "destination": "/providers/qianfan"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -660,7 +664,7 @@
     },
     {
       "source": "/troubleshooting",
-      "destination": "/gateway/troubleshooting"
+      "destination": "/help/troubleshooting"
     },
     {
       "source": "/web/tui",
@@ -801,14 +805,8 @@
                 "pages": ["install/index", "install/installer"]
               },
               {
-                "group": "Install methods",
-                "pages": [
-                  "install/node",
-                  "install/docker",
-                  "install/nix",
-                  "install/ansible",
-                  "install/bun"
-                ]
+                "group": "Other install methods",
+                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
               },
               {
                 "group": "Maintenance",
@@ -968,6 +966,7 @@
                   "hooks/soul-evil",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
                   "automation/poll",
@@ -978,6 +977,7 @@
                 "group": "Media and devices",
                 "pages": [
                   "nodes/index",
+                  "nodes/troubleshooting",
                   "nodes/images",
                   "nodes/audio",
                   "nodes/camera",
@@ -1012,7 +1012,8 @@
                   "providers/opencode",
                   "providers/glm",
                   "providers/zai",
-                  "providers/synthetic"
+                  "providers/synthetic",
+                  "providers/qianfan"
                 ]
               }
             ]
@@ -1221,6 +1222,7 @@
               {
                 "group": "Environment and debugging",
                 "pages": [
+                  "install/node",
                   "environment",
                   "debugging",
                   "testing",

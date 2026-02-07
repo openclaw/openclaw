@@ -145,6 +145,9 @@ What you set:
     Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
+  <Accordion title="xAI (Grok) API key">
+    Prompts for `XAI_API_KEY` and configures xAI as a model provider.
+  </Accordion>
   <Accordion title="OpenCode Zen">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
