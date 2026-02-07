@@ -39,10 +39,11 @@ describe("resolveTelegramFetch", () => {
     expect(resolved).toBeTypeOf("function");
   });
 
-  it("creates undici Agent with autoSelectFamily disabled on Node 22+", async () => {
+  it("creates undici Agent with autoSelectFamily disabled when forced via env", async () => {
+    // Force autoSelectFamily=false regardless of Node version
+    vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", "1");
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     const { resolveTelegramFetch, AgentMock } = await loadModule();
-    // On Node 22+, decision.value will be false by default
     resolveTelegramFetch();
     // Agent should be created with autoSelectFamily: false in connect options
     expect(AgentMock).toHaveBeenCalledWith({
