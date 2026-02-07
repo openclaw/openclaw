@@ -393,6 +393,48 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it("returns 400 when request body times out (Slow-Loris protection)", async () => {
+      vi.useFakeTimers();
+      try {
+        const account = createMockAccount();
+        const config: OpenClawConfig = {};
+        const core = createMockRuntime();
+        setBlueBubblesRuntime(core);
+
+        unregister = registerBlueBubblesWebhookTarget({
+          account,
+          config,
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        });
+
+        // Create a request that never sends data or ends (simulates slow-loris)
+        const req = new EventEmitter() as IncomingMessage;
+        req.method = "POST";
+        req.url = "/bluebubbles-webhook";
+        req.headers = {};
+        (req as unknown as { socket: { remoteAddress: string } }).socket = {
+          remoteAddress: "127.0.0.1",
+        };
+        req.destroy = vi.fn();
+
+        const res = createMockResponse();
+
+        const handledPromise = handleBlueBubblesWebhookRequest(req, res);
+
+        // Advance past the 30s timeout
+        await vi.advanceTimersByTimeAsync(31_000);
+
+        const handled = await handledPromise;
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(400);
+        expect(req.destroy).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("authenticates via password query parameter", async () => {
       const account = createMockAccount({ password: "secret-token" });
       const config: OpenClawConfig = {};

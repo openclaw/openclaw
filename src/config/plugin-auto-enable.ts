@@ -386,12 +386,12 @@ function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfi
   };
 }
 
-function enablePluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const entries = {
     ...cfg.plugins?.entries,
     [pluginId]: {
       ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
-      enabled: true,
+      enabled: false,
     },
   };
   return {
@@ -399,7 +399,6 @@ function enablePluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfi
     plugins: {
       ...cfg.plugins,
       entries,
-      ...(cfg.plugins?.enabled === false ? { enabled: true } : {}),
     },
   };
 }
@@ -447,7 +446,7 @@ export function applyPluginAutoEnable(params: {
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
-    next = enablePluginEntry(next, entry.pluginId);
+    next = registerPluginEntry(next, entry.pluginId);
     next = ensureAllowlisted(next, entry.pluginId);
     changes.push(formatAutoEnableChange(entry));
   }
