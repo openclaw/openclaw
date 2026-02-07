@@ -114,7 +114,7 @@ export async function generateSmartAck(params: {
 
     if (result.code !== 0) {
       const err = result.stderr || result.stdout || "CLI failed";
-      logVerbose(`smart-ack: CLI exited with code ${result.code}: ${err}`);
+      log.warn(`smart-ack: CLI exited with code ${result.code}: ${err}`);
       return null;
     }
 
@@ -152,7 +152,7 @@ export async function generateSmartAck(params: {
     if (signal?.aborted) {
       logVerbose("smart-ack: generation aborted (main response arrived first or timeout)");
     } else {
-      logVerbose(`smart-ack: generation failed: ${formatErrorMessage(err)}`);
+      log.warn(`smart-ack: generation failed: ${formatErrorMessage(err)}`);
     }
     return null;
   }

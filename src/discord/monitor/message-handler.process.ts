@@ -530,7 +530,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   // Tool feedback: buffer tool calls and use Haiku to decide which are meaningful
   // enough to show to the user, instead of spamming every single tool use.
-  const toolFeedbackEnabled = discordConfig?.toolFeedback === true;
+  const toolFeedbackEnabled = discordConfig?.toolFeedback !== false;
   const toolFeedbackFilter = toolFeedbackEnabled
     ? createToolFeedbackFilter({
         userMessage: text,
@@ -566,8 +566,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // ACK responses are held and sent as interim feedback if the main model takes too long.
   const smartAckConfig = discordConfig?.smartAck;
   const smartAckEnabled =
-    smartAckConfig === true ||
-    (typeof smartAckConfig === "object" && smartAckConfig?.enabled !== false);
+    smartAckConfig !== false &&
+    (smartAckConfig === true ||
+      smartAckConfig === undefined ||
+      (typeof smartAckConfig === "object" && smartAckConfig?.enabled !== false));
   const smartAckParsedConfig =
     typeof smartAckConfig === "object" ? (smartAckConfig as SmartAckConfig) : undefined;
 

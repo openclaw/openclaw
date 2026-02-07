@@ -1,6 +1,9 @@
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+
+const log = createSubsystemLogger("discord/tool-feedback");
 
 const DEFAULT_BUFFER_MS = 3000;
 const DEFAULT_MAX_WAIT_MS = 8000;
@@ -139,7 +142,9 @@ async function askHaikuToFilter(params: {
       timeoutMs: params.timeoutMs,
     });
     if (result.code !== 0) {
-      logVerbose(`tool-feedback-filter: CLI exited with code ${result.code}`);
+      log.warn(
+        `tool-feedback-filter: CLI exited with code ${result.code}: ${result.stderr || result.stdout || "unknown"}`,
+      );
       return null;
     }
     const text = parseCliResponse(result.stdout);
@@ -148,7 +153,7 @@ async function askHaikuToFilter(params: {
     }
     return text;
   } catch (err) {
-    logVerbose(`tool-feedback-filter: failed: ${formatErrorMessage(err)}`);
+    log.warn(`tool-feedback-filter: failed: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -211,7 +216,7 @@ export function createToolFeedbackFilter(params: {
         params.onUpdate(`*${status}*`);
       }
     } catch (err) {
-      logVerbose(`tool-feedback-filter: flush failed: ${formatErrorMessage(err)}`);
+      log.warn(`tool-feedback-filter: flush failed: ${formatErrorMessage(err)}`);
     } finally {
       flushing = false;
     }
