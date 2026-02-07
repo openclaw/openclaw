@@ -230,7 +230,17 @@ export function assertRequiredParams(
   }
 }
 
-// Generic wrapper to normalize parameters for any tool
+/**
+ * Generic wrapper to normalize parameters for any tool.
+ *
+ * NOTE: This wrapper does NOT include unified error handling (executeToolWithErrorHandling).
+ * Tools created by this function should be passed to runtime adapters like toToolDefinitions()
+ * or bridgeClawdbrainToolsToMcpServer(), which provide unified error handling, structured
+ * logging, error truncation, and performance measurement.
+ *
+ * Direct calls to wrapper.execute() will not have consistent error logging and may bypass
+ * important error handling features. Always use tools through the runtime adapters.
+ */
 export function wrapToolParamNormalization(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
@@ -251,6 +261,13 @@ export function wrapToolParamNormalization(
   };
 }
 
+/**
+ * Wrapper to enforce sandbox path restrictions on file operation tools.
+ *
+ * NOTE: This wrapper does NOT include unified error handling (executeToolWithErrorHandling).
+ * Tools created by this function should be passed to runtime adapters for consistent error
+ * handling and logging. See wrapToolParamNormalization() documentation for details.
+ */
 function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
@@ -283,6 +300,13 @@ export function createSandboxedEditTool(root: string) {
   return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
 }
 
+/**
+ * Wraps the read tool to normalize image results and sanitize oversized images.
+ *
+ * NOTE: This wrapper does NOT include unified error handling (executeToolWithErrorHandling).
+ * The created tool should be passed to runtime adapters for consistent error handling and
+ * logging. See wrapToolParamNormalization() documentation for details.
+ */
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
   const patched = patchToolSchemaForClaudeCompatibility(base);
   return {

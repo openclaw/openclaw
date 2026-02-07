@@ -5,11 +5,10 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
-import { logDebug, logError } from "../logger.js";
-import { logToolError, measureOperation } from "../logging/enhanced-events.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
+import { executeToolWithErrorHandling } from "./tools/execute-tool.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyAgentTool = AgentTool<any, unknown>;
@@ -45,17 +44,6 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
   const third = args[2];
   const fourth = args[3];
   return isAbortSignal(third) || typeof fourth === "function";
-}
-
-function describeToolExecutionError(err: unknown): {
-  message: string;
-  stack?: string;
-} {
-  if (err instanceof Error) {
-    const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
-  }
-  return { message: String(err) };
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -96,50 +84,25 @@ export function toToolDefinitions(
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        const startTime = Date.now();
-        try {
-          // Wrap with performance measurement
-          return await measureOperation(
-            "tool",
-            normalizedName,
-            () => tool.execute(toolCallId, params, signal, onUpdate),
-            { toolCallId, sessionKey: hookContext?.sessionKey },
-          );
-        } catch (err) {
-          if (signal?.aborted) {
-            throw err;
-          }
-          const name =
-            err && typeof err === "object" && "name" in err
-              ? String((err as { name?: unknown }).name)
-              : "";
-          if (name === "AbortError") {
-            throw err;
-          }
-          const described = describeToolExecutionError(err);
-          if (described.stack && described.stack !== described.message) {
-            logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
-          }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
-          // Log enhanced error context
-          logToolError({
-            toolName: normalizedName,
-            input: params,
-            error: err,
-            sessionContext: {
-              agentId: hookContext?.agentId,
-              sessionId: hookContext?.sessionKey,
-            },
-            durationMs: Date.now() - startTime,
-          });
+        // Use unified tool execution with error handling
+        const { result, aborted } = await executeToolWithErrorHandling(tool, {
+          toolCallId,
+          toolName: name,
+          normalizedToolName: normalizedName,
+          params,
+          signal,
+          onUpdate,
+          sessionKey: hookContext?.sessionKey,
+          agentId: hookContext?.agentId,
+        });
 
-          return jsonResult({
-            status: "error",
-            tool: normalizedName,
-            error: described.message,
-          });
+        // Pi runtime expects AbortError to be thrown, not returned as a result
+        if (aborted) {
+          throw new DOMException("Aborted", "AbortError");
         }
+
+        return result;
       },
     } satisfies ToolDefinition;
   });

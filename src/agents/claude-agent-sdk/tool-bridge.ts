@@ -32,66 +32,7 @@ import { logDebug, logError } from "../../logger.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { truncateForLog } from "../../logging/truncate.js";
 import { normalizeToolName } from "../tool-policy.js";
-
-// ---------------------------------------------------------------------------
-// Utility functions
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the first line from a text string for console logging.
- * Truncates at the first line feed (\n or \r) to prevent multi-line subprocess
- * output from polluting console logs.
- *
- * For exec failures, prioritizes exit code information that typically appears
- * at the end of the full output, extracting it and prepending it to the first
- * line of actual output.
- *
- * @param text - The text to extract the first line from
- * @param maxLength - Maximum length of the returned string (default: 240)
- * @returns The first line, truncated to maxLength if needed
- */
-function extractFirstLine(text: string, maxLength: number = 240): string {
-  // Check for exit code information at the end of the text
-  // Pattern: "Command exited with code N" or "Command aborted by signal NAME"
-  const exitCodeMatch = text.match(
-    /(?:Command exited with code \d+|Command aborted by signal \w+|Command aborted before exit code was captured)$/,
-  );
-  const exitCodeInfo = exitCodeMatch ? exitCodeMatch[0] : null;
-
-  // Find the first line feed (either \n or \r)
-  const lfIndex = text.indexOf("\n");
-  const crIndex = text.indexOf("\r");
-  const firstLineEnd =
-    lfIndex === -1 ? crIndex : crIndex === -1 ? lfIndex : Math.min(lfIndex, crIndex);
-
-  if (firstLineEnd === -1) {
-    // No line breaks found, just truncate if needed
-    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
-  }
-
-  // Extract the first line of actual output
-  const firstLine = text.slice(0, firstLineEnd);
-
-  // If we found exit code info at the end, prepend it to the first line
-  if (exitCodeInfo) {
-    const combined = `${exitCodeInfo} :: ${firstLine}`;
-    return combined.length > maxLength ? `${combined.slice(0, maxLength)}…` : combined;
-  }
-
-  return firstLine.length > maxLength ? `${firstLine.slice(0, maxLength)}…` : firstLine;
-}
-
-function extractHttpStatusCode(text: string): number | undefined {
-  const parenMatch = text.match(/\((\d{3})\)/);
-  if (parenMatch) {
-    return Number(parenMatch[1]);
-  }
-  const statusMatch = text.match(/\bstatus(?:=|:|\s)(\d{3})\b/i);
-  if (statusMatch) {
-    return Number(statusMatch[1]);
-  }
-  return undefined;
-}
+import { executeToolWithErrorHandling } from "../tools/execute-tool.js";
 
 // ---------------------------------------------------------------------------
 // Schema conversion: TypeBox → JSON Schema → Zod
@@ -499,99 +440,37 @@ export function wrapToolHandler(tool: AnyAgentTool, abortSignal?: AbortSignal): 
 
     // Use the abort signal from extra if available, falling back to the shared one
     const effectiveSignal = extra?.signal ?? abortSignal;
+    const sessionId = typeof extra?.sessionId === "string" ? extra.sessionId : undefined;
 
-    try {
-      const result = await tool.execute(
-        toolCallId,
-        rawArgs,
-        effectiveSignal, // 3rd arg: AbortSignal
-        undefined, // 4th arg: onUpdate — not supported in MCP tool protocol
-      );
-      return convertToolResult(result);
-    } catch (err) {
-      // Propagate AbortError so the SDK runner can handle cancellation.
-      if (err instanceof Error && err.name === "AbortError") {
-        return {
-          content: [{ type: "text", text: `Tool "${normalizedName}" was aborted.` }],
-          isError: true,
-        };
-      }
+    // Use unified tool execution with error handling (now includes web_fetch and web_search context)
+    const { result, aborted, error } = await executeToolWithErrorHandling(tool, {
+      toolCallId,
+      toolName: tool.name,
+      normalizedToolName: normalizedName,
+      params: rawArgs,
+      signal: effectiveSignal,
+      onUpdate: undefined, // MCP tool protocol doesn't support streaming updates
+      sessionKey: sessionId,
+    });
 
-      const message = err instanceof Error ? err.message : String(err);
-      const sessionId = typeof extra?.sessionId === "string" ? extra.sessionId : undefined;
-      const execCommand = normalizedName === "exec" ? rawArgs.command : undefined;
-      const execWorkdir = normalizedName === "exec" ? rawArgs.workdir : undefined;
-      const webFetchUrl = normalizedName === "web_fetch" ? rawArgs.url : undefined;
-      const webSearchQuery = normalizedName === "web_search" ? rawArgs.query : undefined;
-      const execCommandText = typeof execCommand === "string" ? execCommand : undefined;
-      const execWorkdirText = typeof execWorkdir === "string" ? execWorkdir : undefined;
-      const webFetchUrlText = typeof webFetchUrl === "string" ? webFetchUrl : undefined;
-      const webSearchQueryText = typeof webSearchQuery === "string" ? webSearchQuery : undefined;
-      const execCommandRedacted = execCommandText
-        ? redactSensitiveText(execCommandText).trim()
-        : undefined;
-      const webFetchUrlRedacted = webFetchUrlText
-        ? redactSensitiveText(webFetchUrlText).trim()
-        : undefined;
-      const webSearchQueryRedacted = webSearchQueryText
-        ? redactSensitiveText(webSearchQueryText).trim()
-        : undefined;
-      const execCommandPreview =
-        execCommandRedacted && execCommandRedacted.length > 240
-          ? `${execCommandRedacted.slice(0, 240)}…`
-          : execCommandRedacted;
-      const webSearchQueryPreview =
-        webSearchQueryRedacted && webSearchQueryRedacted.length > 240
-          ? `${webSearchQueryRedacted.slice(0, 240)}…`
-          : webSearchQueryRedacted;
-      const httpStatusCode =
-        normalizedName === "web_fetch" ? extractHttpStatusCode(message) : undefined;
-      const includeWebFetchUrl =
-        normalizedName === "web_fetch" &&
-        Boolean(webFetchUrlRedacted) &&
-        httpStatusCode !== undefined &&
-        httpStatusCode !== 200 &&
-        httpStatusCode !== 301;
-
-      const contextParts: string[] = [`toolCallId=${toolCallId}`];
-      if (sessionId) {
-        contextParts.push(`sessionId=${sessionId}`);
-      }
-      if (includeWebFetchUrl && webFetchUrlRedacted) {
-        contextParts.push(`url=${JSON.stringify(webFetchUrlRedacted)}`);
-      }
-      if (normalizedName === "web_search" && webSearchQueryPreview) {
-        contextParts.push(`query=${JSON.stringify(webSearchQueryPreview)}`);
-      }
-      if (execCommandPreview) {
-        contextParts.push(`cmd=${JSON.stringify(execCommandPreview)}`);
-      }
-      if (execWorkdirText) {
-        contextParts.push(`cwd=${JSON.stringify(execWorkdirText)}`);
-      }
-
-      // Truncate message at first line feed for console logging (keep full message for model)
-      const messageForLog = extractFirstLine(message, 240);
-      logError(
-        `[tool-bridge] ${normalizedName} failed: ${messageForLog} (${contextParts.join(" ")})`,
-      );
-
-      // Log debug details if available (e.g., wrapped error content from web_fetch)
-      const debugDetail =
-        err instanceof Error ? (err as unknown as Record<string, unknown>)._debugDetail : undefined;
-      if (typeof debugDetail === "string") {
-        logDebug(`[tool-bridge] ${normalizedName} debug detail:\n${truncateForLog(debugDetail)}`);
-      }
-
-      if (err instanceof Error && err.stack) {
-        logDebug(`[tool-bridge] ${normalizedName} stack:\n${err.stack}`);
-      }
-
+    // Handle abort - return MCP-specific abort error format
+    if (aborted) {
       return {
-        content: [{ type: "text", text: `Tool error (${normalizedName}): ${message}` }],
+        content: [{ type: "text", text: `Tool "${normalizedName}" was aborted.` }],
         isError: true,
       };
     }
+
+    // Handle error - return MCP-specific error format for model context
+    if (error) {
+      return {
+        content: [{ type: "text", text: `Tool error (${normalizedName}): ${error.message}` }],
+        isError: true,
+      };
+    }
+
+    // Success - convert to MCP format
+    return convertToolResult(result);
   };
 }
 

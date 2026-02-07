@@ -188,9 +188,10 @@ function buildEnhancedDescription(
 
   const hints: string[] = [];
 
-  // Add transport type hint for remote servers
+  // Add transport type hint when description is explicitly empty OR for remote servers
   const transport = typeof server.transport === "string" ? server.transport : "stdio";
-  if (transport === "http" || transport === "sse") {
+  const isExplicitlyEmpty = toolDescription !== undefined && toolDescription.trim().length === 0;
+  if (isExplicitlyEmpty || transport === "http" || transport === "sse") {
     hints.push(getTransportHint(server));
   }
 

@@ -8,6 +8,8 @@ import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import { normalizeToolName } from "../../agents/tool-policy.js";
+import { executeToolWithErrorHandling } from "../../agents/tools/execute-tool.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { logVerbose } from "../../globals.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
@@ -189,21 +191,34 @@ export async function handleInlineActions(params: {
       }
 
       const toolCallId = `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      try {
-        const result = await tool.execute(toolCallId, {
+
+      // Use unified tool execution for consistent error handling and logging
+      const { result, error, aborted } = await executeToolWithErrorHandling(tool, {
+        toolCallId,
+        toolName: tool.name,
+        normalizedToolName: normalizeToolName(tool.name),
+        params: {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
-          // oxlint-disable-next-line typescript/no-explicit-any
-        } as any);
-        const text = extractTextFromToolResult(result) ?? "✅ Done.";
+        },
+        sessionKey,
+        agentId,
+      });
+
+      if (aborted) {
         typing.cleanup();
-        return { kind: "reply", reply: { text } };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ ${message}` } };
+        return { kind: "reply", reply: { text: "⏸️ Command aborted." } };
       }
+
+      if (error) {
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${error.message}` } };
+      }
+
+      const text = extractTextFromToolResult(result) ?? "✅ Done.";
+      typing.cleanup();
+      return { kind: "reply", reply: { text } };
     }
 
     const promptParts = [
