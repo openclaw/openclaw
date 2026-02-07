@@ -65,6 +65,11 @@ export async function handleToolExecutionStart(
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, meta);
+  // Stash args so after_tool_call hook can correlate inputs with outputs.
+  ctx.state.toolArgsById.set(
+    toolCallId,
+    args && typeof args === "object" ? (args as Record<string, unknown>) : {},
+  );
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -162,8 +167,10 @@ export function handleToolExecutionEnd(
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const meta = ctx.state.toolMetaById.get(toolCallId);
+  const toolArgs = ctx.state.toolArgsById.get(toolCallId) ?? {};
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
+  ctx.state.toolArgsById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
@@ -228,7 +235,7 @@ export function handleToolExecutionEnd(
       .runAfterToolCall(
         {
           toolName,
-          params: {},
+          params: toolArgs,
           result: sanitizedResult,
           error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
           durationMs: undefined,
