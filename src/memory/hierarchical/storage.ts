@@ -87,7 +87,7 @@ export async function saveSummaryIndex(index: SummaryIndex, agentId?: string): P
   await ensureSummariesDir(agentId);
 
   const indexPath = resolveIndexPath(agentId);
-  const tempPath = `${indexPath}.tmp.${Date.now()}`;
+  const tempPath = `${indexPath}.tmp.${process.pid}.${Date.now()}`;
 
   const content = JSON.stringify(index, null, 2);
   await fs.writeFile(tempPath, content, "utf-8");
@@ -176,7 +176,7 @@ export async function writeSummary(
   const summaryPath = resolveSummaryPath(entry.level, entry.id, agentId);
   const fullContent = `${formatSummaryMetadata(entry)}\n\n${content}`;
 
-  const tempPath = `${summaryPath}.tmp.${Date.now()}`;
+  const tempPath = `${summaryPath}.tmp.${process.pid}.${Date.now()}`;
   await fs.writeFile(tempPath, fullContent, "utf-8");
   await fs.rename(tempPath, summaryPath);
 }
