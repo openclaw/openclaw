@@ -76,9 +76,4 @@ export {
 } from "./context.js";
 
 // Timer
-export {
-  isTimerActive,
-  startHierarchicalMemoryTimer,
-  stopHierarchicalMemoryTimer,
-  type HierarchicalMemoryTimerHandle,
-} from "./timer.js";
+export { startHierarchicalMemoryTimer, type HierarchicalMemoryTimerHandle } from "./timer.js";

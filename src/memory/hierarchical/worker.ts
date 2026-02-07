@@ -245,27 +245,37 @@ async function findEligibleChunks(params: {
   }
 
   try {
-    const context = sessionManager.buildSessionContext();
-    const messages = context.messages;
+    const entries = sessionManager.getEntries();
 
-    if (messages.length === 0) {
+    if (entries.length === 0) {
       return [];
     }
 
-    // Estimate total tokens
-    const totalTokens = estimateMessagesTokens(messages);
+    // Walk entries from the end to find the cutoff index: everything before
+    // this index is "old enough" to summarize (at least pruningBoundaryTokens
+    // behind the conversation head). This uses the same entry stream we iterate
+    // so the boundary is correctly aligned.
+    let tailTokens = 0;
+    let cutoffIndex = entries.length;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (entry.type !== "message") {
+        continue;
+      }
+      const msg = entry.message as { role: string; content?: unknown };
+      tailTokens += estimateMessagesTokens([msg]);
+      if (tailTokens >= memoryConfig.pruningBoundaryTokens) {
+        cutoffIndex = i;
+        break;
+      }
+    }
 
-    // Only consider messages that are past the pruning boundary
-    // (i.e., old enough that they've been through context pruning)
-    const pruningBoundary = totalTokens - memoryConfig.pruningBoundaryTokens;
-    if (pruningBoundary <= 0) {
+    if (cutoffIndex === 0) {
       return []; // Not enough history yet
     }
 
-    // Find messages to consider (after lastSummarizedEntryId, before pruning boundary)
-    const entries = sessionManager.getEntries();
+    // Find start position (after lastSummarizedEntryId)
     let startIndex = 0;
-
     if (lastSummarizedEntryId) {
       const lastIdx = entries.findIndex((e) => e.id === lastSummarizedEntryId);
       if (lastIdx >= 0) {
@@ -273,7 +283,7 @@ async function findEligibleChunks(params: {
       }
     }
 
-    // Build chunks
+    // Build chunks from eligible entries (startIndex..cutoffIndex)
     const chunks: ChunkToSummarize[] = [];
     let currentChunk: ChunkToSummarize = {
       messages: [],
@@ -282,8 +292,7 @@ async function findEligibleChunks(params: {
       tokenEstimate: 0,
     };
 
-    let runningTokens = 0;
-    for (let i = startIndex; i < entries.length; i++) {
+    for (let i = startIndex; i < cutoffIndex; i++) {
       const entry = entries[i];
 
       // Skip non-message entries
@@ -293,12 +302,6 @@ async function findEligibleChunks(params: {
 
       const msg = entry.message as { role: string; content?: unknown };
       const msgTokens = estimateMessagesTokens([msg]);
-
-      // Check if we're past the pruning boundary
-      runningTokens += msgTokens;
-      if (runningTokens > pruningBoundary) {
-        break; // Stop - remaining messages are too recent
-      }
 
       currentChunk.messages.push(msg);
       currentChunk.entryIds.push(entry.id);
@@ -353,10 +356,10 @@ async function maybeMergeLevel(params: {
   // Load summary contents
   const summaryContents = await loadSummaryContents(unmerged, agentId);
 
-  // Load older context (higher levels)
+  // Load older context (unmerged higher-level summaries only)
   const olderContext: string[] = [];
   if (nextLevel === "L2") {
-    olderContext.push(...(await loadSummaryContents(index.levels.L3, agentId)));
+    olderContext.push(...(await loadSummaryContents(getUnmergedSummaries(index, "L3"), agentId)));
   }
   if (nextLevel === "L3") {
     // L3 has no older context

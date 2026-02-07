@@ -1,5 +1,8 @@
 /**
  * Timer for running the hierarchical memory worker periodically.
+ *
+ * All state is instance-scoped in the returned handle, so multiple
+ * timers (e.g., different agentIds or tests) don't collide.
  */
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,10 +25,6 @@ type WorkerRunInfo = {
   durationMs?: number;
 };
 
-let timerHandle: ReturnType<typeof setInterval> | null = null;
-let lastResult: WorkerRunInfo | null = null;
-let isRunning = false;
-
 /**
  * Start the hierarchical memory worker timer.
  * Returns a handle to stop the timer.
@@ -45,17 +44,16 @@ export function startHierarchicalMemoryTimer(params: {
     return null;
   }
 
-  // Stop any existing timer
-  if (timerHandle) {
-    clearInterval(timerHandle);
-    timerHandle = null;
-  }
-
   const log = params.log ?? {
     info: console.log,
     warn: console.warn,
     error: console.error,
   };
+
+  // Instance-scoped state
+  let handle: ReturnType<typeof setInterval> | null = null;
+  let lastResult: WorkerRunInfo | null = null;
+  let isRunning = false;
 
   const runWorker = async () => {
     if (isRunning) {
@@ -110,7 +108,7 @@ export function startHierarchicalMemoryTimer(params: {
   void runWorker();
 
   // Then run on interval
-  timerHandle = setInterval(() => {
+  handle = setInterval(() => {
     void runWorker();
   }, memoryConfig.workerIntervalMs);
 
@@ -118,30 +116,15 @@ export function startHierarchicalMemoryTimer(params: {
     `hierarchical memory timer started (interval: ${Math.round(memoryConfig.workerIntervalMs / 1000)}s)`,
   );
 
-  return {
+  const timerHandle: HierarchicalMemoryTimerHandle = {
     stop: () => {
-      if (timerHandle) {
-        clearInterval(timerHandle);
-        timerHandle = null;
+      if (handle) {
+        clearInterval(handle);
+        handle = null;
       }
     },
     getLastResult: () => lastResult,
   };
-}
 
-/**
- * Stop the hierarchical memory timer if running.
- */
-export function stopHierarchicalMemoryTimer(): void {
-  if (timerHandle) {
-    clearInterval(timerHandle);
-    timerHandle = null;
-  }
-}
-
-/**
- * Check if the timer is currently active.
- */
-export function isTimerActive(): boolean {
-  return timerHandle !== null;
+  return timerHandle;
 }
