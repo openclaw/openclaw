@@ -151,7 +151,7 @@ export function createWebSendApi(params: {
         throw new Error("Group admin methods not available");
       }
       const jid = toWhatsappJid(groupJid);
-      // participants already normalized by outbound.ts layer
+      // Pass participants through as-is; normalization is handled by the outbound.ts caller
       const result = await params.sock.groupParticipantsUpdate(jid, participants, action);
       return result as { status: string; jid: string }[];
     },
