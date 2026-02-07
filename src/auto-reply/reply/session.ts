@@ -240,6 +240,15 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // When a reset trigger (/new, /reset) starts a new session, carry over
+    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
+    // so the user doesn't have to re-enable them every time.
+    if (resetTriggered && entry) {
+      persistedThinking = entry.thinkingLevel;
+      persistedVerbose = entry.verboseLevel;
+      persistedReasoning = entry.reasoningLevel;
+      persistedTtsAuto = entry.ttsAuto;
+    }
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
