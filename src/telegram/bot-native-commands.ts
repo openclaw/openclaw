@@ -309,7 +309,7 @@ export const registerTelegramNativeCommands = ({
   const reservedCommands = new Set(
     listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
   );
-  for (const command of skillCommands) {
+  for (const command of uniqueSkillCommands) {
     reservedCommands.add(command.name.toLowerCase());
   }
   const customResolution = resolveTelegramCustomCommands({
