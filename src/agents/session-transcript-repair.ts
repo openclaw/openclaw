@@ -214,28 +214,16 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
 
-    // Error/terminated assistants may contain partial toolCall blocks from interrupted
-    // streaming. These tools were never executed, so strip them to prevent orphaned
-    // tool_use → tool_result pairing issues (Anthropic API rejects mismatched pairs).
-    if (assistant.stopReason === "error") {
-      const content = assistant.content;
-      if (Array.isArray(content)) {
-        const stripped = content.filter((block) => {
-          if (!block || typeof block !== "object") return true;
-          const rec = block as { type?: unknown };
-          return rec.type !== "toolCall" && rec.type !== "toolUse" && rec.type !== "functionCall";
-        });
-        if (stripped.length === 0) {
-          // Nothing left — drop the entire message
-          changed = true;
-          continue;
-        }
-        if (stripped.length !== content.length) {
-          changed = true;
-          out.push({ ...assistant, content: stripped } as typeof assistant);
-          continue;
-        }
-      }
+    // Skip tool call extraction for aborted or errored assistant messages.
+    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
+    // (e.g., partialJson: true) and should not have synthetic tool_results created.
+    // Creating synthetic results for incomplete tool calls causes API 400 errors:
+    // "unexpected tool_use_id found in tool_result blocks"
+    // See: https://github.com/openclaw/openclaw/issues/4597
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      out.push(msg);
+      continue;
     }
 
     const toolCalls = extractToolCallsFromAssistant(assistant);

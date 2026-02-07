@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -19,6 +20,7 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -62,6 +64,7 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  sandboxRoot?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -242,17 +245,42 @@ function resolveSlackAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+/**
+ * Auto-inject Telegram forum topic thread ID when the message tool targets
+ * the same chat the session originated from.  Mirrors the Slack auto-threading
+ * pattern so media, buttons, and other tool-sent messages land in the correct
+ * topic instead of the General Topic.
+ *
+ * Unlike Slack, we do not gate on `replyToMode` here: Telegram forum topics
+ * are persistent sub-channels (not ephemeral reply threads), so auto-injection
+ * should always apply when the target chat matches.
+ */
+function resolveTelegramAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  // Use parseTelegramTarget to extract canonical chatId from both sides,
+  // mirroring how Slack uses parseSlackTarget. This handles format variations
+  // like `telegram:group:123:topic:456` vs `telegram:123`.
+  const parsedTo = parseTelegramTarget(params.to);
+  const parsedChannel = parseTelegramTarget(context.currentChannelId);
+  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  const fallback = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (params.channel !== "bluebubbles") {
-    return typeof fallback === "number" ? fallback * 1024 * 1024 : undefined;
-  }
   const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
-  const channelCfg = params.cfg.channels?.bluebubbles;
+  const channelCfg = params.cfg.channels?.[params.channel];
   const channelObj =
     channelCfg && typeof channelCfg === "object"
       ? (channelCfg as Record<string, unknown>)
@@ -268,6 +296,7 @@ function resolveAttachmentMaxBytes(params: {
     accountCfg && typeof accountCfg === "object"
       ? (accountCfg as Record<string, unknown>).mediaMaxMb
       : undefined;
+  // Priority: account-specific > channel-level > global default
   const limitMb =
     (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ??
     channelMediaMax ??
@@ -324,6 +353,53 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
+}
+
+async function normalizeSandboxMediaParams(params: {
+  args: Record<string, unknown>;
+  sandboxRoot?: string;
+}): Promise<void> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  for (const key of mediaKeys) {
+    const raw = readStringParam(params.args, key, { trim: false });
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    if (!sandboxRoot) {
+      continue;
+    }
+    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+    if (normalized !== raw) {
+      params.args[key] = normalized;
+    }
+  }
+}
+
+async function normalizeSandboxMediaList(params: {
+  values: string[];
+  sandboxRoot?: string;
+}): Promise<string[]> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of params.values) {
+    const raw = value?.trim();
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    const resolved = sandboxRoot
+      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      : raw;
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+  return normalized;
 }
 
 async function hydrateSetGroupIconParams(params: {
@@ -679,6 +755,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       required: !mediaHint && !hasCard,
       allowEmpty: true,
     }) ?? "";
+  if (message.includes("\\n")) {
+    message = message.replaceAll("\\n", "\n");
+  }
 
   const parsed = parseReplyDirectives(message);
   const mergedMediaUrls: string[] = [];
@@ -699,6 +778,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     pushMedia(url);
   }
   pushMedia(parsed.mediaUrl);
+
+  const normalizedMediaUrls = await normalizeSandboxMediaList({
+    values: mergedMediaUrls,
+    sandboxRoot: input.sandboxRoot,
+  });
+  mergedMediaUrls.length = 0;
+  mergedMediaUrls.push(...normalizedMediaUrls);
+
   message = parsed.text;
   params.message = message;
   if (!params.replyTo && parsed.replyToId) {
@@ -732,6 +819,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     channel === "slack" && !replyToId && !threadId
       ? resolveSlackAutoThreadId({ to, toolContext: input.toolContext })
       : undefined;
+  // Telegram forum topic auto-threading: inject threadId so media/buttons land in the correct topic.
+  const telegramAutoThreadId =
+    channel === "telegram" && !threadId
+      ? resolveTelegramAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const resolvedThreadId = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
+  // Write auto-resolved threadId back into params so downstream dispatch
+  // (plugin `readStringParam(params, "threadId")`) picks it up.
+  if (resolvedThreadId && !params.threadId) {
+    params.threadId = resolvedThreadId;
+  }
   const outboundRoute =
     agentId && !dryRun
       ? await resolveOutboundSessionRoute({
@@ -742,7 +840,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           target: to,
           resolvedTarget,
           replyToId,
-          threadId: threadId ?? slackAutoThreadId,
+          threadId: resolvedThreadId,
         })
       : null;
   if (outboundRoute && agentId && !dryRun) {
@@ -966,6 +1064,11 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  await normalizeSandboxMediaParams({
+    args: params,
+    sandboxRoot: input.sandboxRoot,
+  });
 
   await hydrateSendAttachmentParams({
     cfg,

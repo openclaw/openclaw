@@ -64,7 +64,6 @@ apps/ios/*.mobileprovision
 
 # Local untracked files
 .local/
-.vscode/
 IDENTITY.md
 USER.md
 .tgz
@@ -84,3 +83,7 @@ USER.md
 HEARTBEAT.md
 TOOLS.md
 .clawdhub/
+
+# Agent credentials and memory (NEVER COMMIT)
+.agent/*.json
+!.agent/workflows/

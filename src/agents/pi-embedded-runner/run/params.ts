@@ -20,6 +20,7 @@ export type ClientToolDefinition = {
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
@@ -39,6 +40,8 @@ export type RunEmbeddedPiAgentParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /** Whether the sender is an owner (required for owner-only tools). */
+  senderIsOwner?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */

@@ -62,6 +62,39 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
+  it("emits agent events on message_end even without <final> tags", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_start", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    const payloads = onAgentEvent.mock.calls
+      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
+      .filter((value): value is Record<string, unknown> => Boolean(value));
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Hello world");
+    expect(payloads[0]?.delta).toBe("Hello world");
+  });
   it("does not require <final> when enforcement is off", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
