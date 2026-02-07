@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/abacusai-auth",
+  "version": "2026.2.4",
+  "description": "OpenClaw AbacusAI provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
