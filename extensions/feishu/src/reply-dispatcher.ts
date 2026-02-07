@@ -7,10 +7,16 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk";
 import type { MentionTarget } from "./mention.js";
-import { resolveFeishuAccount } from "./accounts.js";
-import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
-import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import * as feishuAccounts from "./accounts.js";
+import * as feishuRuntime from "./runtime.js";
+import * as feishuSend from "./send.js";
+import * as feishuTyping from "./typing.js";
+
+const { resolveFeishuAccount } = feishuAccounts;
+const { getFeishuRuntime } = feishuRuntime;
+const { sendMessageFeishu, sendMarkdownCardFeishu } = feishuSend;
+const { addTypingIndicator, removeTypingIndicator } = feishuTyping;
+type TypingIndicatorState = import("./typing.js").TypingIndicatorState;
 
 /**
  * Detect if text contains markdown elements that benefit from card rendering.

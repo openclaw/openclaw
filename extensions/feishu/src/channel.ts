@@ -1,23 +1,33 @@
 import type { ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
-import {
+import * as feishuAccounts from "./accounts.js";
+import * as feishuDirectory from "./directory.js";
+
+const {
   resolveFeishuAccount,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
-} from "./accounts.js";
-import {
+} = feishuAccounts;
+const {
   listFeishuDirectoryPeers,
   listFeishuDirectoryGroups,
   listFeishuDirectoryPeersLive,
   listFeishuDirectoryGroupsLive,
-} from "./directory.js";
-import { feishuOnboardingAdapter } from "./onboarding.js";
-import { feishuOutbound } from "./outbound.js";
-import { resolveFeishuGroupToolPolicy } from "./policy.js";
-import { probeFeishu } from "./probe.js";
-import { sendMessageFeishu } from "./send.js";
-import { normalizeFeishuTarget, looksLikeFeishuId } from "./targets.js";
+} = feishuDirectory;
+import * as feishuOnboarding from "./onboarding.js";
+import * as feishuOutboundMod from "./outbound.js";
+import * as feishuPolicy from "./policy.js";
+import * as feishuProbe from "./probe.js";
+import * as feishuSend from "./send.js";
+import * as feishuTargets from "./targets.js";
+
+const { feishuOnboardingAdapter } = feishuOnboarding;
+const { feishuOutbound } = feishuOutboundMod;
+const { resolveFeishuGroupToolPolicy } = feishuPolicy;
+const { probeFeishu } = feishuProbe;
+const { sendMessageFeishu } = feishuSend;
+const { normalizeFeishuTarget, looksLikeFeishuId } = feishuTargets;
 
 const meta = {
   id: "feishu",

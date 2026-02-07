@@ -7,8 +7,11 @@ import type {
 } from "openclaw/plugin-sdk";
 import { addWildcardAllowFrom, DEFAULT_ACCOUNT_ID, formatDocsLink } from "openclaw/plugin-sdk";
 import type { FeishuConfig } from "./types.js";
-import { resolveFeishuCredentials } from "./accounts.js";
-import { probeFeishu } from "./probe.js";
+import * as feishuAccounts from "./accounts.js";
+import * as feishuProbe from "./probe.js";
+
+const { resolveFeishuCredentials } = feishuAccounts;
+const { probeFeishu } = feishuProbe;
 
 const channel = "feishu" as const;
 

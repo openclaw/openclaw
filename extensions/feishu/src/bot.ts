@@ -7,17 +7,24 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
-import { resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { downloadMessageResourceFeishu } from "./media.js";
-import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
-import {
+import * as feishuAccounts from "./accounts.js";
+import * as feishuClient from "./client.js";
+import * as feishuMedia from "./media.js";
+import * as feishuMention from "./mention.js";
+import * as feishuPolicy from "./policy.js";
+import * as feishuReply from "./reply-dispatcher.js";
+
+const { resolveFeishuAccount } = feishuAccounts;
+const { createFeishuClient } = feishuClient;
+const { downloadMessageResourceFeishu } = feishuMedia;
+const { extractMentionTargets, extractMessageBody, isMentionForwardRequest } = feishuMention;
+const {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
-} from "./policy.js";
-import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+} = feishuPolicy;
+const { createFeishuReplyDispatcher } = feishuReply;
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 
