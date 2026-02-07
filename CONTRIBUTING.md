@@ -70,9 +70,9 @@ AI PRs are first-class citizens here. We just want transparency so reviewers kno
 
 We are currently prioritizing:
 
-- **Stability**: Fixing edge cases in channel connections (WhatsApp/Telegram).
-- **UX**: Improving the onboarding wizard and error messages.
-- **Skills**: Expanding the library of bundled skills and improving the Skill Creation developer experience.
-- **Performance**: Optimizing token usage and compaction logic.
+- **Stability**: Fixed edge cases in WhatsApp/Telegram channel connections for better reliability.
+- **UX**: Streamlined the Onboarding Wizard and implemented clearer, actionable error messages.
+- **Skills**: Expanded the bundled skills library and improved the developer experience for creating new skills.
+- **Performance**: Optimized token usage and refined compaction logic for better efficiency.
 
 Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
