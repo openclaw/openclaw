@@ -122,6 +122,32 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("falls back to off when resolvedThink is not passed even if sessionEntry has thinkingLevel (#10867)", () => {
+    // This confirms the bug: buildStatusMessage ignores sessionEntry.thinkingLevel
+    // and only uses args.resolvedThink. The caller must pass it explicitly.
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/test" },
+      sessionEntry: { sessionId: "t1", updatedAt: 0, thinkingLevel: "medium" },
+      sessionKey: "main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    // Without resolvedThink, it falls back to "off" — this is the bug
+    expect(text).toContain("Think: off");
+    expect(text).not.toContain("Think: medium");
+  });
+
+  it("displays correct thinking level when resolvedThink is passed (#10867 fix)", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/test" },
+      sessionEntry: { sessionId: "t2", updatedAt: 0, thinkingLevel: "medium" },
+      sessionKey: "main",
+      resolvedThink: "medium",
+      queue: { mode: "collect", depth: 0 },
+    });
+    expect(text).toContain("Think: medium");
+    expect(text).not.toContain("Think: off");
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },
