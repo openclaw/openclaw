@@ -487,17 +487,18 @@ describe("session-memory hook", () => {
 
       await handler(event);
 
-      // Verify fetch was called
-      expect(fetchCalls.length).toBe(1);
-      expect(fetchCalls[0].url).toBe("http://localhost:18789/tools/invoke");
+      // Filter to only Gateway API calls (slug generation may also call fetch)
+      const gatewayCalls = fetchCalls.filter((c) => c.url.includes("/tools/invoke"));
+      expect(gatewayCalls.length).toBe(1);
+      expect(gatewayCalls[0].url).toBe("http://localhost:18789/tools/invoke");
 
       // Verify headers
-      const headers = fetchCalls[0].options.headers as Record<string, string>;
+      const headers = gatewayCalls[0].options.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer test-token-123");
       expect(headers["Content-Type"]).toBe("application/json");
 
       // Verify body
-      const body = JSON.parse(fetchCalls[0].options.body as string);
+      const body = JSON.parse(gatewayCalls[0].options.body as string);
       expect(body.tool).toBe("memory_store");
       expect(body.args.category).toBe("fact");
       expect(body.args.importance).toBe(0.7);
@@ -544,8 +545,9 @@ describe("session-memory hook", () => {
 
       await handler(event);
 
-      // Verify content was truncated
-      const body = JSON.parse(fetchCalls[0].options.body as string);
+      // Verify content was truncated (filter to Gateway API calls only)
+      const gatewayCalls = fetchCalls.filter((c) => c.url.includes("/tools/invoke"));
+      const body = JSON.parse(gatewayCalls[0].options.body as string);
       expect(body.args.text).toContain("[...truncated to 2000 chars]");
       // Full content would be > 2000, but text should be <= 2000 + metadata + truncation notice
       const contentLines = body.args.text.split("\n");
@@ -680,8 +682,9 @@ describe("session-memory hook", () => {
       const files = await fs.readdir(memoryDir);
       expect(files.length).toBe(1);
 
-      // Fetch should not have been called
-      expect(fetchCalls.length).toBe(0);
+      // Gateway API (LanceDB) should not have been called (slug generation may still use fetch)
+      const gatewayCalls = fetchCalls.filter((c) => c.url.includes("/tools/invoke"));
+      expect(gatewayCalls.length).toBe(0);
     });
   });
 });

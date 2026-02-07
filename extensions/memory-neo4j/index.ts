@@ -838,15 +838,18 @@ const memoryNeo4jPlugin = {
       });
     }
 
-    // Session end: clean up tracking entries for completed sessions.
-    // The sessionId from session_end may match sessionKey in some implementations;
-    // this provides best-effort cleanup alongside the TTL-based sweep above.
+    // Session end: clear bootstrap flag so core memories are re-injected on the next turn.
+    // Fired by /new and /reset commands. Uses sessionKey (which is how bootstrappedSessions
+    // is keyed), with sessionId as fallback for implementations that only provide sessionId.
     api.on("session_end", async (_event, ctx) => {
-      const key = ctx.sessionId;
+      const key = ctx.sessionKey ?? ctx.sessionId;
       if (key) {
         bootstrappedSessions.delete(key);
         midSessionRefreshAt.delete(key);
         sessionLastSeen.delete(key);
+        api.logger.info?.(
+          `memory-neo4j: cleared bootstrap/refresh flags for session=${key} (session_end)`,
+        );
       }
     });
 
