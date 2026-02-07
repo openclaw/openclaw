@@ -11,6 +11,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -27,6 +28,7 @@ import {
   applyAliyunBailianConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
@@ -243,6 +245,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "qianfan-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "qianfan",
+      cfg: baseConfig,
+      flagValue: opts.qianfanApiKey,
+      flagName: "--qianfan-api-key",
+      envVar: "QIANFAN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      setQianfanApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "qianfan:default",
+      provider: "qianfan",
+      mode: "api_key",
+    });
+    return applyQianfanConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {

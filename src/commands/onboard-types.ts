@@ -37,6 +37,7 @@ export type AuthChoice =
   | "qwen-portal"
   | "aliyun-bailian-api-key"
   | "xai-api-key"
+  | "qianfan-api-key"
   | "skip";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -83,6 +84,7 @@ export type OnboardOptions = {
   aliyunBailianApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  qianfanApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

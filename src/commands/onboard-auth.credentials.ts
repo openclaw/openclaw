@@ -218,6 +218,18 @@ export async function setAliyunBailianApiKey(key: string, agentDir?: string) {
   });
 }
 
+export function setQianfanApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "qianfan:default",
+    credential: {
+      type: "api_key",
+      provider: "qianfan",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 // 保留官方新增的 XAI 函数
 export function setXaiApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({

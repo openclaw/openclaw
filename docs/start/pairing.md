@@ -60,7 +60,7 @@ openclaw devices approve <requestId>
 openclaw devices reject <requestId>
 ```
 
-### Where the state lives
+### Node pairing state storage
 
 Stored under `~/.openclaw/devices/`:
 

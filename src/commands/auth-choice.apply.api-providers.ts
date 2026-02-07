@@ -17,6 +17,8 @@ import {
   applyAliyunBailianProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyQianfanConfig,
+  applyQianfanProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -37,6 +39,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -46,6 +49,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
+  setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
@@ -110,6 +114,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "aliyun-bailian") {
       authChoice = "aliyun-bailian-api-key";
+    } else if (params.opts.tokenProvider === "qianfan") {
+      authChoice = "qianfan-api-key";
     }
   }
 
@@ -851,6 +857,62 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyAliyunBailianConfig,
         applyProviderConfig: applyAliyunBailianProviderConfig,
         noteDefault: ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "qianfan-api-key") {
+    let hasCredential = false;
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "qianfan") {
+      setQianfanApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Get your API key at: https://console.bce.baidu.com/qianfan/ais/console/apiKey",
+          "API key format: bce-v3/ALTAK-...",
+        ].join("\n"),
+        "QIANFAN",
+      );
+    }
+    const envKey = resolveEnvApiKey("qianfan");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing QIANFAN_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        setQianfanApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter QIANFAN API key",
+        validate: validateApiKeyInput,
+      });
+      setQianfanApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "qianfan:default",
+      provider: "qianfan",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: QIANFAN_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyQianfanConfig,
+        applyProviderConfig: applyQianfanProviderConfig,
+        noteDefault: QIANFAN_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

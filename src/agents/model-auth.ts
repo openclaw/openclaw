@@ -287,6 +287,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
+    voyage: "VOYAGE_API_KEY",
     groq: "GROQ_API_KEY",
     deepgram: "DEEPGRAM_API_KEY",
     cerebras: "CEREBRAS_API_KEY",
@@ -302,6 +303,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
     "aliyun-bailian": "ALIYUN_BAILIAN_API_KEY",
+    qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
   };
   const envVar = envMap[normalized];
