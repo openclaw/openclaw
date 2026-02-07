@@ -132,12 +132,58 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
 }
 
 /**
+ * Maximum raw content characters for a message to be considered summarisable.
+ *
+ * Messages larger than this are always treated as oversized, regardless of
+ * token estimation.  This catches cases where {@link estimateTokens}
+ * underestimates very large payloads — e.g. 396 KB JSON tool results whose
+ * character-to-token ratio differs from the heuristic average.
+ */
+export const MAX_SUMMARISABLE_CONTENT_CHARS = 100_000;
+
+function measureMessageContentChars(msg: AgentMessage): number {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.length;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let total = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type === "text" && typeof rec.text === "string") {
+      total += rec.text.length;
+    }
+  }
+  return total;
+}
+
+/**
  * Check if a single message is too large to summarize.
  * If single message > 50% of context, it can't be summarized safely.
+ *
+ * A character-based fallback guard was added (#3479) so that messages with
+ * unusually dense content (e.g. minified JSON blobs) are still caught even
+ * when the token estimator underestimates their true size.
  */
 export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
+  // Token-based check with safety margin (original behaviour).
   const tokens = estimateTokens(msg) * SAFETY_MARGIN;
-  return tokens > contextWindow * 0.5;
+  if (tokens > contextWindow * 0.5) {
+    return true;
+  }
+
+  // Character-based fallback — catches pathological payloads where the token
+  // estimate is unreliable (e.g. base64 data, minified JSON, binary-ish text).
+  if (measureMessageContentChars(msg) > MAX_SUMMARISABLE_CONTENT_CHARS) {
+    return true;
+  }
+
+  return false;
 }
 
 async function summarizeChunks(params: {
