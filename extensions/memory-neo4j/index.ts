@@ -937,10 +937,10 @@ const memoryNeo4jPlugin = {
 
         const agentId = ctx.agentId || "default";
 
-        // ~1500 chars is a safe ceiling for most embedding models (~500 tokens).
-        // Models with larger context (8k+) can handle more, but recall queries
-        // don't benefit from very long inputs — the embedding quality plateaus.
-        const MAX_QUERY_CHARS = 1500;
+        // ~1000 chars keeps us safely within even small embedding contexts
+        // (mxbai-embed-large = 512 tokens). Longer recall queries don't improve
+        // embedding quality — it plateaus well before this limit.
+        const MAX_QUERY_CHARS = 1000;
         const query =
           event.prompt.length > MAX_QUERY_CHARS
             ? event.prompt.slice(0, MAX_QUERY_CHARS)
