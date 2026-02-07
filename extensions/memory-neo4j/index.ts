@@ -1151,14 +1151,19 @@ const memoryNeo4jPlugin = {
 
           for (const text of retainedAssistant) {
             try {
+              const importance = await rateImportance(text, extractionConfig);
+
+              // Only store assistant messages that are genuinely important
+              if (importance < 0.7) {
+                continue;
+              }
+
               const vector = await embeddings.embed(text);
 
               const existing = await db.findSimilar(vector, 0.95, 1);
               if (existing.length > 0) {
                 continue;
               }
-
-              const importance = await rateImportance(text, extractionConfig);
 
               await db.storeMemory({
                 id: randomUUID(),
@@ -1239,12 +1244,17 @@ const NOISE_PATTERNS = [
   /^(ok[,.]?\s+)?(i('ll|'m|'d|'ve)?\s+)?(just\s+)?(need|want|got|have|let|let's|let me|give me|send|do|did|try|check|see|look at|test|take|get|go|use)\s+(it|that|this|those|these|them|some|one|the|a|an|me|him|her|us)\s*(out|up|now|then|too|again|later|first|here|there|please)?\s*[.!?]*$/i,
   // Short acknowledgments with trailing context: "ok, ..." / "yes, ..." when total is brief
   /^(ok|okay|yes|yeah|yep|sure|no|nope|right|alright|fine|cool|nice|great|perfect)[,.]?\s+.{0,20}$/i,
+  // Conversational filler / noise phrases (standalone, with optional punctuation)
+  /^(hmm+|huh|haha|ha|lol|lmao|rofl|nah|meh|idk|brb|ttyl|omg|wow|whoa|welp|oops|ooh|aah|ugh|bleh|pfft|smh|ikr|tbh|imo|fwiw|np|nvm|nm|wut|wat|wha|heh|tsk|sigh|yay|woo+|boo|dang|darn|geez|gosh|sheesh|oof)\s*[.!?]*$/i,
   // Single-word or near-empty
   /^\S{0,3}$/,
   // Pure emoji
   /^[\p{Emoji}\s]+$/u,
   // System/XML markup
   /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
+
+  // --- Session reset prompts (from /new and /reset commands) ---
+  /^A new session was started via/i,
 
   // --- System infrastructure messages (never user-generated) ---
   // Heartbeat prompts
@@ -1265,7 +1275,7 @@ const NOISE_PATTERNS = [
 const MAX_CAPTURE_CHARS = 2000;
 
 /** Minimum message length — too short to be meaningful. */
-const MIN_CAPTURE_CHARS = 10;
+const MIN_CAPTURE_CHARS = 30;
 
 /** Minimum word count — short contextual phrases lack standalone meaning. */
 const MIN_WORD_COUNT = 5;

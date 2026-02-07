@@ -1008,8 +1008,11 @@ export function stripMessageWrappers(text: string): string {
   s = s.replace(/^(?:System:\s*\[[^\]]*\][^\n]*\n?)+/gi, "");
   // Telegram wrapper — may now be at start after previous strips
   s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
-  // "[message_id: NNN]" suffix
+  // "[message_id: NNN]" suffix (Telegram)
   s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
+  // Slack wrapper — "[Slack <workspace> #channel @user] MESSAGE [slack message id: ...]"
+  s = s.replace(/^\s*\[Slack\s[^\]]+\]\s*/i, "");
+  s = s.replace(/\n?\[slack message id:\s*[^\]]*\]\s*$/i, "");
   return s.trim();
 }
 
