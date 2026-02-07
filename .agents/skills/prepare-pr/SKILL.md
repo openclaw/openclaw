@@ -30,7 +30,7 @@ Prepare a PR branch for merge with review fixes, green gates, and an updated hea
 
 ## Known Footguns
 
-- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/openclaw`.
+- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/openclaw` if available; otherwise ask user.
 - Do not run `git clean -fdx`.
 - Do not run `git add -A` or `git add .`.
 

@@ -97,7 +97,7 @@ Client                    Gateway
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
 
-Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
+Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 [Security](/gateway/security).
 
 ## Protocol typing and codegen

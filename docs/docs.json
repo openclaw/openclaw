@@ -39,18 +39,6 @@
   },
   "redirects": [
     {
-      "source": "/cron",
-      "destination": "/cron-jobs"
-    },
-    {
-      "source": "/model",
-      "destination": "/models"
-    },
-    {
-      "source": "/model/",
-      "destination": "/models"
-    },
-    {
       "source": "/messages",
       "destination": "/concepts/messages"
     },
@@ -61,6 +49,10 @@
     {
       "source": "/compaction",
       "destination": "/concepts/compaction"
+    },
+    {
+      "source": "/cron",
+      "destination": "/cron-jobs"
     },
     {
       "source": "/minimax",
@@ -356,11 +348,11 @@
     },
     {
       "source": "/group-messages",
-      "destination": "/concepts/group-messages"
+      "destination": "/channels/group-messages"
     },
     {
       "source": "/groups",
-      "destination": "/concepts/groups"
+      "destination": "/channels/groups"
     },
     {
       "source": "/health",
@@ -487,6 +479,14 @@
       "destination": "/concepts/model-failover"
     },
     {
+      "source": "/model",
+      "destination": "/models"
+    },
+    {
+      "source": "/model/",
+      "destination": "/models"
+    },
+    {
       "source": "/models",
       "destination": "/concepts/models"
     },
@@ -508,7 +508,7 @@
     },
     {
       "source": "/pairing",
-      "destination": "/start/pairing"
+      "destination": "/channels/pairing"
     },
     {
       "source": "/plans/cron-add-hardening",
@@ -532,11 +532,11 @@
     },
     {
       "source": "/provider-routing",
-      "destination": "/concepts/channel-routing"
+      "destination": "/channels/channel-routing"
     },
     {
       "source": "/concepts/provider-routing",
-      "destination": "/concepts/channel-routing"
+      "destination": "/channels/channel-routing"
     },
     {
       "source": "/queue",
@@ -667,8 +667,8 @@
       "destination": "/help/troubleshooting"
     },
     {
-      "source": "/web/tui",
-      "destination": "/tui"
+      "source": "/tui",
+      "destination": "/web/tui"
     },
     {
       "source": "/typebox",
@@ -723,8 +723,12 @@
       "destination": "/concepts/oauth"
     },
     {
+      "source": "/plugin",
+      "destination": "/tools/plugin"
+    },
+    {
       "source": "/plugins",
-      "destination": "/plugin"
+      "destination": "/tools/plugin"
     },
     {
       "source": "/railway",
@@ -784,8 +788,16 @@
             "tab": "Get started",
             "groups": [
               {
+                "group": "Home",
+                "pages": ["index"]
+              },
+              {
                 "group": "Overview",
-                "pages": ["index", "concepts/features", "start/showcase"]
+                "pages": ["start/showcase"]
+              },
+              {
+                "group": "Core concepts",
+                "pages": ["concepts/features"]
               },
               {
                 "group": "First steps",
@@ -861,11 +873,11 @@
               {
                 "group": "Configuration",
                 "pages": [
-                  "start/pairing",
-                  "concepts/group-messages",
-                  "concepts/groups",
-                  "broadcast-groups",
-                  "concepts/channel-routing",
+                  "channels/pairing",
+                  "channels/group-messages",
+                  "channels/groups",
+                  "channels/broadcast-groups",
+                  "channels/channel-routing",
                   "channels/location",
                   "channels/troubleshooting"
                 ]
@@ -884,9 +896,12 @@
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/agent-workspace",
-                  "start/bootstrapping",
                   "concepts/oauth"
                 ]
+              },
+              {
+                "group": "Bootstrapping",
+                "pages": ["start/bootstrapping"]
               },
               {
                 "group": "Sessions and memory",
@@ -945,25 +960,26 @@
               },
               {
                 "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "multi-agent-sandbox-tools"]
+                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
               },
               {
-                "group": "Skills and extensions",
+                "group": "Skills",
                 "pages": [
                   "tools/slash-commands",
                   "tools/skills",
                   "tools/skills-config",
                   "tools/clawhub",
-                  "plugin",
-                  "plugins/voice-call",
-                  "plugins/zalouser"
+                  "tools/plugin"
                 ]
+              },
+              {
+                "group": "Extensions",
+                "pages": ["plugins/voice-call", "plugins/zalouser"]
               },
               {
                 "group": "Automation",
                 "pages": [
-                  "hooks",
-                  "hooks/soul-evil",
+                  "automation/hooks",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/troubleshooting",
@@ -972,6 +988,10 @@
                   "automation/poll",
                   "automation/auth-monitoring"
                 ]
+              },
+              {
+                "group": "Hooks",
+                "pages": ["hooks/soul-evil"]
               },
               {
                 "group": "Media and devices",
@@ -993,7 +1013,11 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["providers/index", "providers/models", "concepts/models"]
+                "pages": ["providers/index", "providers/models"]
+              },
+              {
+                "group": "Model concepts",
+                "pages": ["concepts/models"]
               },
               {
                 "group": "Configuration",
@@ -1005,7 +1029,7 @@
                   "providers/anthropic",
                   "providers/openai",
                   "providers/openrouter",
-                  "bedrock",
+                  "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
                   "providers/minimax",
@@ -1120,7 +1144,7 @@
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
+                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
               }
             ]
           },
@@ -1188,14 +1212,16 @@
               },
               {
                 "group": "Technical reference",
+                "pages": ["reference/wizard", "reference/token-use"]
+              },
+              {
+                "group": "Concept internals",
                 "pages": [
-                  "reference/wizard",
                   "concepts/typebox",
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone",
-                  "token-use"
+                  "concepts/timezone"
                 ]
               },
               {
@@ -1221,18 +1247,23 @@
               },
               {
                 "group": "Environment and debugging",
-                "pages": [
-                  "install/node",
-                  "environment",
-                  "debugging",
-                  "testing",
-                  "scripts",
-                  "reference/session-management-compaction"
-                ]
+                "pages": ["help/environment", "help/debugging", "help/testing", "help/scripts"]
               },
               {
-                "group": "Developer workflows",
-                "pages": ["start/setup", "help/submitting-a-pr", "help/submitting-an-issue"]
+                "group": "Node runtime",
+                "pages": ["install/node"]
+              },
+              {
+                "group": "Compaction internals",
+                "pages": ["reference/session-management-compaction"]
+              },
+              {
+                "group": "Developer setup",
+                "pages": ["start/setup"]
+              },
+              {
+                "group": "Contributing",
+                "pages": ["help/submitting-a-pr", "help/submitting-an-issue"]
               },
               {
                 "group": "Docs meta",
@@ -1249,8 +1280,16 @@
             "tab": "快速开始",
             "groups": [
               {
+                "group": "首页",
+                "pages": ["zh-CN/index"]
+              },
+              {
                 "group": "概览",
-                "pages": ["zh-CN/index", "zh-CN/concepts/features", "zh-CN/start/showcase"]
+                "pages": ["zh-CN/start/showcase"]
+              },
+              {
+                "group": "核心概念",
+                "pages": ["zh-CN/concepts/features"]
               },
               {
                 "group": "第一步",
@@ -1276,7 +1315,6 @@
               {
                 "group": "安装方式",
                 "pages": [
-                  "zh-CN/install/node",
                   "zh-CN/install/docker",
                   "zh-CN/install/nix",
                   "zh-CN/install/ansible",
@@ -1340,11 +1378,11 @@
               {
                 "group": "配置",
                 "pages": [
-                  "zh-CN/start/pairing",
-                  "zh-CN/concepts/group-messages",
-                  "zh-CN/concepts/groups",
-                  "zh-CN/broadcast-groups",
-                  "zh-CN/concepts/channel-routing",
+                  "zh-CN/channels/pairing",
+                  "zh-CN/channels/group-messages",
+                  "zh-CN/channels/groups",
+                  "zh-CN/channels/broadcast-groups",
+                  "zh-CN/channels/channel-routing",
                   "zh-CN/channels/location",
                   "zh-CN/channels/troubleshooting"
                 ]
@@ -1365,6 +1403,10 @@
                   "zh-CN/concepts/agent-workspace",
                   "zh-CN/concepts/oauth"
                 ]
+              },
+              {
+                "group": "引导",
+                "pages": ["zh-CN/start/bootstrapping"]
               },
               {
                 "group": "会话与记忆",
@@ -1426,28 +1468,30 @@
                 "pages": [
                   "zh-CN/tools/agent-send",
                   "zh-CN/tools/subagents",
-                  "zh-CN/multi-agent-sandbox-tools"
+                  "zh-CN/tools/multi-agent-sandbox-tools"
                 ]
               },
               {
-                "group": "技能与扩展",
+                "group": "技能",
                 "pages": [
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
                   "zh-CN/tools/skills-config",
                   "zh-CN/tools/clawhub",
-                  "zh-CN/plugin",
-                  "zh-CN/plugins/voice-call",
-                  "zh-CN/plugins/zalouser"
+                  "zh-CN/tools/plugin"
                 ]
+              },
+              {
+                "group": "扩展",
+                "pages": ["zh-CN/plugins/voice-call", "zh-CN/plugins/zalouser"]
               },
               {
                 "group": "自动化",
                 "pages": [
-                  "zh-CN/hooks",
-                  "zh-CN/hooks/soul-evil",
+                  "zh-CN/automation/hooks",
                   "zh-CN/automation/cron-jobs",
                   "zh-CN/automation/cron-vs-heartbeat",
+                  "zh-CN/automation/troubleshooting",
                   "zh-CN/automation/webhook",
                   "zh-CN/automation/gmail-pubsub",
                   "zh-CN/automation/poll",
@@ -1455,9 +1499,14 @@
                 ]
               },
               {
+                "group": "Hooks",
+                "pages": ["zh-CN/hooks/soul-evil"]
+              },
+              {
                 "group": "媒体与设备",
                 "pages": [
                   "zh-CN/nodes/index",
+                  "zh-CN/nodes/troubleshooting",
                   "zh-CN/nodes/images",
                   "zh-CN/nodes/audio",
                   "zh-CN/nodes/camera",
@@ -1473,11 +1522,11 @@
             "groups": [
               {
                 "group": "概览",
-                "pages": [
-                  "zh-CN/providers/index",
-                  "zh-CN/providers/models",
-                  "zh-CN/concepts/models"
-                ]
+                "pages": ["zh-CN/providers/index", "zh-CN/providers/models"]
+              },
+              {
+                "group": "模型概念",
+                "pages": ["zh-CN/concepts/models"]
               },
               {
                 "group": "配置",
@@ -1489,14 +1538,15 @@
                   "zh-CN/providers/anthropic",
                   "zh-CN/providers/openai",
                   "zh-CN/providers/openrouter",
-                  "zh-CN/bedrock",
+                  "zh-CN/providers/bedrock",
                   "zh-CN/providers/vercel-ai-gateway",
                   "zh-CN/providers/moonshot",
                   "zh-CN/providers/minimax",
                   "zh-CN/providers/opencode",
                   "zh-CN/providers/glm",
                   "zh-CN/providers/zai",
-                  "zh-CN/providers/synthetic"
+                  "zh-CN/providers/synthetic",
+                  "zh-CN/providers/qianfan"
                 ]
               }
             ]
@@ -1612,7 +1662,7 @@
                   "zh-CN/web/control-ui",
                   "zh-CN/web/dashboard",
                   "zh-CN/web/webchat",
-                  "zh-CN/tui"
+                  "zh-CN/web/tui"
                 ]
               }
             ]
@@ -1681,13 +1731,16 @@
               },
               {
                 "group": "技术参考",
+                "pages": ["zh-CN/reference/wizard", "zh-CN/reference/token-use"]
+              },
+              {
+                "group": "概念内部机制",
                 "pages": [
                   "zh-CN/concepts/typebox",
                   "zh-CN/concepts/markdown-formatting",
                   "zh-CN/concepts/typing-indicators",
                   "zh-CN/concepts/usage-tracking",
-                  "zh-CN/concepts/timezone",
-                  "zh-CN/token-use"
+                  "zh-CN/concepts/timezone"
                 ]
               },
               {
@@ -1714,16 +1767,27 @@
               {
                 "group": "环境与调试",
                 "pages": [
-                  "zh-CN/environment",
-                  "zh-CN/debugging",
-                  "zh-CN/testing",
-                  "zh-CN/scripts",
-                  "zh-CN/reference/session-management-compaction"
+                  "zh-CN/help/environment",
+                  "zh-CN/help/debugging",
+                  "zh-CN/help/testing",
+                  "zh-CN/help/scripts"
                 ]
               },
               {
-                "group": "开发者工作流",
+                "group": "Node 运行时",
+                "pages": ["zh-CN/install/node"]
+              },
+              {
+                "group": "压缩机制内部参考",
+                "pages": ["zh-CN/reference/session-management-compaction"]
+              },
+              {
+                "group": "开发者设置",
                 "pages": ["zh-CN/start/setup"]
+              },
+              {
+                "group": "贡献",
+                "pages": ["zh-CN/help/submitting-a-pr", "zh-CN/help/submitting-an-issue"]
               },
               {
                 "group": "文档元信息",
