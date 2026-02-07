@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/compound-postgres",
+  "version": "2026.2.7",
+  "description": "Compound engineering loop with PostgreSQL audit logging",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.6"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

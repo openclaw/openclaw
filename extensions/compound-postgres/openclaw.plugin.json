@@ -1,0 +1,8 @@
+{
+  "id": "compound-postgres",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
