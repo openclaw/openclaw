@@ -39,7 +39,7 @@ for entry in $REPOS; do
 # Auto-sync to MAIBOT memory + Obsidian dashboards on commit
 MAIBOT_DIR=\"${MAIBOT_ROOT_WIN}\"
 if command -v node >/dev/null 2>&1 && [ -f \"\$MAIBOT_DIR/scripts/sync-subrepo-to-memory.ts\" ]; then
-  node --import tsx \"\$MAIBOT_DIR/scripts/sync-subrepo-to-memory.ts\" ${KEY} &
+  (cd \"\$MAIBOT_DIR\" && node --import tsx scripts/sync-subrepo-to-memory.ts ${KEY}) &
 fi
 ${MARKER_END}"
 
