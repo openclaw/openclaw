@@ -1,10 +1,29 @@
 {
   "name": "openclaw",
   "version": "2026.2.13",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "description": "Personal AI assistant you run on your own devices — WhatsApp, Telegram, Slack, Discord, iMessage, and more",
+  "keywords": [
+    "ai",
+    "assistant",
+    "chatbot",
+    "whatsapp",
+    "telegram",
+    "slack",
+    "discord",
+    "imessage",
+    "self-hosted",
+    "personal-assistant"
+  ],
   "license": "MIT",
-  "author": "",
+  "author": "Peter Steinberger",
+  "homepage": "https://openclaw.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
   "bin": {
     "openclaw": "openclaw.mjs"
   },
@@ -213,5 +232,39 @@
       "protobufjs",
       "sharp"
     ]
+<<<<<<< HEAD
+=======
+  },
+  "vitest": {
+    "coverage": {
+      "provider": "v8",
+      "reporter": [
+        "text",
+        "lcov"
+      ],
+      "thresholds": {
+        "lines": 70,
+        "functions": 70,
+        "branches": 70,
+        "statements": 70
+      },
+      "include": [
+        "src/**/*.ts"
+      ],
+      "exclude": [
+        "src/**/*.test.ts"
+      ]
+    },
+    "include": [
+      "src/**/*.test.ts"
+    ],
+    "exclude": [
+      "dist/**",
+      "apps/macos/**",
+      "apps/macos/.build/**",
+      "**/vendor/**",
+      "dist/OpenClaw.app/**"
+    ]
+>>>>>>> b52552d8b (Update package.json metadata and fix docs grammar)
   }
 }
