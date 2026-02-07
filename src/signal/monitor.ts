@@ -1,10 +1,10 @@
+import type { SignalEnhancementDeps } from "./monitor/signal-enhancements.js";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
-import { logVerbose } from "../globals.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
@@ -200,7 +200,7 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-// 獲取 Sticker 圖片（通過 packId + stickerId）
+// Signal enhancements: fetch sticker via getSticker RPC
 async function fetchSticker(params: {
   baseUrl: string;
   account?: string;
@@ -215,7 +215,6 @@ async function fetchSticker(params: {
   if (params.account) {
     rpcParams.account = params.account;
   }
-
   try {
     const result = await signalRpcRequest<{ data?: string; contentType?: string }>(
       "getSticker",
@@ -223,17 +222,13 @@ async function fetchSticker(params: {
       { baseUrl: params.baseUrl },
     );
     if (!result?.data) {
-      logVerbose(
-        `getSticker returned no data for packId=${params.packId} stickerId=${params.stickerId}`,
-      );
       return null;
     }
     const buffer = Buffer.from(result.data, "base64");
     const contentType = result.contentType ?? "image/webp";
     const saved = await saveMediaBuffer(buffer, contentType, "inbound", params.maxBytes);
     return { path: saved.path, contentType: saved.contentType };
-  } catch (err) {
-    logVerbose(`getSticker RPC failed: ${String(err)}`);
+  } catch {
     return null;
   }
 }
@@ -313,7 +308,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   );
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = accountInfo.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-  const requireMention = accountInfo.config.requireMention ?? false;
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -362,6 +356,20 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       });
     }
 
+    // Signal enhancements: build enhancement deps
+    const requireMention = accountInfo.config.requireMention ?? false;
+    const enhancementDeps: SignalEnhancementDeps = {
+      cfg,
+      baseUrl,
+      account,
+      accountId: accountInfo.accountId,
+      mediaMaxBytes,
+      ignoreAttachments,
+      fetchAttachment,
+      requireMention,
+      fetchSticker,
+    };
+
     const handleEvent = createSignalEventHandler({
       runtime,
       cfg,
@@ -376,7 +384,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       allowFrom,
       groupAllowFrom,
       groupPolicy,
-      requireMention,
       reactionMode,
       reactionAllowlist,
       mediaMaxBytes,
@@ -384,12 +391,12 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       readReceiptsViaDaemon,
       fetchAttachment,
-      fetchSticker,
       deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,
       buildSignalReactionSystemEventText,
+      enhancementDeps,
     });
 
     await runSignalSseLoop({

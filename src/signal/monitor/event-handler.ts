@@ -1,11 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type {
-  SignalEventHandlerDeps,
-  SignalQuote,
-  SignalReceivePayload,
-  SignalSticker,
-} from "./event-handler.types.js";
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -37,7 +30,6 @@ import { resolveChannelGroupRequireMention } from "../../config/group-policy.js"
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { saveToAgentCache } from "../../media/agent-cache.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -45,7 +37,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { normalizeE164, resolveConfigDir } from "../../utils.js";
+import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -57,183 +49,23 @@ import {
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { renderSignalMentions } from "./mentions.js";
+import {
+  buildEnhancedMessage,
+  checkRequireMention,
+  loadSignalMediaCache,
+  preCacheGroupMedia,
+  stripMentionPlaceholders,
+  type SignalEnhancementDeps,
+} from "./signal-enhancements.js";
 
-// === 持久化 mediaCache ===
-type MediaCacheEntry = { path: string; contentType?: string; savedAt: number };
-type MediaCacheData = Record<string, MediaCacheEntry>;
-
-const MEDIA_CACHE_FILE = path.join(resolveConfigDir(), "media", "signal-media-cache.json");
-const MEDIA_CACHE_MAX_SIZE = 50000; // 最多緩存 500 條
-const MEDIA_CACHE_MAX_AGE_MS = 3650 * 24 * 60 * 60 * 1000; // 3650 天過期
-
-let mediaCacheData: MediaCacheData = {};
-let mediaCacheLoaded = false;
-
-async function loadMediaCache(): Promise<void> {
-  if (mediaCacheLoaded) return;
-  try {
-    const content = await fs.readFile(MEDIA_CACHE_FILE, "utf-8");
-    mediaCacheData = JSON.parse(content) as MediaCacheData;
-    // 清理過期條目
-    const now = Date.now();
-    for (const [key, entry] of Object.entries(mediaCacheData)) {
-      if (now - entry.savedAt > MEDIA_CACHE_MAX_AGE_MS) {
-        delete mediaCacheData[key];
-      }
-    }
-    logVerbose(`signal media cache loaded: ${Object.keys(mediaCacheData).length} entries`);
-  } catch {
-    mediaCacheData = {};
-  }
-  mediaCacheLoaded = true;
-}
-
-async function saveMediaCache(): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(MEDIA_CACHE_FILE), { recursive: true });
-    await fs.writeFile(MEDIA_CACHE_FILE, JSON.stringify(mediaCacheData, null, 2));
-  } catch (err) {
-    logVerbose(`signal media cache save failed: ${String(err)}`);
-  }
-}
-
-function cacheMediaPersistent(
-  timestamp: number | undefined,
-  media: { path: string; contentType?: string },
+export function createSignalEventHandler(
+  deps: SignalEventHandlerDeps & { enhancementDeps?: SignalEnhancementDeps },
 ) {
-  if (!timestamp || !media.path) return;
-  const key = String(timestamp);
-
-  // 如果緩存太大，清理最舊的條目
-  const keys = Object.keys(mediaCacheData);
-  if (keys.length >= MEDIA_CACHE_MAX_SIZE) {
-    // 按 savedAt 排序，刪除最舊的 100 條
-    const sorted = keys.sort(
-      (a, b) => (mediaCacheData[a]?.savedAt ?? 0) - (mediaCacheData[b]?.savedAt ?? 0),
-    );
-    for (let i = 0; i < 100 && i < sorted.length; i++) {
-      const oldKey = sorted[i];
-      if (oldKey) delete mediaCacheData[oldKey];
-    }
-  }
-
-  mediaCacheData[key] = { path: media.path, contentType: media.contentType, savedAt: Date.now() };
-  logVerbose(`signal media cached (persistent): ts=${timestamp} path=${media.path}`);
-  // 異步保存，不阻塞
-  void saveMediaCache();
-}
-
-function getCachedMediaPersistent(
-  timestamp: number | undefined,
-): { path: string; contentType?: string } | null {
-  if (!timestamp) return null;
-  const entry = mediaCacheData[String(timestamp)];
-  if (entry) {
-    logVerbose(`signal media cache hit (persistent): ts=${timestamp} path=${entry.path}`);
-    return { path: entry.path, contentType: entry.contentType };
-  }
-  return null;
-}
-
-export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
-  // 啟動時載入持久化緩存
-  void loadMediaCache();
-
-  // 兼容舊的函數名
-  function cacheMedia(
-    timestamp: number | undefined,
-    media: { path: string; contentType?: string },
-  ) {
-    cacheMediaPersistent(timestamp, media);
-  }
-
-  function getCachedMedia(
-    timestamp: number | undefined,
-  ): { path: string; contentType?: string } | null {
-    return getCachedMediaPersistent(timestamp);
-  }
-
-  // 獲取引用消息的附件（圖片/Sticker）
-  async function fetchQuotedAttachment(params: {
-    quote: SignalQuote;
-    senderRecipient: string;
-    groupId?: string;
-  }): Promise<{ path: string; contentType?: string } | null> {
-    const { quote, senderRecipient, groupId } = params;
-    const firstAttachment = quote.attachments?.[0];
-    if (!firstAttachment?.id) {
-      return null;
-    }
-    try {
-      return await deps.fetchAttachment({
-        baseUrl: deps.baseUrl,
-        account: deps.account,
-        attachment: {
-          id: firstAttachment.id,
-          contentType: firstAttachment.contentType,
-          filename: firstAttachment.filename,
-          size: firstAttachment.size,
-        },
-        sender: quote.author ?? quote.authorNumber ?? senderRecipient,
-        groupId,
-        maxBytes: deps.mediaMaxBytes,
-      });
-    } catch (err) {
-      logVerbose(`quoted attachment fetch failed: ${String(err)}`);
-      return null;
-    }
-  }
-
-  // 獲取 Sticker 圖片
-  async function fetchSticker(params: {
-    sticker: SignalSticker;
-    senderRecipient: string;
-    groupId?: string;
-  }): Promise<{ path: string; contentType?: string } | null> {
-    const { sticker, senderRecipient, groupId } = params;
-    // 記錄 sticker 數據結構以便調試
-    logVerbose(`sticker data: ${JSON.stringify(sticker)}`);
-    if (!sticker.attachment?.id) {
-      logVerbose(
-        `sticker has no attachment.id, packId=${sticker.packId}, stickerId=${sticker.stickerId}`,
-      );
-      // 嘗試用 getSticker API（需要 signal-cli 支持）
-      if (sticker.packId && typeof sticker.stickerId === "number") {
-        try {
-          return (
-            (await deps.fetchSticker?.({
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              packId: sticker.packId,
-              stickerId: sticker.stickerId,
-              maxBytes: deps.mediaMaxBytes,
-            })) ?? null
-          );
-        } catch (err) {
-          logVerbose(`sticker fetch via packId failed: ${String(err)}`);
-        }
-      }
-      return null;
-    }
-    try {
-      return await deps.fetchAttachment({
-        baseUrl: deps.baseUrl,
-        account: deps.account,
-        attachment: {
-          id: sticker.attachment.id,
-          contentType: sticker.attachment.contentType ?? sticker.contentType,
-          size: sticker.attachment.size,
-        },
-        sender: senderRecipient,
-        groupId,
-        maxBytes: deps.mediaMaxBytes,
-      });
-    } catch (err) {
-      logVerbose(`sticker fetch failed: ${String(err)}`);
-      return null;
-    }
+  // Signal enhancements: load persistent media cache on startup
+  if (deps.enhancementDeps) {
+    void loadSignalMediaCache();
   }
 
   type SignalInboundEntry = {
@@ -685,115 +517,27 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    // === 先緩存群組附件（在 requireMention 檢查之前）===
-    // 這樣即使消息因為沒有 @mention 被 block，附件也會被保存
-    const hasAttachmentOrSticker = Boolean(dataMessage.attachments?.length || dataMessage.sticker);
-    if (isGroup && hasAttachmentOrSticker && !deps.ignoreAttachments) {
-      // 先獲取 agentId 用於緩存
-      const routeForCache = resolveAgentRoute({
-        cfg: deps.cfg,
-        channel: "signal",
-        accountId: deps.accountId,
-        peer: { kind: "group", id: groupId ?? "unknown" },
+    // Signal enhancements: pre-cache group media + requireMention gate
+    const eDeps = deps.enhancementDeps;
+    if (eDeps && isGroup) {
+      await preCacheGroupMedia({
+        dataMessage,
+        senderRecipient,
+        senderAllowId,
+        groupId,
+        deps: eDeps,
       });
-
-      // 緩存普通附件
-      const firstAtt = dataMessage.attachments?.[0];
-      if (firstAtt?.id) {
-        try {
-          const fetched = await deps.fetchAttachment({
-            baseUrl: deps.baseUrl,
-            account: deps.account,
-            attachment: firstAtt,
-            sender: senderRecipient,
-            groupId,
-            maxBytes: deps.mediaMaxBytes,
-          });
-          if (fetched) {
-            // 保存到 agent cache（獨立存儲，不受 TTL 影響）
-            const buffer = await fs.readFile(fetched.path);
-            await saveToAgentCache({
-              agentId: routeForCache.agentId,
-              buffer,
-              contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
-              channel: "signal",
-              groupId,
-              senderId: senderAllowId,
-              timestamp: dataMessage.timestamp,
-              originalFilename: firstAtt.filename ?? undefined,
-            });
-            // 同時更新 media cache，讓引用消息可以找到
-            cacheMedia(dataMessage.timestamp, {
-              path: fetched.path,
-              contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
-            });
-            logVerbose(`signal: pre-cached attachment for group ${groupId} from ${senderDisplay}`);
-          }
-        } catch (err) {
-          logVerbose(`signal: pre-cache attachment failed: ${String(err)}`);
-        }
-      }
-
-      // 緩存 Sticker
-      const stk = dataMessage.sticker;
-      if (stk) {
-        try {
-          const stickerFetched = await fetchSticker({ sticker: stk, senderRecipient, groupId });
-          if (stickerFetched) {
-            const buffer = await fs.readFile(stickerFetched.path);
-            await saveToAgentCache({
-              agentId: routeForCache.agentId,
-              buffer,
-              contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
-              channel: "signal",
-              groupId,
-              senderId: senderAllowId,
-              timestamp: dataMessage.timestamp,
-            });
-            // 同時更新 media cache，讓引用消息可以找到
-            cacheMedia(dataMessage.timestamp, {
-              path: stickerFetched.path,
-              contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
-            });
-            logVerbose(`signal: pre-cached sticker for group ${groupId} from ${senderDisplay}`);
-          }
-        } catch (err) {
-          logVerbose(`signal: pre-cache sticker failed: ${String(err)}`);
-        }
-      }
     }
-
-    // Check requireMention for group messages
-    if (isGroup && deps.requireMention) {
-      const mentions = dataMessage.mentions ?? [];
-      const botAccount = deps.account?.replace(/^\+/, "") ?? "";
-      const botAccountId = deps.accountId ?? "";
-      logVerbose(
-        `[requireMention] mentions=${JSON.stringify(mentions)}, botAccount=${botAccount}, botAccountId=${botAccountId}`,
-      );
-      const isMentioned = mentions.some((m) => {
-        // Check by phone number
-        const mentionNumber = m.number?.replace(/^\+/, "") ?? "";
-        if (mentionNumber && mentionNumber === botAccount) return true;
-        // Check by UUID (signal-cli may use uuid instead of number)
-        const mentionUuid = m.uuid ?? "";
-        if (mentionUuid && mentionUuid === botAccountId) return true;
-        return false;
-      });
-      if (!isMentioned) {
-        logVerbose(`Blocked signal group message (requireMention, not mentioned)`);
-        return;
-      }
-      logVerbose(`[requireMention] mention detected, proceeding`);
+    if (eDeps && checkRequireMention({ dataMessage, isGroup, deps: eDeps })) {
+      return;
     }
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
     const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
-    // Strip U+FFFC (Object Replacement Character) used by Signal for mention placeholders
-    // so commands like "@bot /new" are correctly detected as "/new"
-    const textForCommandDetection = messageText?.replace(/\uFFFC/g, "").trim() ?? "";
-    const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, deps.cfg);
+    // Strip U+FFFC mention placeholders so commands like "@bot /new" detect correctly
+    const textForCmd = eDeps ? stripMentionPlaceholders(messageText) : messageText;
+    const hasControlCommandInMessage = hasControlCommand(textForCmd, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
@@ -887,8 +631,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let placeholder = "";
-
-    // === 處理普通附件 ===
     const firstAttachment = dataMessage.attachments?.[0];
     if (firstAttachment?.id && !deps.ignoreAttachments) {
       try {
@@ -903,135 +645,41 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         if (fetched) {
           mediaPath = fetched.path;
           mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
-          // 緩存圖片，用於後續引用時查找
-          cacheMedia(dataMessage.timestamp, { path: mediaPath, contentType: mediaType });
         }
       } catch (err) {
         deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
       }
     }
 
-    // === 處理 Sticker ===
-    const sticker = dataMessage.sticker;
-    let stickerInfo = "";
-    if (sticker && !deps.ignoreAttachments) {
-      const stickerEmoji = sticker.emoji ? ` ${sticker.emoji}` : "";
-      stickerInfo = `[Sticker${stickerEmoji}] `;
-      // 如果沒有普通附件，嘗試獲取 Sticker 圖片
-      if (!mediaPath) {
-        const fetched = await fetchSticker({ sticker, senderRecipient, groupId });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? sticker.contentType ?? "image/webp";
-          // 緩存 Sticker，用於後續引用時查找
-          cacheMedia(dataMessage.timestamp, { path: mediaPath, contentType: mediaType });
-        }
-      }
-    }
-
-    // === 處理引用消息 ===
-    const quote = dataMessage.quote;
-    let quotePrefix = "";
-    let quotedMediaPath: string | undefined;
-    let quotedMediaType: string | undefined;
-
-    if (quote) {
-      const quoteParts: string[] = [];
-
-      // 格式化引用作者：優先用名字，然後電話號碼，最後 UUID
-      // 格式：名字 (UUID) 或 電話號碼 (UUID) 或 UUID
-      let quoteAuthor: string;
-      const authorId = quote.author ?? quote.authorNumber ?? "";
-
-      if (quote.authorName) {
-        // 有用戶名：顯示 "名字 (UUID)"
-        quoteAuthor = authorId ? `${quote.authorName} (${authorId})` : quote.authorName;
-      } else if (quote.authorNumber) {
-        // 有電話號碼：顯示 "電話號碼 (UUID)" 或只顯示電話號碼
-        if (quote.author) {
-          quoteAuthor = `${quote.authorNumber} (${quote.author})`;
-        } else {
-          quoteAuthor = quote.authorNumber;
-        }
-      } else if (quote.author) {
-        // 只有 UUID：直接顯示完整 UUID
-        quoteAuthor = quote.author;
-      } else {
-        quoteAuthor = "對方";
-      }
-
-      // 格式化引用時間（從 quote.id = timestamp，使用 Mac Mini 本地時區）
-      let quoteTime = "";
-      if (typeof quote.id === "number" && quote.id > 0) {
-        const date = new Date(quote.id);
-        quoteTime = ` ${date.toLocaleDateString("zh-TW")} ${date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}`;
-      }
-
-      // 引用的文字
-      if (quote.text?.trim()) {
-        quoteParts.push(quote.text.trim());
-      }
-
-      // 引用的附件（圖片或 Sticker）
-      if (quote.attachments?.length && !deps.ignoreAttachments) {
-        const firstQuotedAtt = quote.attachments[0];
-        const contentType = firstQuotedAtt?.contentType ?? "";
-        const isSticker =
-          contentType === "image/webp" || firstQuotedAtt?.filename?.endsWith(".webp");
-
-        if (isSticker) {
-          quoteParts.push("<quoted-sticker>");
-        } else {
-          const attType = contentType.split("/")[0] || "file";
-          quoteParts.push(`<quoted-${attType}>`);
-        }
-
-        // 如果沒有普通附件，嘗試獲取被引用的圖片
-        if (!mediaPath && !quotedMediaPath) {
-          // 方法 1：先嘗試從緩存中查找（用 quote.id = 原消息 timestamp）
-          const quoteTimestamp = typeof quote.id === "number" ? quote.id : undefined;
-          const cached = getCachedMedia(quoteTimestamp);
-          if (cached) {
-            quotedMediaPath = cached.path;
-            quotedMediaType = cached.contentType ?? contentType ?? undefined;
-          } else {
-            // 方法 2：嘗試通過 Signal CLI 獲取
-            const fetched = await fetchQuotedAttachment({ quote, senderRecipient, groupId });
-            if (fetched) {
-              quotedMediaPath = fetched.path;
-              quotedMediaType = fetched.contentType ?? contentType ?? undefined;
-            }
-          }
-        }
-      }
-
-      if (quoteParts.length > 0) {
-        quotePrefix = `[引用 ${quoteAuthor}${quoteTime}: ${quoteParts.join(" ")}]\n`;
-      }
-    }
-
-    // === 構建 placeholder ===
-    const kind = mediaKindFromMime(mediaType ?? quotedMediaType ?? undefined);
+    const kind = mediaKindFromMime(mediaType ?? undefined);
     if (kind) {
       placeholder = `<media:${kind}>`;
-    } else if (dataMessage.attachments?.length || sticker) {
+    } else if (dataMessage.attachments?.length) {
       placeholder = "<media:attachment>";
     }
 
-    // 如果有引用的圖片但沒有普通附件，使用引用的圖片
-    if (!mediaPath && quotedMediaPath) {
-      mediaPath = quotedMediaPath;
-      mediaType = quotedMediaType;
+    // Signal enhancements: sticker, quote, U+FFFC stripping, enhanced bodyText
+    let bodyText: string;
+    if (eDeps) {
+      const enhanced = await buildEnhancedMessage({
+        dataMessage,
+        messageText,
+        mediaPath,
+        mediaType,
+        placeholder,
+        senderRecipient,
+        groupId,
+        deps: eDeps,
+      });
+      bodyText = enhanced.bodyText;
+      if (enhanced.mediaPath) {
+        mediaPath = enhanced.mediaPath;
+        mediaType = enhanced.mediaType;
+      }
+      placeholder = enhanced.placeholder;
+    } else {
+      bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
     }
-
-    // === 合併所有內容 ===
-    // Strip U+FFFC (Object Replacement Character) used by Signal for mention placeholders
-    // This ensures commands like "@bot /new" are passed to agent as "/new"
-    const cleanedMessageText = messageText?.replace(/\uFFFC/g, "").trim() || "";
-    // 保留原始的 fallback 邏輯：如果沒有 messageText 和 placeholder，使用 quote.text
-    const fallbackQuoteText = !quotePrefix && quote?.text?.trim() ? quote.text.trim() : "";
-    const bodyText =
-      quotePrefix + stickerInfo + (cleanedMessageText || placeholder || fallbackQuoteText);
     if (!bodyText) {
       return;
     }
