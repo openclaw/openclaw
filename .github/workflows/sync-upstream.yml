@@ -1,0 +1,117 @@
+name: Sync with Upstream OpenClaw
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch upstream
+
+      - name: Check for upstream changes
+        id: check
+        run: |
+          UPSTREAM_COMMITS=$(git rev-list HEAD..upstream/main --count)
+          echo "upstream_commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          if [ "$UPSTREAM_COMMITS" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit -m "chore: Sync with upstream OpenClaw"
+        continue-on-error: true
+
+      - name: Check for merge conflicts
+        if: steps.check.outputs.has_changes == 'true'
+        id: conflicts
+        run: |
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push changes (if no conflicts)
+        if: steps.check.outputs.has_changes == 'true' && steps.conflicts.outputs.has_conflicts != 'true'
+        run: |
+          git push origin main
+
+      - name: Create issue for merge conflicts
+        if: steps.conflicts.outputs.has_conflicts == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Upstream sync failed - merge conflicts detected';
+            const body = `The automatic sync with upstream OpenClaw failed due to merge conflicts.
+
+            Please manually resolve the conflicts:
+
+            \`\`\`bash
+            git fetch upstream
+            git checkout main
+            git merge upstream/main
+            # Resolve conflicts, then:
+            git add .
+            git commit
+            git push origin main
+            \`\`\`
+
+            **Important:** Make sure to preserve the REALLYopenClaw jailbreak changes in \`src/infra/gateway-lock.ts\`.
+            `;
+
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-sync'
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['upstream-sync', 'help wanted']
+              });
+            }
+
+      - name: Summary
+        run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.has_changes }}" == "true" ]; then
+            echo "- Upstream commits to sync: ${{ steps.check.outputs.upstream_commits }}" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.conflicts.outputs.has_conflicts }}" == "true" ]; then
+              echo "- Status: Merge conflicts detected - manual intervention required" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- Status: Successfully synced with upstream" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- Status: Already up to date with upstream" >> $GITHUB_STEP_SUMMARY
+          fi
