@@ -178,9 +178,9 @@ export type DiscordAccountConfig = {
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Default: online. */
-  status?: "online" | "dnd" | "idle" | "invisible" | "offline";
+  status?: "online" | "dnd" | "idle" | "invisible";
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 5=Competing). Default: 3 (Watching). */
-  activityType?: number;
+  activityType?: 0 | 1 | 2 | 3 | 5;
   /** Streaming URL (Twitch/YouTube). Required if activityType=1. */
   activityUrl?: string;
 };
