@@ -86,6 +86,7 @@ import {
 } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
+import { createAutoCompactionRetryHook } from "./auto-compaction-retry-hook.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
@@ -398,6 +399,35 @@ export async function runEmbeddedAttempt(
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     const systemPromptText = systemPromptOverride();
 
+    // Slim retry prompt for Pi-internal auto-compaction retry. Key difference: no injected workspace files.
+    const retrySystemPromptText = buildEmbeddedSystemPrompt({
+      workspaceDir: effectiveWorkspace,
+      defaultThinkLevel: params.thinkLevel,
+      reasoningLevel: params.reasoningLevel ?? "off",
+      extraSystemPrompt: params.extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      reasoningTagHint,
+      heartbeatPrompt: isDefaultAgent
+        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+        : undefined,
+      skillsPrompt,
+      docsPath: docsPath ?? undefined,
+      ttsHint,
+      workspaceNotes,
+      reactionGuidance,
+      promptMode: "minimal",
+      runtimeInfo,
+      messageToolHints,
+      sandboxInfo,
+      tools,
+      modelAliasLines: buildModelAliasLines(params.config),
+      userTimezone,
+      userTime,
+      userTimeFormat,
+      contextFiles: [],
+      memoryCitationsMode: params.config?.memory?.citations,
+    });
+
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
     });
@@ -490,6 +520,22 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+
+      // Prevent compaction cascades: if Pi compacts due to overflow and retries internally,
+      // downgrade the system prompt (drop injected workspace files) when needed to fit.
+      const autoCompactionRetryHook = createAutoCompactionRetryHook({
+        retrySystemPrompt: retrySystemPromptText,
+        onDowngradeSystemPrompt: () =>
+          applySystemPromptOverrideToSession(activeSession, retrySystemPromptText),
+        logger: log,
+        logPrefix: `runId=${params.runId} sessionId=${params.sessionId}`,
+      });
+      (
+        activeSession as {
+          setAutoCompactionRetryHook?: (hook: typeof autoCompactionRetryHook) => void;
+        }
+      ).setAutoCompactionRetryHook?.(autoCompactionRetryHook);
+
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
