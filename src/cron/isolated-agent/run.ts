@@ -16,9 +16,11 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   getModelRefStatus,
   isCliProvider,
+  normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -160,6 +162,22 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
+
+  // Isolated cron sessions are subagents — prefer subagents.model when set.
+  // Precedence: per-agent subagents.model > global subagents.model.  #11461
+  const subagentModelRaw =
+    normalizeModelSelection(agentConfigOverride?.subagents?.model) ??
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  if (subagentModelRaw) {
+    const resolved = resolveModelRefFromString({
+      raw: subagentModelRaw,
+      defaultProvider: resolvedDefault.provider,
+    });
+    if (resolved) {
+      provider = resolved.ref.provider;
+      model = resolved.ref.model;
+    }
+  }
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
