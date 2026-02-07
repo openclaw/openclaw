@@ -200,6 +200,78 @@ describe("hooks", () => {
     });
   });
 
+  describe("agent:reply event", () => {
+    it("should trigger handlers registered for agent:reply", async () => {
+      const handler = vi.fn();
+      registerInternalHook("agent:reply", handler);
+
+      const event = createInternalHookEvent("agent", "reply", "agent:main:main", {
+        replyText: "I'll check on that in 30 minutes.",
+        sessionId: "sess-123",
+        channel: "telegram",
+        to: "956602239",
+        model: "claude-sonnet-4-20250514",
+        provider: "anthropic",
+        toolMetas: [{ toolName: "web_search", meta: "query: test" }],
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(handler.mock.calls[0][0].context.replyText).toBe("I'll check on that in 30 minutes.");
+      expect(handler.mock.calls[0][0].context.toolMetas).toHaveLength(1);
+    });
+
+    it("should trigger both agent and agent:reply handlers", async () => {
+      const agentHandler = vi.fn();
+      const replyHandler = vi.fn();
+
+      registerInternalHook("agent", agentHandler);
+      registerInternalHook("agent:reply", replyHandler);
+
+      const event = createInternalHookEvent("agent", "reply", "agent:main:main", {
+        replyText: "Done.",
+        toolMetas: [],
+      });
+      await triggerInternalHook(event);
+
+      expect(agentHandler).toHaveBeenCalledWith(event);
+      expect(replyHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("should not trigger agent:bootstrap handlers for agent:reply events", async () => {
+      const bootstrapHandler = vi.fn();
+      const replyHandler = vi.fn();
+
+      registerInternalHook("agent:bootstrap", bootstrapHandler);
+      registerInternalHook("agent:reply", replyHandler);
+
+      const event = createInternalHookEvent("agent", "reply", "agent:main:main", {
+        replyText: "Hello",
+        toolMetas: [],
+      });
+      await triggerInternalHook(event);
+
+      expect(bootstrapHandler).not.toHaveBeenCalled();
+      expect(replyHandler).toHaveBeenCalled();
+    });
+
+    it("should allow hooks to push messages", async () => {
+      const handler = vi.fn((event: InternalHookEvent) => {
+        event.messages.push("[promise-verifier] auto-scheduled follow-up");
+      });
+      registerInternalHook("agent:reply", handler);
+
+      const event = createInternalHookEvent("agent", "reply", "agent:main:main", {
+        replyText: "I'll retry in 30 minutes",
+        toolMetas: [],
+      });
+      await triggerInternalHook(event);
+
+      expect(event.messages).toHaveLength(1);
+      expect(event.messages[0]).toContain("promise-verifier");
+    });
+  });
+
   describe("clearInternalHooks", () => {
     it("should remove all registered handlers", () => {
       registerInternalHook("command:new", vi.fn());

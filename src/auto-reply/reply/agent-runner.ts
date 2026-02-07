@@ -18,6 +18,7 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { emitAgentReplyHook } from "../../hooks/emit-agent-reply.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -512,6 +513,22 @@ export async function runReplyAgent(params: {
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+
+    // Emit agent:reply hook for post-turn processing (e.g., promise verification).
+    await emitAgentReplyHook({
+      cfg,
+      replyText: finalPayloads
+        .filter((p) => typeof p.text === "string")
+        .map((p) => p.text)
+        .join("\n"),
+      sessionKey: sessionKey ?? "",
+      sessionId: followupRun.run.sessionId,
+      channel: replyToChannel,
+      to: sessionCtx.OriginatingTo,
+      model: modelUsed,
+      provider: providerUsed,
+      toolMetas: runResult.toolMetas ?? [],
+    });
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,

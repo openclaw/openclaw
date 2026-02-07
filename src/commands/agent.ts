@@ -44,6 +44,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { emitAgentReplyHook } from "../hooks/emit-agent-reply.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -511,6 +512,22 @@ export async function agentCommand(
         result,
       });
     }
+
+    // Emit agent:reply hook for post-turn processing (e.g., promise verification).
+    await emitAgentReplyHook({
+      cfg,
+      replyText: (result.payloads ?? [])
+        .filter((p) => typeof p.text === "string")
+        .map((p) => p.text)
+        .join("\n"),
+      sessionKey: sessionKey ?? "",
+      sessionId,
+      channel: opts.channel,
+      to: opts.to,
+      model: result.meta.agentMeta?.model ?? fallbackModel ?? model,
+      provider: result.meta.agentMeta?.provider ?? fallbackProvider ?? provider,
+      toolMetas: result.toolMetas ?? [],
+    });
 
     const payloads = result.payloads ?? [];
     return await deliverAgentCommandResult({

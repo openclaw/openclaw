@@ -50,6 +50,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTexts?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  /** Tools executed during this run (name + optional meta string). */
+  toolMetas?: Array<{ toolName: string; meta?: string }>;
 };
 
 export type EmbeddedPiCompactResult = {
