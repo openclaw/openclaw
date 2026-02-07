@@ -47,6 +47,7 @@ import {
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { getDmHistoryLimitFromSessionKey } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
@@ -489,11 +490,22 @@ export async function runEmbeddedPiAgent(
               // Strip the oversized image from the session file so it doesn't
               // cause an infinite retry loop on subsequent messages.
               if (imageSizeError.messageIndex !== undefined && params.sessionFile) {
-                await stripOversizedImageFromSession(
-                  params.sessionFile,
-                  imageSizeError.messageIndex,
-                  imageSizeError.contentIndex,
-                );
+                try {
+                  const historyLimit = getDmHistoryLimitFromSessionKey(
+                    params.sessionKey,
+                    params.config,
+                  );
+                  await stripOversizedImageFromSession(
+                    params.sessionFile,
+                    imageSizeError.messageIndex,
+                    imageSizeError.contentIndex,
+                    { historyTurnsLimit: historyLimit },
+                  );
+                } catch (stripErr) {
+                  log.warn(
+                    `Failed to strip oversized image from session: ${describeUnknownError(stripErr)}`,
+                  );
+                }
               }
               const maxMb = imageSizeError.maxMb;
               const maxMbLabel =
@@ -603,11 +615,22 @@ export async function runEmbeddedPiAgent(
             }
             // Strip the rejected image from the session to prevent infinite retry loops.
             if (imageDimensionError.messageIndex !== undefined && params.sessionFile) {
-              await stripOversizedImageFromSession(
-                params.sessionFile,
-                imageDimensionError.messageIndex,
-                imageDimensionError.contentIndex,
-              );
+              try {
+                const historyLimit = getDmHistoryLimitFromSessionKey(
+                  params.sessionKey,
+                  params.config,
+                );
+                await stripOversizedImageFromSession(
+                  params.sessionFile,
+                  imageDimensionError.messageIndex,
+                  imageDimensionError.contentIndex,
+                  { historyTurnsLimit: historyLimit },
+                );
+              } catch (stripErr) {
+                log.warn(
+                  `Failed to strip oversized image from session: ${describeUnknownError(stripErr)}`,
+                );
+              }
             }
           }
 
