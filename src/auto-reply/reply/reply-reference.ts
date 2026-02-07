@@ -32,20 +32,18 @@ export function createReplyReferencePlanner(options: {
     if (options.replyToMode === "off") {
       return undefined;
     }
-    if (existingId) {
-      hasReplied = true;
-      return existingId;
-    }
-    if (!startId) {
+    const id = existingId ?? startId;
+    if (!id) {
       return undefined;
     }
     if (options.replyToMode === "all") {
       hasReplied = true;
-      return startId;
+      return id;
     }
+    // "first": only the first reply gets a reference.
     if (!hasReplied) {
       hasReplied = true;
-      return startId;
+      return id;
     }
     return undefined;
   };
