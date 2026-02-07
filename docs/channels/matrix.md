@@ -202,6 +202,32 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 | Location        | ✅ Supported (geo URI; altitude ignored)                                              |
 | Native commands | ✅ Supported                                                                          |
 
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list matrix
+```
+
+Common failures:
+
+- Logged in but room messages ignored: room blocked by `groupPolicy` or room allowlist.
+- DMs ignored: sender pending approval when `channels.matrix.dm.policy="pairing"`.
+- Encrypted rooms fail: crypto support or encryption settings mismatch.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
+
 ## Configuration reference (Matrix)
 
 Full configuration: [Configuration](/gateway/configuration)

@@ -664,7 +664,7 @@
     },
     {
       "source": "/troubleshooting",
-      "destination": "/gateway/troubleshooting"
+      "destination": "/help/troubleshooting"
     },
     {
       "source": "/web/tui",
@@ -966,6 +966,7 @@
                   "hooks/soul-evil",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
                   "automation/poll",
@@ -976,6 +977,7 @@
                 "group": "Media and devices",
                 "pages": [
                   "nodes/index",
+                  "nodes/troubleshooting",
                   "nodes/images",
                   "nodes/audio",
                   "nodes/camera",

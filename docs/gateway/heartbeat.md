@@ -13,6 +13,8 @@ title: "Heartbeat"
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+
 ## Quick start (beginner)
 
 1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
