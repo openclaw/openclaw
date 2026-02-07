@@ -98,12 +98,12 @@ export type SignalEnhancementDeps = Pick<
 
 // ── Agent media cache (persistent, per-agent, LRU eviction) ─────────────────
 //
-// Files: ~/.openclaw/media/inbound/agents/{agentId}/{uuid}.{ext}
-// Index: ~/.openclaw/media/inbound/agents/{agentId}/cache-index.json
-// Config: ~/.openclaw/media/inbound/agents/cache-config.json
+// Files: ~/.openclaw/media/inbound/signal/{agentId}/{uuid}.{ext}
+// Index: ~/.openclaw/media/inbound/signal/{agentId}/cache-index.json
+// Config: ~/.openclaw/media/inbound/signal/cache-config.json
 //   { "defaults": { "maxSizeGB": 5 }, "agents": { "<id>": { "maxSizeGB": 2 } } }
 
-const AGENT_CACHE_BASE = path.join(resolveConfigDir(), "media", "inbound", "agents");
+const AGENT_CACHE_BASE = path.join(resolveConfigDir(), "media", "inbound", "signal");
 const CACHE_CONFIG_PATH = path.join(AGENT_CACHE_BASE, "cache-config.json");
 const CACHE_INDEX_FILE = "cache-index.json";
 const DEFAULT_MAX_SIZE_GB = 5;
