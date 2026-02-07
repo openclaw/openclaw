@@ -182,14 +182,14 @@
 4. **가격 모니터링** — 경쟁사 현황, 알림, 차트, M06 Agent 연동
 
 ### 개발 일정 (5주)
-| Phase | 기간 | 내용 | 시간 |
-|-------|------|------|------|
-| Phase 1 | Week 1 | 프로젝트 기반 + 인증 | 20h |
-| Phase 2 | Week 2 | CRM + 대시보드 (MVP) | 29h |
-| Phase 3 | Week 3 | 콘텐츠 모듈 | 30h |
-| Phase 4 | Week 4 | 마케팅 모듈 | 35h |
-| Phase 5 | Week 5 | 가격 모니터링 + 완성 | 34h |
-| **Total** | **5주** | **전체 Admin** | **148h** |
+| Phase | 기간 | 내용 | 시간 | 상태 |
+|-------|------|------|------|------|
+| Phase 1 | Week 1 | 프로젝트 기반 + 인증 | 20h | ✅ 완료 |
+| Phase 2 | Week 2 | CRM + 대시보드 (MVP) | 29h | ✅ 완료 |
+| Phase 3 | Week 3 | 콘텐츠 모듈 | 30h | ✅ 완료 (2026-02-07) |
+| Phase 4 | Week 4 | 마케팅 모듈 | 35h | ✅ 완료 (2026-02-07) |
+| Phase 5 | Week 5 | 가격 모니터링 + 완성 | 34h | ⬜ 대기 |
+| **Total** | **5주** | **전체 Admin** | **148h** | **4/5 완료** |
 
 ### n8n 연동
 - 기존 워크플로우(WF-POC-01~03) 100% 재활용
@@ -284,6 +284,7 @@
 | 2026-02-02 | Zalo OA 생성: +84 번호 필수 | 한국 번호(+82) 계정은 OA 생성 권한 없음 → BnF 현지 스탭 요청 또는 eSIM |
 | 2026-02-02 | qwen3:8b `/no_think` 사용 금지 | 4/5 확률로 content 비고 thinking에만 응답 → 폴백 로직 추가 (T004-LL) |
 | 2026-02-02 | Cloudflare Quick Tunnel 채택 | 무료, 계정 불필요, 즉시 사용. 프로덕션은 Named Tunnel로 업그레이드 |
+| 2026-02-07 | 개발 방식 변경: MAIBOT 직접 구현 | 하이브리드(Claude Code CLI) MCP/plugins 충돌로 hang → 직접 구현이 안정적 |
 
 ---
 
@@ -419,6 +420,23 @@
 | Postgres-qWem | postgres-qwem.railway.internal:5432 | 🟢 Online |
 | n8n Cloud | mai-n8n.app.n8n.cloud | 🟢 Online |
 
+### Railway 배포 방법 (2026-02-07 확인)
+- **⚠️ 중요:** `railway up`은 반드시 `C:\TEST\MAIBEAUTY\api\` 디렉토리에서 실행해야 함
+  - 프로젝트 루트에서 실행하면 `package.json`(프론트엔드) 감지 → Node.js로 빌드 → 실패
+  - `api/` 폴더에 `railway.toml`, `requirements.txt`, `start.sh` 있음
+- **Railway CLI 링크 설정:** `cd C:\TEST\MAIBEAUTY; railway link` → maibeauty-api → production → maibeauty-api
+- **배포 명령:** `cd C:\TEST\MAIBEAUTY\api; railway up`
+- **빌드 설정 (`api/railway.toml`):**
+  ```toml
+  [build]
+  builder = "NIXPACKS"
+  [deploy]
+  startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+  restartPolicyType = "ON_FAILURE"
+  restartPolicyMaxRetries = 10
+  ```
+- **GitHub 자동배포:** Railway 서비스의 root directory가 `api/`로 설정되어 있어야 함
+
 ### Admin 로그인 계정 (2026-02-06 지니님 확인)
 | 항목 | 값 |
 |------|-----|
@@ -433,6 +451,51 @@
 | `CRM_SPREADSHEET_ID` | Google Sheets CRM 스프레드시트 ID |
 | `GOOGLE_SERVICE_ACCOUNT_JSON_B64` | SA JSON Base64 인코딩 |
 
+### 프론트엔드 ↔ 백엔드 API 매핑 (2026-02-07 검증 완료)
+
+**프론트엔드:** `web-admin/src/lib/api.ts`
+**백엔드 라우터:** `api/app/routers/` (stats.py, products.py, product_ai.py 등)
+**Main 등록:** `api/app/main.py` — 모든 라우터 `/api/v1` prefix
+
+| 기능 | 프론트엔드 호출 경로 | 백엔드 라우터 경로 | 상태 |
+|------|---------------------|-------------------|------|
+| T18 대시보드 위젯 | `/stats/products-summary` | stats.py `@router.get("/products-summary")` | ✅ 일치 |
+| T17 제품-리드 연동 | `/products/{id}/leads` | products.py `@router.get("/{product_id}/leads")` | ✅ 일치 |
+| AI Jobs 목록 | `/products/{id}/ai/jobs` | product_ai.py `@router.get("/jobs")` | ✅ 일치 |
+| AI Job 상태 | `/products/{id}/ai/jobs/{jobId}` | product_ai.py `@router.get("/jobs/{job_id}")` | ✅ 일치 |
+| AI 생성 5종 | generate-all/photos/copy/translate/suggest-usp | 동일 | ✅ 전부 일치 |
+| 리드 CRUD | `/leads` | leads.py | ✅ 일치 |
+| 제품 CRUD | `/products` | products.py | ✅ 일치 |
+| 대시보드 통계 | `/stats/summary` | stats.py | ✅ 일치 |
+| 리드 통계 3종 | leads-by-status/source/trend | stats.py | ✅ 전부 일치 |
+
+**⚠️ 참고:** `product_id`는 UUID 타입. 잘못된 형식 전달 시 FastAPI 라우트 매칭 실패로 404 반환 (422가 아님)
+
+### 2026-02-07
+- [x] **Railway CLI 배포 (T17/T18/AI Jobs 엔드포인트 반영)**
+  - 첫 시도: 프로젝트 루트에서 `railway up` → Node.js로 인식 → 빌드 실패
+  - 해결: `api/` 디렉토리에서 `railway up` → Python Nixpacks 빌드 성공 (93초)
+  - 배포 후 검증: T17, T18, AI Jobs 엔드포인트 전부 401 응답 (존재 확인)
+  - OpenAPI 스펙에서 34개 엔드포인트 전부 등록 확인
+- [x] **프론트엔드-백엔드 API 매핑 전수 점검** → 16개 엔드포인트 전부 일치, 수정 불필요
+- [x] **Phase 3 — 콘텐츠 모듈 심화** (서브에이전트, ~11분)
+  - AI 스크립트 생성 → 제품 연동 통합 (ScriptEditor + CreateDialog)
+  - 스타일 선택: 프로모션/교육/후기/쇼케이스
+  - `/stats/contents-summary` 백엔드 엔드포인트 신규
+  - ContentSummaryCard 대시보드 위젯 신규
+  - WebSocket 진행률 + 발행 워크플로우 확인 완료
+- [x] **Phase 4 — 마케팅 모듈 심화** (서브에이전트)
+  - `/campaigns/{id}/send` 발송 시뮬레이션 API 신규
+  - AI 카피 생성기 제품 자동 연동 (`generateFromProduct`)
+  - `GET /abtests` 목록 API 추가 + 프론트엔드 실제 데이터 연동
+  - `/stats/marketing-summary` 대시보드 위젯 신규
+  - MarketingSummaryCard 컴포넌트 신규
+  - 대시보드 3열 레이아웃 리팩토링 (제품/콘텐츠/마케팅)
+- [x] **라이브 테스트 (T015)** → 16/16 PASS (100%)
+  - Railway API 전수 검증: 인증, 제품, 콘텐츠, 캠페인, 통계 전부 정상
+- [x] **배포 완료**: git push (2 commits) + Railway 재배포 + GitHub Pages 자동배포
+- [x] **문서화**: T015 (라이브 테스트), I027 (Phase 3+4 구현 기록)
+
 ---
 
-*Last updated: 2026-02-06 09:55*
+*Last updated: 2026-02-07 13:34*

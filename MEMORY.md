@@ -12,21 +12,19 @@
 ### 개발 환경 요약
 | 프로젝트 | 로컬 경로 | GitHub | 개발 도구 | 배포 |
 |----------|----------|--------|----------|------|
-| MAIBEAUTY (BnF) | `C:\TEST\MAIBEAUTY` | [jini92/MAIBEAUTY](https://github.com/jini92/MAIBEAUTY) | Claude Code | — |
-| MAIOSS | `C:\TEST\MAIOSS` | [jini92/MAIOSS](https://github.com/jini92/MAIOSS) | Claude Code | Railway + GitHub Pages |
-| MAIBOT (메인) | `C:\MAIBOT` | [jini92/MAIBOT](https://github.com/jini92/MAIBOT) | Claude Code | — |
+| MAIBEAUTY (BnF) | `C:\TEST\MAIBEAUTY` | [jini92/MAIBEAUTY](https://github.com/jini92/MAIBEAUTY) | MAIBOT 직접 | — |
+| MAIOSS | `C:\TEST\MAIOSS` | [jini92/MAIOSS](https://github.com/jini92/MAIOSS) | MAIBOT 직접 | Railway + GitHub Pages |
+| MAIBOT (메인) | `C:\MAIBOT` | [jini92/MAIBOT](https://github.com/jini92/MAIBOT) | MAIBOT 직접 | — |
 
 ## 개발 방식 (전체 프로젝트 공통)
 
 | 항목 | 내용 |
 |------|------|
-| 방식 | 🏆 하이브리드 — MAIBOT(오케스트레이터) + Claude Code CLI(개발자) |
-| 확정일 | 2026-02-06 |
+| 방식 | 🔧 **MAIBOT 직접 구현** — 코드 읽기/쓰기/편집 + git 커밋/푸시 |
+| 변경일 | 2026-02-07 |
+| 이전 방식 | ~~하이브리드 (MAIBOT + Claude Code CLI)~~ — MCP/plugins 충돌로 폐기 |
 | 적용 범위 | 모든 프로젝트 (MAIBEAUTY, MAIOSS, MAIBOT 등) |
-| 전체 적용일 | 2026-02-06 (3개 프로젝트 모두 서브에이전트+MCP+CLAUDE.md 세팅 완료) |
-| 과금 | 둘 다 Claude Max 구독 (동일 계정) |
-| Claude Code | v2.1.34 |
-| 스킬 | `skills/hybrid-coding/SKILL.md` — 새 프로젝트에 재사용 가능 |
+| 장점 | 안정적, 충돌 없음, 컨텍스트 일관성, 즉시 실행 |
 
 ## 완료 프로젝트
 
@@ -47,4 +45,4 @@
 
 ---
 
-*Last updated: 2026-01-30*
+*Last updated: 2026-02-07*

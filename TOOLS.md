@@ -115,58 +115,38 @@ tail -n 120 /tmp/moltbot-gateway.log
 
 ---
 
-### 🏆 하이브리드 코딩 방식 (2026-02-06 확정)
+### 🔧 개발 방식: MAIBOT 직접 구현 (2026-02-07 변경)
 
-**모든 프로젝트에 적용** — 지니님 승인 완료
+**모든 프로젝트에 적용** — 지니님 지시
 
 ```
 지니님 (Discord)
     ↓ 지시/브레인스토밍
-MAIBOT (오케스트레이터)
-    ├── 간단한 작업 → 직접 처리 (문서 수정, git, 노티 등)
-    └── 코딩 작업 → Claude Code CLI 실행 (개발, 디버깅, 테스트)
-         ↓
-    프로젝트 워크스페이스
+MAIBOT (직접 구현)
+    ├── 코드 읽기/쓰기/편집 (Read/Write/Edit 도구)
+    ├── 셸 명령 실행 (exec)
+    ├── git 커밋/푸시
+    ├── 문서화
+    └── Discord 알림
 ```
 
-**역할 분담:**
-| 역할 | MAIBOT | Claude Code CLI |
-|------|--------|----------------|
-| 지시 수신 (Discord) | ✅ | — |
-| 요구사항 분석 | ✅ | — |
-| **코딩/디버깅** | 간단한 것만 | ✅ 메인 |
-| **대규모 리팩토링** | — | ✅ |
-| 테스트 실행 | 간단한 것 | ✅ |
-| 문서화 | ✅ | — |
-| git 커밋/푸시 | ✅ | — |
-| Discord 노티 | ✅ | — |
-| 메모리 관리 | ✅ | — |
+**MAIBOT이 전부 직접 처리:**
+| 역할 | MAIBOT |
+|------|--------|
+| 지시 수신 (Discord) | ✅ |
+| 요구사항 분석 | ✅ |
+| **코딩/디버깅** | ✅ 직접 |
+| **대규모 리팩토링** | ✅ 직접 |
+| **테스트** | ✅ 직접 |
+| 문서화 | ✅ |
+| git 커밋/푸시 | ✅ |
+| Discord 노티 | ✅ |
+| 메모리 관리 | ✅ |
 
-**Claude Code 실행 방법:** coding-agent 스킬 참조
-- 단발: `claude 'task description'` (pty:true, workdir 지정)
-- 장기: background:true로 실행, process:log로 모니터링
-- 완료 알림: `moltbot gateway wake` 명령으로 즉시 통보
-
-**과금:** 둘 다 동일 Claude Max 구독 (claude_code_oauth_token)
-**장점:** 컨텍스트 분리, 병렬 처리, 코딩 전문성 활용, MAIBOT 여유 확보
-
-**Claude Code 고급 기능 활용:**
-| 기능 | 설명 | 사용법 |
-|------|------|--------|
-| **서브에이전트** | 전문 역할별 에이전트 (`.claude/agents/`) | `--agent test-engineer` |
-| **MCP 서버** | 외부 도구 연동 (`.mcp.json`) | 자동 로드 (playwright, n8n 등) |
-| **CLAUDE.md** | 프로젝트 가이드 (자동 참조) | 워크스페이스 루트에 배치 |
-| **permission-mode** | 자동 승인 모드 | `--permission-mode bypassPermissions` |
-| **model 선택** | opus/sonnet 등 | `--model opus` |
-| **세션 이어하기** | 이전 작업 이어서 | `--continue` 또는 `--resume` |
-
-**프로젝트별 서브에이전트 구성:**
-
-| 프로젝트 | 에이전트 | MCP |
-|----------|----------|-----|
-| **MAIBEAUTY** | n8n-architect, content-pipeline, ecommerce-agent-dev, crm-automation, ai-media-producer, test-engineer | playwright, fetcher, context7, magic, n8n-mcp |
-| **MAIOSS** | oss-scanner, cve-analyst, report-generator, ai-analyzer, devops-deployer, test-engineer | playwright, fetcher, context7, magic |
-| **MAIBOT** | gateway-dev, channel-dev, cli-dev, docs-writer, test-engineer, platform-dev | playwright, fetcher, context7, magic |
+**이전 방식 (폐기):** 하이브리드 (MAIBOT + Claude Code CLI)
+- 2026-02-06 도입 → 2026-02-07 폐기
+- 폐기 사유: Claude Code CLI의 MCP 서버/plugins 로딩 충돌로 hang 발생
+- .claude/agents/, .mcp.json, CLAUDE.md 파일은 프로젝트에 남아있음 (향후 재활용 가능)
 
 ---
 
