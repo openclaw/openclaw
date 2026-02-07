@@ -208,6 +208,12 @@ export async function handleA2uiHttpRequest(
         : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
 
+    if (req.method === "HEAD") {
+      res.setHeader("Content-Type", mime === "text/html" ? "text/html; charset=utf-8" : mime);
+      res.end();
+      return true;
+    }
+
     if (mime === "text/html") {
       const buf = await result.handle.readFile({ encoding: "utf8" });
       res.setHeader("Content-Type", "text/html; charset=utf-8");
