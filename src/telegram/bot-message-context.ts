@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -45,6 +45,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   buildTypingThreadParams,
   expandTextLinks,
   normalizeForwardedContext,
@@ -54,16 +55,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 
-type TelegramMediaRef = {
+export type TelegramMediaRef = {
   path: string;
   contentType?: string;
-  stickerMetadata?: {
-    emoji?: string;
-    setName?: string;
-    fileId?: string;
-    fileUniqueId?: string;
-    cachedDescription?: string;
-  };
+  stickerMetadata?: StickerMetadata;
 };
 
 type TelegramMessageContextOptions = {
@@ -89,7 +84,7 @@ type ResolveGroupActivation = (params: {
 
 type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
-type BuildTelegramMessageContextParams = {
+export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   storeAllowFrom: string[];
@@ -167,6 +162,7 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   const route = resolveAgentRoute({
     cfg,
     channel: "telegram",
@@ -175,6 +171,7 @@ export const buildTelegramMessageContext = async ({
       kind: isGroup ? "group" : "dm",
       id: peerId,
     },
+    parentPeer,
   });
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
@@ -643,6 +640,8 @@ export const buildTelegramMessageContext = async ({
           channel: "telegram",
           to: String(chatId),
           accountId: route.accountId,
+          // Preserve DM topic threadId for replies (fixes #8891)
+          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
         }
       : undefined,
     onRecordError: (err) => {
@@ -695,3 +694,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
+
+export type TelegramMessageContext = NonNullable<
+  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+>;

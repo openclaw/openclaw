@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPath,
+  resolveControlUiDistIndexPathForRoot,
   resolveControlUiRepoRoot,
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
@@ -141,6 +143,80 @@ describe("control UI assets helpers", () => {
       expect(await resolveControlUiDistIndexPath(path.join(binDir, "openclaw"))).toBe(
         path.join(pkgRoot, "dist", "control-ui", "index.html"),
       );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves via fallback when package root resolution fails but package name matches", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      // Package named "openclaw" but resolveOpenClawPackageRoot failed for other reasons
+      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(tmp, "openclaw.mjs"), "export {};\n");
+      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+
+      expect(await resolveControlUiDistIndexPath(path.join(tmp, "openclaw.mjs"))).toBe(
+        path.join(tmp, "dist", "control-ui", "index.html"),
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when package name does not match openclaw", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      // Package with different name should not be resolved
+      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
+      await fs.writeFile(path.join(tmp, "index.mjs"), "export {};\n");
+      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
+      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+
+      expect(await resolveControlUiDistIndexPath(path.join(tmp, "index.mjs"))).toBeNull();
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when no control-ui assets exist", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      // Just a package.json, no dist/control-ui
+      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "some-pkg" }));
+      await fs.writeFile(path.join(tmp, "index.mjs"), "export {};\n");
+
+      expect(await resolveControlUiDistIndexPath(path.join(tmp, "index.mjs"))).toBeNull();
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports health for existing control-ui assets at a known root", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const indexPath = resolveControlUiDistIndexPathForRoot(tmp);
+      await fs.mkdir(path.dirname(indexPath), { recursive: true });
+      await fs.writeFile(indexPath, "<html></html>\n");
+
+      await expect(resolveControlUiDistIndexHealth({ root: tmp })).resolves.toEqual({
+        indexPath,
+        exists: true,
+      });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports health for missing control-ui assets at a known root", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const indexPath = resolveControlUiDistIndexPathForRoot(tmp);
+      await expect(resolveControlUiDistIndexHealth({ root: tmp })).resolves.toEqual({
+        indexPath,
+        exists: false,
+      });
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

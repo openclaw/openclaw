@@ -398,6 +398,7 @@ export async function agentCommand(
             return runCliAgent({
               sessionId,
               sessionKey,
+              agentId: sessionAgentId,
               sessionFile,
               workspaceDir,
               config: cfg,
@@ -418,6 +419,7 @@ export async function agentCommand(
           return runEmbeddedPiAgent({
             sessionId,
             sessionKey,
+            agentId: sessionAgentId,
             messageChannel,
             agentAccountId: runContext.accountId,
             messageTo: opts.replyTo ?? opts.to,
@@ -430,6 +432,7 @@ export async function agentCommand(
             currentThreadTs: runContext.currentThreadTs,
             replyToMode: runContext.replyToMode,
             hasRepliedRef: runContext.hasRepliedRef,
+            senderIsOwner: true,
             sessionFile,
             workspaceDir,
             config: cfg,

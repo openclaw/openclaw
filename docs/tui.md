@@ -142,6 +142,9 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - `--thinking <level>`: Override thinking level for sends
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
 
+Note: when you set `--url`, the TUI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+
 ## Troubleshooting
 
 No output after sending a message:
@@ -152,7 +155,7 @@ No output after sending a message:
 - If you expect messages in a chat channel, enable delivery (`/deliver on` or `--deliver`).
 - `--history-limit <n>`: History entries to load (default 200)
 
-## Troubleshooting
+## Connection troubleshooting
 
 - `disconnected`: ensure the Gateway is running and your `--url/--token/--password` are correct.
 - No agents in picker: check `openclaw agents list` and your routing config.

@@ -70,7 +70,7 @@ Docker 是**可选的**。仅当你想要容器化的 Gateway 网关或验证 Do
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-在 VPS 上运行？参阅 [Hetzner（Docker VPS）](/platforms/hetzner)。
+在 VPS 上运行？参阅 [Hetzner（Docker VPS）](/install/hetzner)。
 
 ### 手动流程（compose）
 

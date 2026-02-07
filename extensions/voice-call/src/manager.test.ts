@@ -135,6 +135,36 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-missing");
   });
 
+  it("rejects inbound calls with anonymous caller ID when allowlist enabled", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001234"],
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    manager.processEvent({
+      id: "evt-allowlist-anon",
+      type: "call.initiated",
+      callId: "call-anon",
+      providerCallId: "provider-anon",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "anonymous",
+      to: "+15550000000",
+    });
+
+    expect(manager.getCallByProviderCallId("provider-anon")).toBeUndefined();
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-anon");
+  });
+
   it("rejects inbound calls that only match allowlist suffixes", () => {
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
