@@ -27,7 +27,9 @@ OpenClaw.json minimal configuration example:
       enabled: true,
       nasIncomingWebhookUrl: "https://your-nas:5000/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=YOUR_TOKEN",
       botName: "openclaw",
-      verificationToken: "your_verification_token",
+      botToken: "your_bot_token",
+      incomingWebhookToken: "your_incoming_webhook_token",
+      incomingWebhookVerifySsl: true,
       incomingWebhookPath: "/synology-chat",
       port: "9000",
     },
@@ -37,9 +39,18 @@ OpenClaw.json minimal configuration example:
 
 Where:
 
-- verificationToken: is the bot token from Synology Chat
+- botToken: the bot token from Synology Chat for incoming webhook authentication
+- incomingWebhookToken: token for NAS outgoing webhook messages (alternative to botToken mode)
+- incomingWebhookVerifySsl: whether to verify SSL certificates for NAS webhooks (set to `false` for self-signed certificates), default is `true`
 - incomingWebhookPath: must correspond to the outgoing webhook URL setting on the NAS bot. For example, if the NAS outgoing URL is set to `http://openclaw-ip:9000/synology-chat`, then `incomingWebhookPath` should be set to `/synology-chat`
 - port: the listen port for incomingWebhookPath, default value is 9000 when not specified
+
+## Webhook Modes
+
+Two webhook modes are supported:
+
+1. **botToken mode (default)**: Uses `botToken` for authentication. Replies are sent directly via HTTP response.
+2. **incomingWebhookToken mode**: Uses `incomingWebhookToken` for NAS outgoing webhook authentication. Replies are sent back to `nasIncomingWebhookUrl`. This mode supports `trigger_word` handling and is useful when the NAS initiates the webhook call.
 
 ## Ubuntu Installation Adjustments
 

@@ -82,11 +82,14 @@ export const synologyChatPlugin: ChannelPlugin<ResolvedSynologyChatAccount> = {
       const baseConfig = cfg.channels?.["synology-chat"] as SynologyChatConfig | undefined;
       const defaultConfig: SynologyChatConfig = {
         nasIncomingWebhookUrl: "",
+        token: undefined,
         channelAccessToken: undefined,
         botName: "openclaw",
         incomingWebhookPath: "/synology-chat",
         port: undefined,
-        verificationToken: undefined,
+        botToken: undefined,
+        incomingWebhookToken: undefined,
+        incomingWebhookVerifySsl: true,
         allowFrom: [],
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
@@ -510,7 +513,7 @@ export const synologyChatPlugin: ChannelPlugin<ResolvedSynologyChatAccount> = {
         `[${account.accountId}] starting Synology Chat provider on port ${port} with webhook path: ${webhookPath}`,
       );
       ctx.log?.info(
-        `Current config: incomingWebhookPath=${account.config.incomingWebhookPath}, nasIncomingWebhookUrl=${account.config.nasIncomingWebhookUrl}, botName=${account.config.botName}, verificationToken=${!!account.config.verificationToken}`,
+        `Current config: incomingWebhookPath=${account.config.incomingWebhookPath}, nasIncomingWebhookUrl=${account.config.nasIncomingWebhookUrl}, botName=${account.config.botName}, botToken=${!!account.config.botToken}, incomingWebhookToken=${!!account.config.incomingWebhookToken}`,
       );
 
       // Create Express app to handle webhook requests on its own port
@@ -649,9 +652,14 @@ export const synologyChatPlugin: ChannelPlugin<ResolvedSynologyChatAccount> = {
  *
  * @param webhookUrl - The Synology Chat incoming webhook URL
  * @param text - The message text to send
+ * @param verifySsl - Whether to verify SSL certificates (default: true)
  * @returns Promise resolving to the response data or throwing an error on failure
  */
-async function sendMessageToSynologyChat(webhookUrl: string, text: string): Promise<unknown> {
+async function sendMessageToSynologyChat(
+  webhookUrl: string,
+  text: string,
+  verifySsl: boolean = true,
+): Promise<unknown> {
   const payload = {
     text: text,
   };
@@ -661,12 +669,22 @@ async function sendMessageToSynologyChat(webhookUrl: string, text: string): Prom
   };
 
   try {
-    const response = await fetch(webhookUrl, {
+    // Use undici for better control over TLS/SSL options
+    // This allows skipping certificate verification for self-signed certs
+    const { fetch: undiciFetch, Agent } = await import("undici");
+    const agent = new Agent({
+      connect: {
+        rejectUnauthorized: verifySsl,
+      },
+    });
+
+    const response = await undiciFetch(webhookUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams(data).toString(),
+      dispatcher: agent,
     });
 
     if (!response.ok) {
@@ -727,21 +745,37 @@ function createSynologyChatWebhookHandler(ctx: SynologyChatWebhookContext) {
       console.log("SYNOLOGY CHAT MESSAGE RECEIVED:");
       console.log(JSON.stringify(formData, null, 2));
 
-      // Validate the token from Synology Chat (if verification token is configured)
+      // Get configuration values
       const providedToken = formData.token;
-      const expectedToken = ctx.account.config.verificationToken;
+      const botToken = ctx.account.config.botToken;
+      const incomingWebhookToken = ctx.account.config.incomingWebhookToken;
+      const nasIncomingWebhookUrl = ctx.account.config.nasIncomingWebhookUrl;
 
-      if (expectedToken && providedToken && providedToken !== expectedToken) {
-        console.error(`Invalid token received: ${providedToken}, expected: ${expectedToken}`);
+      // Determine which mode we're in based on the token
+      let isIncomingWebhookMode = false;
+
+      if (incomingWebhookToken && providedToken === incomingWebhookToken) {
+        // NAS outgoing webhook mode - has trigger_word, send reply to nasIncomingWebhookUrl
+        isIncomingWebhookMode = true;
+      } else if (botToken && providedToken !== botToken) {
+        // botToken is configured but provided token doesn't match
+        console.error(`Invalid token received: ${providedToken}, expected: ${botToken}`);
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Unauthorized: Invalid token" }));
         return;
       }
 
       // Get message content and user info
-      const text = formData.text || "";
+      let text = formData.text || "";
+      const triggerWord = formData.trigger_word || "";
       const username = formData.username || "";
       const userId = formData.user_id || "";
+
+      // If trigger_word is present (incoming webhook mode), remove it from the text
+      if (triggerWord && text.toLowerCase().startsWith(triggerWord.toLowerCase())) {
+        text = text.slice(triggerWord.length).trim();
+        console.log(`Removed trigger_word "${triggerWord}", remaining text: ${text}`);
+      }
 
       // Ignore messages from the bot itself
       if (username.toLowerCase() === ctx.account.config.botName.toLowerCase()) {
@@ -807,15 +841,26 @@ function createSynologyChatWebhookHandler(ctx: SynologyChatWebhookContext) {
 
       const reply = replyText;
 
-      // Important: Respond with the reply in the HTTP response
+      // Important: Respond with the reply
       const responseData = {
         text: reply,
       };
 
       console.log(`Sending reply: ${reply}`);
 
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(responseData));
+      if (isIncomingWebhookMode && nasIncomingWebhookUrl) {
+        // Incoming webhook mode - send reply via nasIncomingWebhookUrl
+        console.log(`Incoming webhook mode - sending reply via nasIncomingWebhookUrl`);
+        const verifySsl = ctx.account.config.incomingWebhookVerifySsl ?? true;
+        await sendMessageToSynologyChat(nasIncomingWebhookUrl, reply, verifySsl);
+        // For incoming webhook mode, just acknowledge without returning the reply
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      } else {
+        // Original mode - respond directly in HTTP response
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(responseData));
+      }
     } catch (error) {
       console.error("Error handling Synology Chat webhook:", error);
       res.writeHead(500, { "Content-Type": "application/json" });
