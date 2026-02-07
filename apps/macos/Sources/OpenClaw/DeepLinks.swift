@@ -1,6 +1,6 @@
 import AppKit
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import OSLog
 import Security
 
@@ -12,9 +12,9 @@ final class DeepLinkHandler {
 
     private var lastPromptAt: Date = .distantPast
 
-    // Ephemeral, in-memory key used for unattended deep links originating from the in-app Canvas.
-    // This avoids blocking Canvas init on UserDefaults and doesn't weaken the external deep-link prompt:
-    // outside callers can't know this randomly generated key.
+    /// Ephemeral, in-memory key used for unattended deep links originating from the in-app Canvas.
+    /// This avoids blocking Canvas init on UserDefaults and doesn't weaken the external deep-link prompt:
+    /// outside callers can't know this randomly generated key.
     private nonisolated static let canvasUnattendedKey: String = DeepLinkHandler.generateRandomKey()
 
     func handle(url: URL) async {

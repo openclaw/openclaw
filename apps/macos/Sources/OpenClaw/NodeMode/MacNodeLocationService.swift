@@ -1,6 +1,6 @@
-import OpenClawKit
 import CoreLocation
 import Foundation
+import OpenClawKit
 
 @MainActor
 final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
