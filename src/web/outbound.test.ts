@@ -130,7 +130,10 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/file.pdf",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf");
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      accountId: undefined,
+      fileName: "file.pdf",
+    });
   });
 
   it("sends polls via active listener", async () => {
