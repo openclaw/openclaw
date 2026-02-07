@@ -79,6 +79,7 @@ const WRITE_METHODS = new Set([
   "agent.wait",
   "wake",
   "talk.mode",
+  "talk.stt",
   "tts.enable",
   "tts.disable",
   "tts.convert",

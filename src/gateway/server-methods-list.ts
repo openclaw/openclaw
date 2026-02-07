@@ -30,6 +30,7 @@ const BASE_METHODS = [
   "wizard.cancel",
   "wizard.status",
   "talk.mode",
+  "talk.stt",
   "models.list",
   "agents.list",
   "agents.files.list",

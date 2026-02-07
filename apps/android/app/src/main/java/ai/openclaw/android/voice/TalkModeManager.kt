@@ -7,8 +7,10 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,10 +21,12 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.util.Base64
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.isCanonicalMainSessionKey
 import ai.openclaw.android.normalizeMainKey
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -41,6 +45,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlin.math.abs
 import kotlin.math.max
 
 class TalkModeManager(
@@ -50,6 +55,8 @@ class TalkModeManager(
   private val supportsChatSubscribe: Boolean,
   private val isConnected: () -> Boolean,
 ) {
+  private data class GatewaySttResult(val text: String?, val noSpeech: Boolean)
+
   companion object {
     private const val tag = "TalkMode"
     private const val defaultModelIdFallback = "eleven_v3"
@@ -78,6 +85,9 @@ class TalkModeManager(
   val usingFallbackTts: StateFlow<Boolean> = _usingFallbackTts
 
   private var recognizer: SpeechRecognizer? = null
+  private var cloudRecord: AudioRecord? = null
+  private var cloudJob: Job? = null
+  private var usingCloudStt: Boolean = false
   private var restartJob: Job? = null
   private var stopRequested = false
   private var listeningMode = false
@@ -160,12 +170,6 @@ class TalkModeManager(
       listeningMode = true
       Log.d(tag, "start")
 
-      if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-        _statusText.value = "Speech recognizer unavailable"
-        Log.w(tag, "speech recognizer unavailable")
-        return@post
-      }
-
       val micOk =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
           PackageManager.PERMISSION_GRANTED
@@ -175,7 +179,14 @@ class TalkModeManager(
         return@post
       }
 
+      if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+        usingCloudStt = true
+        startCloudListening()
+        return@post
+      }
+
       try {
+        usingCloudStt = false
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
         startListeningInternal(markListening = true)
@@ -188,11 +199,214 @@ class TalkModeManager(
     }
   }
 
+  private fun startCloudListening() {
+    cloudJob?.cancel()
+    cloudJob =
+      scope.launch(Dispatchers.IO) {
+        _statusText.value = "Listening (Cloud)"
+        _isListening.value = true
+
+        val sampleRateHz = 16000
+        val minBuf =
+          AudioRecord.getMinBufferSize(
+            sampleRateHz,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+          )
+        val bufSamples = max(1024, minBuf / 2)
+        val record =
+          AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            sampleRateHz,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            max(minBuf, bufSamples * 2),
+          )
+
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+          _statusText.value = "STT failed: recorder init"
+          _isListening.value = false
+          return@launch
+        }
+
+        cloudRecord = record
+        val out = ByteArrayOutputStream()
+        val buf = ShortArray(bufSamples)
+        var lastVoiceAt = SystemClock.elapsedRealtime()
+        val startAt = lastVoiceAt
+        var voiceSeen = false
+        val peakThreshold = 250
+        val minRecordMs = 1_000L
+        val maxRecordMs = 6_000L
+        val minBytes = sampleRateHz * 2 / 2
+
+        try {
+          record.startRecording()
+          while (!stopRequested && listeningMode && usingCloudStt) {
+            val read = record.read(buf, 0, buf.size)
+            if (read <= 0) continue
+
+            var peak = 0
+            for (i in 0 until read) {
+              val v = abs(buf[i].toInt())
+              if (v > peak) peak = v
+              val s = buf[i].toInt()
+              out.write(s and 0xff)
+              out.write((s shr 8) and 0xff)
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            if (peak > peakThreshold) {
+              voiceSeen = true
+              lastVoiceAt = now
+            }
+            if (now - startAt > maxRecordMs) {
+              break
+            }
+            if (
+              voiceSeen &&
+                now - startAt > minRecordMs &&
+                now - lastVoiceAt > silenceWindowMs &&
+                out.size() >= minBytes
+            ) {
+              break
+            }
+          }
+        } catch (err: Throwable) {
+          _statusText.value = "STT failed: ${err.message ?: err::class.simpleName}"
+          _isListening.value = false
+          return@launch
+        } finally {
+          try {
+            record.stop()
+          } catch (_: Throwable) {}
+          record.release()
+          if (cloudRecord === record) {
+            cloudRecord = null
+          }
+        }
+
+        val pcm = out.toByteArray()
+        if (pcm.isEmpty() || stopRequested || !listeningMode || !usingCloudStt) {
+          if (!stopRequested) {
+            _statusText.value = "Listening (Cloud)"
+            _isListening.value = true
+          }
+          return@launch
+        }
+        if (!voiceSeen) {
+          _statusText.value = "No speech detected"
+          _isListening.value = false
+          scheduleRestartCloud()
+          return@launch
+        }
+
+        val wav = buildWavPcm16Mono(pcm, sampleRateHz)
+        val stt = transcribeWithGateway(wav)
+        if (stt.noSpeech) {
+          _statusText.value = "No speech detected"
+          _isListening.value = false
+          scheduleRestartCloud()
+          return@launch
+        }
+        val transcript = stt.text?.trim().orEmpty()
+        if (transcript.isEmpty()) {
+          _statusText.value = "STT failed: gateway"
+          _isListening.value = false
+          scheduleRestartCloud()
+          return@launch
+        }
+
+        finalizeTranscript(transcript)
+      }
+  }
+
+  private fun scheduleRestartCloud(delayMs: Long = 350) {
+    if (stopRequested) return
+    restartJob?.cancel()
+    restartJob =
+      scope.launch {
+        delay(delayMs)
+        if (stopRequested) return@launch
+        if (!listeningMode || !usingCloudStt) return@launch
+        startCloudListening()
+      }
+  }
+
+  private suspend fun transcribeWithGateway(wav: ByteArray): GatewaySttResult {
+    val sessionKey = mainSessionKey.ifBlank { "main" }
+    val params =
+      buildJsonObject {
+        put("audioB64", JsonPrimitive(Base64.encodeToString(wav, Base64.NO_WRAP)))
+        put("sessionKey", JsonPrimitive(sessionKey))
+        put("mime", JsonPrimitive("audio/wav"))
+        put("timeoutMs", JsonPrimitive(45_000))
+      }
+    return try {
+      val payload = session.request("talk.stt", params.toString(), timeoutMs = 50_000)
+      val el = json.parseToJsonElement(payload)
+      val obj = el as? JsonObject ?: return GatewaySttResult(text = null, noSpeech = false)
+      val noSpeech =
+        (obj["noSpeech"] as? JsonPrimitive)
+          ?.content
+          ?.trim()
+          ?.equals("true", ignoreCase = true) == true
+      val raw = obj["text"] as? JsonPrimitive
+      val text = raw?.content?.trim().orEmpty().ifEmpty { null }
+      GatewaySttResult(text = text, noSpeech = noSpeech)
+    } catch (_: Throwable) {
+      GatewaySttResult(text = null, noSpeech = false)
+    }
+  }
+
+  private fun buildWavPcm16Mono(pcm: ByteArray, sampleRateHz: Int): ByteArray {
+    val dataLen = pcm.size
+    val out = ByteArrayOutputStream(44 + dataLen)
+    fun writeAscii(value: String) {
+      out.write(value.toByteArray(Charsets.US_ASCII))
+    }
+    fun writeIntLE(value: Int) {
+      out.write(value and 0xff)
+      out.write((value shr 8) and 0xff)
+      out.write((value shr 16) and 0xff)
+      out.write((value shr 24) and 0xff)
+    }
+    fun writeShortLE(value: Int) {
+      out.write(value and 0xff)
+      out.write((value shr 8) and 0xff)
+    }
+
+    val channels = 1
+    val bits = 16
+    val byteRate = sampleRateHz * channels * bits / 8
+    val blockAlign = channels * bits / 8
+
+    writeAscii("RIFF")
+    writeIntLE(36 + dataLen)
+    writeAscii("WAVE")
+    writeAscii("fmt ")
+    writeIntLE(16)
+    writeShortLE(1)
+    writeShortLE(channels)
+    writeIntLE(sampleRateHz)
+    writeIntLE(byteRate)
+    writeShortLE(blockAlign)
+    writeShortLE(bits)
+    writeAscii("data")
+    writeIntLE(dataLen)
+    out.write(pcm)
+
+    return out.toByteArray()
+  }
+
   private fun stop() {
     stopRequested = true
     listeningMode = false
+    usingCloudStt = false
     restartJob?.cancel()
     restartJob = null
+    cloudJob?.cancel()
+    cloudJob = null
     silenceJob?.cancel()
     silenceJob = null
     lastTranscript = ""
@@ -207,6 +421,13 @@ class TalkModeManager(
       recognizer?.cancel()
       recognizer?.destroy()
       recognizer = null
+      try {
+        cloudRecord?.stop()
+      } catch (_: Throwable) {}
+      try {
+        cloudRecord?.release()
+      } catch (_: Throwable) {}
+      cloudRecord = null
     }
     systemTts?.stop()
     systemTtsPending?.cancel()

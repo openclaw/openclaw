@@ -9,6 +9,17 @@ export const TalkModeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkSttParamsSchema = Type.Object(
+  {
+    audioB64: NonEmptyString,
+    sessionKey: Type.Optional(Type.String()),
+    mime: Type.Optional(Type.String()),
+    language: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
