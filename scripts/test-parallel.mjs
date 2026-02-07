@@ -32,6 +32,7 @@ const shardCount = isWindowsCi
 const windowsCiArgs = isWindowsCi
   ? ["--no-file-parallelism", "--dangerouslyIgnoreUnhandledErrors"]
   : [];
+const passthroughArgs = process.argv.slice(2);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -95,6 +96,30 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+if (passthroughArgs.length > 0) {
+  const args = maxWorkers
+    ? ["vitest", "run", "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...passthroughArgs]
+    : ["vitest", "run", ...windowsCiArgs, ...passthroughArgs];
+  const nodeOptions = process.env.NODE_OPTIONS ?? "";
+  const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
+    (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
+    nodeOptions,
+  );
+  const code = await new Promise((resolve) => {
+    const child = spawn(pnpm, args, {
+      stdio: "inherit",
+      env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
+      shell: process.platform === "win32",
+    });
+    children.add(child);
+    child.on("exit", (exitCode, signal) => {
+      children.delete(child);
+      resolve(exitCode ?? (signal ? 1 : 0));
+    });
+  });
+  process.exit(Number(code) || 0);
+}
 
 const parallelCodes = await Promise.all(parallelRuns.map(run));
 const failedParallel = parallelCodes.find((code) => code !== 0);
