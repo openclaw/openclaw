@@ -9,6 +9,7 @@ export type AuthChoice =
   | "claude-cli"
   | "token"
   | "chutes"
+  | "chutes-api-key"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -80,6 +81,8 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  chutesApiKey?: string;
+  chutesModelId?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;

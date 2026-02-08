@@ -49,6 +49,7 @@ See [Venice AI](/providers/venice).
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Chutes (Bittensor, decentralized inference)](/providers/chutes)
 - [Ollama (local models)](/providers/ollama)
 - [Qianfan](/providers/qianfan)
 

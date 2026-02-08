@@ -22,6 +22,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "chutes"
   | "qwen"
   | "qianfan"
   | "xai";
@@ -136,6 +137,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["venice-api-key"],
   },
   {
+    value: "chutes",
+    label: "Chutes (Bittensor)",
+    hint: "Decentralized inference",
+    choices: ["chutes-api-key", "chutes"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
@@ -160,7 +167,16 @@ export function buildAuthChoiceOptions(params: {
     value: "openai-codex",
     label: "OpenAI Codex (ChatGPT OAuth)",
   });
-  options.push({ value: "chutes", label: "Chutes (OAuth)" });
+  options.push({
+    value: "chutes-api-key",
+    label: "Chutes (Bittensor) API key",
+    hint: "Decentralized inference on Bittensor",
+  });
+  options.push({
+    value: "chutes",
+    label: "Chutes (Bittensor) OAuth",
+    hint: "Wallet-based login",
+  });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "xai-api-key", label: "xAI (Grok) API key" });
   options.push({

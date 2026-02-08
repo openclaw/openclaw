@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyChutesConfigWithModel,
+  applyChutesProviderConfigWithModel,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyQianfanConfig,
@@ -45,6 +47,7 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  setChutesApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -106,6 +109,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "chutes") {
+      authChoice = "chutes-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "qianfan") {
@@ -737,6 +742,85 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "chutes-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "chutes") {
+      await setChutesApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Chutes provides decentralized AI inference on Bittensor (Subnet 64).",
+          "Get your API key at: https://chutes.ai",
+          "API keys start with 'cpk_'. Model availability depends on active miners.",
+        ].join("\n"),
+        "Chutes (Bittensor)",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("chutes");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing CHUTES_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setChutesApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Chutes API key",
+        validate: validateApiKeyInput,
+      });
+      await setChutesApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "chutes:default",
+      provider: "chutes",
+      mode: "api_key",
+    });
+
+    // Prompt for model ID since Chutes uses dynamic model IDs assigned at deployment
+    await params.prompter.note(
+      [
+        "Chutes models have unique IDs assigned when deployed.",
+        "Check https://chutes.ai for available models and their IDs.",
+      ].join("\n"),
+      "Model Selection",
+    );
+    const modelId = await params.prompter.text({
+      message: "Enter Chutes model ID (e.g., 'llama-70b')",
+      validate: (value) => {
+        if (!value || !String(value).trim()) {
+          return "Model ID is required";
+        }
+        return undefined;
+      },
+    });
+    const chutesModelRef = `chutes/${String(modelId).trim()}`;
+
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: chutesModelRef,
+        applyDefaultConfig: (cfg) => applyChutesConfigWithModel(cfg, chutesModelRef),
+        applyProviderConfig: (cfg) => applyChutesProviderConfigWithModel(cfg, chutesModelRef),
+        noteDefault: chutesModelRef,
         noteAgentModel,
         prompter: params.prompter,
       });
