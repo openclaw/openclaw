@@ -107,6 +107,11 @@ if (!runner) {
   process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
   process.exit(1);
 }
+// On Windows, paths with spaces (e.g. C:\Program Files\...) must be quoted
+// so the shell does not split them.
+if (process.platform === "win32" && runner.cmd.includes(" ")) {
+  runner.cmd = `"${runner.cmd}"`;
+}
 
 const script =
   action === "install"
