@@ -58,6 +58,19 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     if (!typed.runId || typeof typed.runId !== "string") {
       continue;
     }
+    // Validate required string fields to avoid runtime errors on corrupted entries
+    if (typeof typed.childSessionKey !== "string" || !typed.childSessionKey) {
+      continue;
+    }
+    if (typeof typed.requesterSessionKey !== "string" || !typed.requesterSessionKey) {
+      continue;
+    }
+    if (typeof typed.requesterDisplayKey !== "string" || !typed.requesterDisplayKey) {
+      continue;
+    }
+    if (typeof typed.task !== "string" || !typed.task) {
+      continue;
+    }
     const legacyCompletedAt =
       isLegacy && typeof typed.announceCompletedAt === "number"
         ? typed.announceCompletedAt
