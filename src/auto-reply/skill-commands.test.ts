@@ -48,6 +48,26 @@ describe("resolveSkillCommandInvocation", () => {
     expect(invocation?.args).toBeUndefined();
   });
 
+  it("preserves multi-line args", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/my_skill FEEDBACK BELOW:\nSecond line of feedback\nThird line of feedback",
+      skillCommands: [{ name: "my_skill", skillName: "my-skill", description: "My Skill" }],
+    });
+    expect(invocation?.command.skillName).toBe("my-skill");
+    expect(invocation?.args).toBe(
+      "FEEDBACK BELOW:\nSecond line of feedback\nThird line of feedback",
+    );
+  });
+
+  it("preserves multi-line args with /skill syntax", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/skill my_skill FEEDBACK:\nLine 2\nLine 3",
+      skillCommands: [{ name: "my_skill", skillName: "my-skill", description: "My Skill" }],
+    });
+    expect(invocation?.command.name).toBe("my_skill");
+    expect(invocation?.args).toBe("FEEDBACK:\nLine 2\nLine 3");
+  });
+
   it("returns null for unknown commands", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/unknown arg",
