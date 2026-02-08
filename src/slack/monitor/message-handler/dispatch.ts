@@ -73,7 +73,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       await updateStatus("is typing...");
-      postSidebarActivity("Processing message...");
+      if (!sidebarSeenProcessing) {
+        sidebarSeenProcessing = true;
+        postSidebarActivity("Processing message...");
+      }
     },
     stop: async () => {
       if (!didSetStatus) {
@@ -122,6 +125,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   // Post activity to the user's assistant sidebar (fire-and-forget).
   const sidebarUserId = message.user;
+  let sidebarSeenProcessing = false;
   const postSidebarActivity = (text: string) => {
     if (sidebarUserId) {
       void ctx.postToSidebar(sidebarUserId, text).catch(() => {});
@@ -151,11 +155,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         const statusHint = extractToolStatusHint(toolText);
         if (statusHint) {
           void updateStatus(statusHint).catch(() => {});
-          postSidebarActivity(statusHint);
         }
+        // Always post tool activity to sidebar — full text if short, hint if available.
+        const sidebarText = statusHint ?? `Tool result (${toolText.length} chars)`;
+        postSidebarActivity(sidebarText);
       }
       await deliverNormal(payload);
       return;
+    }
+    // Post block/final delivery activity to sidebar.
+    if (kind === "block") {
+      const len = payload.text?.length ?? 0;
+      if (len > 0) {
+        postSidebarActivity(`Streaming response... (${len} chars)`);
+      }
+    } else if (kind === "final") {
+      postSidebarActivity("Response complete.");
     }
     if (streamState.failed) {
       await deliverNormal(payload);
@@ -221,10 +236,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             const toolText = payload.text?.trim();
             if (toolText) {
               const statusHint = extractToolStatusHint(toolText);
-              if (statusHint) {
-                postSidebarActivity(statusHint);
-              }
+              const sidebarText = statusHint ?? `Tool result (${toolText.length} chars)`;
+              postSidebarActivity(sidebarText);
             }
+          } else if (info.kind === "final") {
+            postSidebarActivity("Response complete.");
           }
           await deliverNormal(payload);
         },
