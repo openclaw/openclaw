@@ -1,0 +1,37 @@
+# OpenClaw Python 輔助工具依賴
+# 用於整合、測試或自動化腳本
+
+# HTTP 請求
+requests>=2.31.0
+httpx>=0.27.0
+
+# WebSocket 客戶端（連接 Gateway）
+websockets>=12.0
+
+# 非同步支援
+aiohttp>=3.9.0
+
+# JSON Schema 驗證
+jsonschema>=4.21.0
+
+# 環境變數管理
+python-dotenv>=1.0.0
+
+# CLI 工具
+click>=8.1.0
+rich>=13.7.0
+
+# 安全相關
+cryptography>=42.0.0
+pyjwt>=2.8.0
+
+# 測試
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# 型別檢查
+mypy>=1.8.0
+
+# 程式碼格式化
+black>=24.1.0
+ruff>=0.2.0
