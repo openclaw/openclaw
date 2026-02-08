@@ -488,6 +488,10 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    // AWS SSO / aws-sdk auth resolution errors (e.g. Bedrock)
+    "sso session token",
+    "error loading sso token",
+    "was not found or is invalid",
   ],
   format: [
     "string should match pattern",
