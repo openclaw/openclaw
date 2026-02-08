@@ -14,6 +14,7 @@ import {
   resolveMainSessionAlias,
   type SessionListRow,
   stripToolMessages,
+  stripImageData,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
@@ -199,7 +200,8 @@ export function createSessionsListTool(opts?: {
             params: { sessionKey: resolvedKey, limit: messageLimit },
           });
           const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-          const filtered = stripToolMessages(rawMessages);
+          // Strip toolResult messages and base64 image data to prevent context overflow
+          const filtered = stripImageData(stripToolMessages(rawMessages));
           row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
         }
 

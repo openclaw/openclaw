@@ -351,6 +351,54 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
 }
 
 /**
+ * Strip base64 image data from messages to reduce size.
+ * Replaces inline image data with a placeholder to preserve structure.
+ * This prevents sessions_list from returning megabytes of base64 image data.
+ */
+export function stripImageData(messages: unknown[]): unknown[] {
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+    const message = msg as Record<string, unknown>;
+    const content = message.content;
+    if (!Array.isArray(content)) {
+      return msg;
+    }
+    const strippedContent = content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const blockObj = block as Record<string, unknown>;
+      // Strip base64 data from image blocks
+      if (blockObj.type === "image" && typeof blockObj.data === "string") {
+        return {
+          ...blockObj,
+          data: "[base64 image data stripped]",
+          _strippedBytes: (blockObj.data as string).length,
+        };
+      }
+      // Also strip from source.data if present (alternative image format)
+      if (blockObj.type === "image" && blockObj.source && typeof blockObj.source === "object") {
+        const source = blockObj.source as Record<string, unknown>;
+        if (typeof source.data === "string") {
+          return {
+            ...blockObj,
+            source: {
+              ...source,
+              data: "[base64 image data stripped]",
+              _strippedBytes: (source.data as string).length,
+            },
+          };
+        }
+      }
+      return block;
+    });
+    return { ...message, content: strippedContent };
+  });
+}
+
+/**
  * Sanitize text content to strip tool call markers and thinking tags.
  * This ensures user-facing text doesn't leak internal tool representations.
  */
