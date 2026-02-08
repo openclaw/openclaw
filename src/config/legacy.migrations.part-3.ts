@@ -83,7 +83,13 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     apply: (raw, changes) => {
       const agents = getRecord(raw.agents);
       const defaults = getRecord(agents?.defaults);
-      const tools = getRecord(defaults?.tools);
+      if (!defaults) {
+        return;
+      }
+      const tools = getRecord(defaults.tools);
+      if (!tools) {
+        return;
+      }
       const legacyBrowser = getRecord(tools?.browser);
       if (!legacyBrowser) {
         return;
