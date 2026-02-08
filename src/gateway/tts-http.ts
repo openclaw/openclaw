@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream, statSync } from "node:fs";
+import { extname } from "node:path";
 import { loadConfig } from "../config/config.js";
 import { textToSpeech } from "../tts/tts.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
@@ -10,6 +11,19 @@ import {
   sendUnauthorized,
 } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+
+const AUDIO_CONTENT_TYPES: Record<string, string> = {
+  ".mp3": "audio/mpeg",
+  ".opus": "audio/opus",
+  ".ogg": "audio/ogg",
+  ".webm": "audio/webm",
+  ".wav": "audio/wav",
+};
+
+function resolveAudioContentType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase();
+  return AUDIO_CONTENT_TYPES[ext] ?? "audio/mpeg";
+}
 
 type TtsHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -69,10 +83,20 @@ export async function handleTtsHttpRequest(
 
   try {
     const stat = statSync(result.audioPath);
+    const contentType = resolveAudioContentType(result.audioPath);
     res.statusCode = 200;
-    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", stat.size);
     const stream = createReadStream(result.audioPath);
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ error: "Failed to stream audio file" }));
+      } else {
+        res.end();
+      }
+    });
     stream.pipe(res);
   } catch {
     res.statusCode = 500;
