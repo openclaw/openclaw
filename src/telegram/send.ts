@@ -1,11 +1,10 @@
 import type {
-  InlineKeyboardButton,
-  InlineKeyboardMarkup,
-  ReactionType,
-  ReactionTypeEmoji,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReactionType,
+    ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import type { RetryConfig } from "../infra/retry.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -13,6 +12,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -98,10 +98,13 @@ function resolveTelegramClientOptions(
     Number.isFinite(account.config.timeoutSeconds)
       ? Math.max(1, Math.floor(account.config.timeoutSeconds))
       : undefined;
-  return fetchImpl || timeoutSeconds
+  const apiRoot = account.config.apiRoot?.trim();
+
+  return fetchImpl || timeoutSeconds || apiRoot
     ? {
         ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
         ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        ...(apiRoot ? { apiRoot } : {}),
       }
     : undefined;
 }

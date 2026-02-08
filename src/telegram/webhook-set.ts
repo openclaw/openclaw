@@ -9,11 +9,17 @@ export async function setTelegramWebhook(opts: {
   secret?: string;
   dropPendingUpdates?: boolean;
   network?: TelegramNetworkConfig;
+  apiRoot?: string;
 }) {
   const fetchImpl = resolveTelegramFetch(undefined, { network: opts.network });
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const apiRoot = opts.apiRoot?.trim();
+  const client: ApiClientOptions | undefined =
+    fetchImpl || apiRoot
+      ? {
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
+        }
+      : undefined;
   const bot = new Bot(opts.token, client ? { client } : undefined);
   await withTelegramApiErrorLogging({
     operation: "setWebhook",
@@ -28,11 +34,17 @@ export async function setTelegramWebhook(opts: {
 export async function deleteTelegramWebhook(opts: {
   token: string;
   network?: TelegramNetworkConfig;
+  apiRoot?: string;
 }) {
   const fetchImpl = resolveTelegramFetch(undefined, { network: opts.network });
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const apiRoot = opts.apiRoot?.trim();
+  const client: ApiClientOptions | undefined =
+    fetchImpl || apiRoot
+      ? {
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
+        }
+      : undefined;
   const bot = new Bot(opts.token, client ? { client } : undefined);
   await withTelegramApiErrorLogging({
     operation: "deleteWebhook",
