@@ -317,6 +317,16 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /**
+   * If true, skip LLM invocation entirely.
+   * Use this for multi-agent coordination where only one agent should respond,
+   * or for rate limiting / quota enforcement.
+   */
+  skip?: boolean;
+  /**
+   * Optional reason for skipping (logged for debugging).
+   */
+  skipReason?: string;
 };
 
 // agent_end hook

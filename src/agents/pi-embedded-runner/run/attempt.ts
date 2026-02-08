@@ -743,6 +743,40 @@ export async function runEmbeddedAttempt(
                 `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
               );
             }
+            // Check if a plugin requested to skip LLM invocation entirely
+            if (hookResult?.skip) {
+              log.info(
+                `hooks: skipping agent invocation${hookResult.skipReason ? `: ${hookResult.skipReason}` : ""} runId=${params.runId}`,
+              );
+              // Clean up and return early with skipped result
+              clearTimeout(abortTimer);
+              if (abortWarnTimer) {
+                clearTimeout(abortWarnTimer);
+              }
+              unsubscribe();
+              clearActiveEmbeddedRun(params.sessionId, queueHandle);
+              params.abortSignal?.removeEventListener?.("abort", onAbort);
+              sessionManager.flushPendingToolResults?.();
+              activeSession.dispose();
+              sessionLock.release();
+              return {
+                aborted: false,
+                timedOut: false,
+                skipped: true,
+                skipReason: hookResult.skipReason,
+                promptError: null,
+                sessionIdUsed: activeSession.sessionId,
+                systemPromptReport,
+                messagesSnapshot: activeSession.messages.slice(),
+                assistantTexts: [],
+                toolMetas: [],
+                lastAssistant: undefined,
+                didSendViaMessagingTool: false,
+                messagingToolSentTexts: [],
+                messagingToolSentTargets: [],
+                cloudCodeAssistFormatError: false,
+              };
+            }
           } catch (hookErr) {
             log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
           }

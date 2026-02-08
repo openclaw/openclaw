@@ -194,6 +194,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           acc?.prependContext && next.prependContext
             ? `${acc.prependContext}\n\n${next.prependContext}`
             : (next.prependContext ?? acc?.prependContext),
+        // Skip takes precedence - if any handler says skip, we skip
+        skip: next.skip ?? acc?.skip,
+        skipReason: next.skipReason ?? acc?.skipReason,
       }),
     );
   }

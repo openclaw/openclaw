@@ -95,6 +95,15 @@ export type EmbeddedRunAttemptParams = {
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   timedOut: boolean;
+  /**
+   * If true, the run was skipped by a before_agent_start hook.
+   * No LLM invocation occurred. Use for multi-agent coordination.
+   */
+  skipped?: boolean;
+  /**
+   * Reason provided by the hook for skipping (for logging/debugging).
+   */
+  skipReason?: string;
   promptError: unknown;
   sessionIdUsed: string;
   systemPromptReport?: SessionSystemPromptReport;
