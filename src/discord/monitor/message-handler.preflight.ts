@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import {
   buildMentionRegexes,
+  matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
@@ -231,9 +232,24 @@ export async function preflightDiscordMessage(
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
-  const explicitlyMentioned = Boolean(
+
+  // Check for explicit @bot mentions in mentionedUsers array
+  // Note: Discord may not populate mentionedUsers reliably if Message Content Intent is limited/disabled
+  let explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
+
+  // Fallback: If not found in mentionedUsers, check for <@botId> or <@!botId> in message text
+  // This handles cases where Discord's Message Content Intent is limited and mentionedUsers is incomplete
+  if (!explicitlyMentioned && botId && baseText) {
+    const mentionPattern = new RegExp(`<@!?${botId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`, "i");
+    explicitlyMentioned = mentionPattern.test(baseText);
+    if (explicitlyMentioned && shouldLogVerbose()) {
+      logVerbose(
+        `discord: detected bot mention via text pattern (mentionedUsers may be incomplete)`,
+      );
+    }
+  }
   const hasAnyMention = Boolean(
     !isDirectMessage &&
     (message.mentionedEveryone ||
@@ -465,12 +481,31 @@ export async function preflightDiscordMessage(
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
-      logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
+    if (mentionGate.shouldSkip) {
+      // Log detailed information to help diagnose mention detection issues
+      if (shouldLogVerbose()) {
+        // Pre-compute pattern match result to avoid processing text in log statement
+        const hasPatternMatch =
+          mentionRegexes.length > 0 && baseText
+            ? matchesMentionPatterns(baseText, mentionRegexes)
+            : false;
+        logVerbose(
+          `discord: drop guild message (mention required) - ` +
+            `botId=${botId ? "set" : "unset"}, ` +
+            `explicitMention=${explicitlyMentioned}, ` +
+            `patternMatch=${hasPatternMatch}, ` +
+            `hasAnyMention=${hasAnyMention}, ` +
+            `implicitMention=${implicitMention}`,
+        );
+      }
       logger.info(
         {
           channelId: message.channelId,
           reason: "no-mention",
+          botIdAvailable: Boolean(botId),
+          mentionPatternsConfigured: mentionRegexes.length > 0,
+          explicitMentionDetected: explicitlyMentioned,
+          hasAnyDiscordMention: hasAnyMention,
         },
         "discord: skipping guild message",
       );

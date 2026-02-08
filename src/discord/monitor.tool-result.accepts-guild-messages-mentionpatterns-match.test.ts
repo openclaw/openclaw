@@ -224,6 +224,88 @@ describe("discord tool result dispatch", () => {
     MENTION_PATTERNS_TEST_TIMEOUT_MS,
   );
 
+  it(
+    "accepts guild messages with bot mention in text even when mentionedUsers is empty",
+    async () => {
+      const { createDiscordMessageHandler } = await import("./monitor.js");
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: "/tmp/openclaw",
+          },
+        },
+        session: { store: "/tmp/openclaw-sessions.json" },
+        channels: {
+          discord: {
+            dm: { enabled: true, policy: "open" },
+            groupPolicy: "open",
+            guilds: { "*": { requireMention: true } },
+          },
+        },
+      } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+      const handler = createDiscordMessageHandler({
+        cfg,
+        discordConfig: cfg.channels.discord,
+        accountId: "default",
+        token: "token",
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: (code: number): never => {
+            throw new Error(`exit ${code}`);
+          },
+        },
+        botUserId: "bot-id",
+        guildHistories: new Map(),
+        historyLimit: 0,
+        mediaMaxBytes: 10_000,
+        textLimit: 2000,
+        replyToMode: "off",
+        dmEnabled: true,
+        groupDmEnabled: false,
+        guildEntries: { "*": { requireMention: true } },
+      });
+
+      const client = {
+        fetchChannel: vi.fn().mockResolvedValue({
+          type: ChannelType.GuildText,
+          name: "general",
+        }),
+      } as unknown as Client;
+
+      // Simulate Message Content Intent limitation: message has <@bot-id> in content
+      // but mentionedUsers array is empty (Discord API limitation)
+      await handler(
+        {
+          message: {
+            id: "m2",
+            content: "<@bot-id> hello there",
+            channelId: "c1",
+            timestamp: new Date().toISOString(),
+            type: MessageType.Default,
+            attachments: [],
+            embeds: [],
+            mentionedEveryone: false,
+            mentionedUsers: [], // Empty despite @mention in content
+            mentionedRoles: [],
+            author: { id: "u1", bot: false, username: "Ada" },
+          },
+          author: { id: "u1", bot: false, username: "Ada" },
+          member: { nickname: "Ada" },
+          guild: { id: "g1", name: "Guild" },
+          guild_id: "g1",
+        },
+        client,
+      );
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    },
+    MENTION_PATTERNS_TEST_TIMEOUT_MS,
+  );
+
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
     const cfg = {
