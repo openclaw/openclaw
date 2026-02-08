@@ -203,6 +203,7 @@ AWS Bedrock provides two ways to access models:
 - Workloads with unpredictable traffic patterns
 - Applications that need to handle traffic bursts
 - When you want automatic failover across regions
+- **Required for some models** (e.g., Claude Opus 4.6, Amazon Nova 2)
 
 **When to use foundation models:**
 
@@ -210,6 +211,37 @@ AWS Bedrock provides two ways to access models:
 - Latency-sensitive applications in a single region
 - When you have specific regional compliance requirements
 - Cost optimization (no cross-region data transfer)
+- Only available for models without inference profiles
+
+### Smart Deduplication
+
+When `includeInferenceProfiles` is enabled (default), OpenClaw automatically
+prevents duplicate model IDs by using this logic:
+
+- If a model has **both** a foundation model ID and an inference profile ID,
+  only the **inference profile** is included in discovery
+- If a model has **only** a foundation model ID (no inference profile),
+  the foundation model is included
+
+This prevents errors like:
+
+```
+Invocation of model ID amazon.nova-2-lite-v1:0 with on-demand throughput isn't supported.
+Retry your request with the ID or ARN of an inference profile that contains this model.
+```
+
+**Example:** For Claude 3 Haiku:
+
+- Foundation model: `anthropic.claude-3-haiku-20240307-v1:0` (skipped)
+- Inference profile: `us.anthropic.claude-3-haiku-20240307-v1:0` (included)
+
+**Example:** For a model without an inference profile:
+
+- Foundation model: `cohere.command-r-v1:0` (included)
+- No inference profile available
+
+This ensures you always get working model IDs while maintaining access to all
+available models.
 
 ## Notes
 

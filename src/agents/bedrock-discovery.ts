@@ -243,17 +243,10 @@ export async function discoverBedrockModels(params: {
       if (summary.modelId) {
         foundationModelsMap.set(summary.modelId, summary);
       }
-
-      if (!shouldIncludeSummary(summary, providerFilter)) {
-        continue;
-      }
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
-      );
     }
+
+    // Track which foundation models have inference profiles
+    const modelsWithProfiles = new Set<string>();
 
     // Discover inference profiles (cross-region)
     if (includeInferenceProfiles) {
@@ -263,6 +256,14 @@ export async function discoverBedrockModels(params: {
           if (profile.status !== "ACTIVE") {
             continue;
           }
+
+          // Track the underlying foundation model
+          const modelArn = profile.models?.[0]?.modelArn;
+          const modelId = modelArn?.split("/").pop();
+          if (modelId) {
+            modelsWithProfiles.add(modelId);
+          }
+
           const modelDef = inferenceProfileToModelDefinition(profile, foundationModelsMap, {
             contextWindow: defaultContextWindow,
             maxTokens: defaultMaxTokens,
@@ -284,6 +285,25 @@ export async function discoverBedrockModels(params: {
           console.warn(`[bedrock-discovery] Failed to list inference profiles: ${String(error)}`);
         }
       }
+    }
+
+    // Add foundation models that don't have inference profiles
+    for (const summary of modelsResponse.modelSummaries ?? []) {
+      if (!shouldIncludeSummary(summary, providerFilter)) {
+        continue;
+      }
+
+      // Skip foundation models that have inference profiles
+      if (includeInferenceProfiles && modelsWithProfiles.has(summary.modelId ?? "")) {
+        continue;
+      }
+
+      discovered.push(
+        toModelDefinition(summary, {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        }),
+      );
     }
 
     return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
