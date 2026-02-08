@@ -38,7 +38,7 @@ interface SecretManagerClient {
  * @param options - Provider configuration
  * @returns A SecretsProvider backed by GCP Secret Manager
  */
-export function createGcpSecretsProvider(options: GcpSecretsProviderOptions = {}): SecretsProvider {
+export function createGcpSecretsProvider(options: GcpSecretsProviderOptions): SecretsProvider {
   const cache = new Map<string, string>();
   let client: SecretManagerClient | null = null;
 
