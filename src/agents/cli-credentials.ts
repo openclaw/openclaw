@@ -15,7 +15,31 @@ const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
+const CLAUDE_CLI_KEYCHAIN_ACCOUNT_DEFAULT = "Claude Code";
+
+/**
+ * Detect the actual account name used by the keychain entry.
+ * Claude Code CLI may use the system username instead of "Claude Code".
+ */
+function detectClaudeCliKeychainAccount(
+  execSyncImpl: ExecSyncFn = execSync,
+): string {
+  try {
+    // Parse the keychain entry to find the actual account name
+    const result = execSyncImpl(
+      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" 2>&1`,
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    // Look for the "acct" attribute in the output
+    const acctMatch = result.match(/"acct"<blob>="([^"]+)"/);
+    if (acctMatch?.[1]) {
+      return acctMatch[1];
+    }
+  } catch {
+    // Fall through to default
+  }
+  return CLAUDE_CLI_KEYCHAIN_ACCOUNT_DEFAULT;
+}
 
 type CachedValue<T> = {
   value: T | null;
@@ -385,6 +409,10 @@ export function writeClaudeCliKeychainCredentials(
 ): boolean {
   const execSyncImpl = options?.execSync ?? execSync;
   try {
+    // Detect the actual account name used by the existing keychain entry
+    // Claude Code CLI may use the system username instead of "Claude Code"
+    const keychainAccount = detectClaudeCliKeychainAccount(execSyncImpl);
+
     const existingResult = execSyncImpl(
       `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w 2>/dev/null`,
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
@@ -406,12 +434,13 @@ export function writeClaudeCliKeychainCredentials(
     const newValue = JSON.stringify(existingData);
 
     execSyncImpl(
-      `security add-generic-password -U -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -a "${CLAUDE_CLI_KEYCHAIN_ACCOUNT}" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
+      `security add-generic-password -U -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -a "${keychainAccount}" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
       expires: new Date(newCredentials.expires).toISOString(),
+      account: keychainAccount,
     });
     return true;
   } catch (error) {
