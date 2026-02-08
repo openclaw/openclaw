@@ -230,7 +230,9 @@ export async function startGatewayServer(
     startDiagnosticHeartbeat();
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
-  initSubagentRegistry();
+  // NOTE: initSubagentRegistry() is intentionally called later, after the HTTP/WS server
+  // is listening. Calling it here would cause "gateway closed (1006)" errors because
+  // restoreSubagentRunsOnce() opens WS connections to announce completed runs.
   initCapabilitiesRegistry(cfgAtStart);
 
   // Initialize storage and cache (non-blocking, with automatic fallback)
@@ -577,6 +579,12 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+
+  // Initialize subagent registry AFTER the HTTP/WS server is listening.
+  // restoreSubagentRunsOnce() resumes pending announce flows which open WS
+  // connections to the gateway — the server must already be accepting connections.
+  initSubagentRegistry();
+
   scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
   const tailscaleCleanup = await startGatewayTailscaleExposure({
     tailscaleMode,
