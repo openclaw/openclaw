@@ -26,6 +26,13 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
+  it("infers timeout from network connection error codes", () => {
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTUNREACH" })).toBe("timeout");
+  });
+
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
