@@ -148,6 +148,32 @@ describe("legacy config detection", () => {
     expect(res.config?.messages?.tts?.auto).toBe("always");
     expect(res.config?.messages?.tts?.enabled).toBeUndefined();
   });
+  it("migrates agents.defaults.tools.browser.profile to browser.defaultProfile", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig, validateConfigObject } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          tools: {
+            browser: {
+              profile: "openclaw",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.defaults.tools.browser.profile → browser.defaultProfile.",
+    );
+    expect(res.config?.browser?.defaultProfile).toBe("openclaw");
+
+    const tools = res.config?.agents?.defaults?.tools as Record<string, unknown> | undefined;
+    expect(tools?.browser).toBeUndefined();
+
+    const validated = validateConfigObject(res.config ?? {});
+    expect(validated.ok).toBe(true);
+  });
   it("migrates legacy model config to agent.models + model lists", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");

@@ -78,6 +78,48 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "agents.defaults.tools.browser.profile->browser.defaultProfile",
+    describe: "Move agents.defaults.tools.browser.profile to browser.defaultProfile",
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (!defaults) {
+        return;
+      }
+      const tools = getRecord(defaults.tools);
+      if (!tools) {
+        return;
+      }
+      const legacyBrowser = getRecord(tools?.browser);
+      if (!legacyBrowser) {
+        return;
+      }
+
+      const legacyProfile =
+        typeof legacyBrowser.profile === "string" ? legacyBrowser.profile.trim() : "";
+      if (legacyProfile) {
+        const browser = ensureRecord(raw, "browser");
+        const currentDefault =
+          typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
+        if (!currentDefault) {
+          browser.defaultProfile = legacyProfile;
+          changes.push("Moved agents.defaults.tools.browser.profile → browser.defaultProfile.");
+        } else {
+          changes.push(
+            "Removed agents.defaults.tools.browser.profile (browser.defaultProfile already set).",
+          );
+        }
+      } else {
+        changes.push("Removed unsupported agents.defaults.tools.browser section.");
+      }
+
+      delete tools.browser;
+      if (Object.keys(tools).length === 0) {
+        delete defaults.tools;
+      }
+    },
+  },
+  {
     id: "agent.defaults-v2",
     describe: "Move agent config to agents.defaults and tools",
     apply: (raw, changes) => {

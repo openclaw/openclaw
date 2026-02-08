@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { resolveMatrixConfig } from "./client.js";
+import { resolveMatrixConfig } from "./client/config.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
 
 export type ResolvedMatrixAccount = {

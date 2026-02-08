@@ -1,8 +1,33 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
+
+vi.mock("./actions.js", () => ({
+  matrixMessageActions: {
+    listActions: () => [],
+    supportsAction: () => false,
+    handleAction: async () => ({ ok: true }),
+  },
+}));
+
+vi.mock("./matrix/client.js", () => ({
+  resolveMatrixAuth: async () => ({
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accessToken: "test-token",
+    encryption: false,
+  }),
+}));
+
+vi.mock("./matrix/probe.js", () => ({
+  probeMatrix: async () => ({ ok: true }),
+}));
+
+vi.mock("./matrix/send.js", () => ({
+  sendMessageMatrix: async () => ({ messageId: "evt_test", roomId: "!room:example.org" }),
+}));
 
 describe("matrix directory", () => {
   beforeEach(() => {
