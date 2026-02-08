@@ -252,6 +252,30 @@ ENV NODE_ENV=production
 CMD ["node","dist/index.js"]
 ```
 
+### CLI wrapper (optional)
+
+After running `docker-setup.sh`, a wrapper is generated at `~/.openclaw/openclaw-docker.sh`. The setup script will offer to add it to your shell profile automatically.
+
+The wrapper provides the `openclaw` command with these options:
+
+```bash
+openclaw <command>              # Uses default mode
+openclaw --docker <command>     # Force Docker usage
+openclaw --no-docker <command>  # Force native CLI usage
+```
+
+Default behavior:
+
+- If native `openclaw` CLI is installed: defaults to native
+- If not installed: defaults to Docker
+
+To change the default, set `OPENCLAW_USE_DOCKER` in your profile:
+
+```bash
+export OPENCLAW_USE_DOCKER=1  # Always default to Docker
+export OPENCLAW_USE_DOCKER=0  # Always default to native CLI
+```
+
 ### Channel setup (optional)
 
 Use the CLI container to configure channels, then restart the gateway if needed.

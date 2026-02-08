@@ -212,3 +212,88 @@ echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
 echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+
+# Generate the openclaw wrapper from template (if template exists)
+WRAPPER_FILE="$OPENCLAW_CONFIG_DIR/openclaw-docker.sh"
+WRAPPER_TEMPLATE="$ROOT_DIR/scripts/openclaw-docker-wrapper.template.sh"
+
+if [[ -f "$WRAPPER_TEMPLATE" ]]; then
+  # Determine default: use Docker if native openclaw not found
+  if command -v openclaw >/dev/null 2>&1; then
+    USE_DOCKER_DEFAULT=0
+  else
+    USE_DOCKER_DEFAULT=1
+  fi
+
+  # Generate wrapper from template
+  sed -e "s|__PROJECT_DIR__|$ROOT_DIR|g" \
+      -e "s|__USE_DOCKER_DEFAULT__|$USE_DOCKER_DEFAULT|g" \
+      "$WRAPPER_TEMPLATE" > "$WRAPPER_FILE"
+  chmod +x "$WRAPPER_FILE"
+
+  echo ""
+  echo "==> CLI wrapper"
+
+  # Detect shell profile
+  SHELL_PROFILE=""
+  if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == *"zsh"* ]]; then
+    SHELL_PROFILE="$HOME/.zshrc"
+  elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == *"bash"* ]]; then
+    SHELL_PROFILE="$HOME/.bashrc"
+  fi
+
+  SOURCE_LINE="source \"$WRAPPER_FILE\""
+
+  # Check if already sourced in profile
+  already_sourced=false
+  if [[ -n "$SHELL_PROFILE" && -f "$SHELL_PROFILE" ]]; then
+    if grep -qF "openclaw-docker.sh" "$SHELL_PROFILE" 2>/dev/null; then
+      already_sourced=true
+    fi
+  fi
+
+  if [[ "$already_sourced" == true ]]; then
+    echo "Wrapper already configured in $SHELL_PROFILE"
+  elif [[ -n "$SHELL_PROFILE" ]] && [[ -t 0 ]]; then
+    # Only prompt if stdin is a terminal (interactive mode)
+    echo "Add the 'openclaw' command to your shell?"
+    echo "This will append to $SHELL_PROFILE:"
+    echo "  $SOURCE_LINE"
+    echo ""
+    read -r -p "Add to shell profile? [Y/n] " response
+    response="${response:-Y}"
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      echo "" >> "$SHELL_PROFILE"
+      echo "# OpenClaw Docker CLI wrapper" >> "$SHELL_PROFILE"
+      echo "$SOURCE_LINE" >> "$SHELL_PROFILE"
+      echo "Added to $SHELL_PROFILE. Run 'source $SHELL_PROFILE' or open a new terminal."
+    else
+      echo "Skipped. To add manually:"
+      echo "  echo '$SOURCE_LINE' >> $SHELL_PROFILE"
+    fi
+  elif [[ -n "$SHELL_PROFILE" ]]; then
+    # Non-interactive mode: just show manual instructions
+    echo "To add the wrapper to your shell, run:"
+    echo "  echo '$SOURCE_LINE' >> $SHELL_PROFILE"
+  else
+    echo "Could not detect shell profile. Add manually to your shell config:"
+    echo "  $SOURCE_LINE"
+  fi
+
+  echo ""
+  echo "Usage:"
+  echo "  openclaw <command>              # Default mode (Docker: $( [[ $USE_DOCKER_DEFAULT == 1 ]] && echo 'yes' || echo 'no' ))"
+  echo "  openclaw --docker <command>     # Force Docker"
+  echo "  openclaw --no-docker <command>  # Force native CLI"
+  echo ""
+  echo "To change the default, set OPENCLAW_USE_DOCKER=0 or OPENCLAW_USE_DOCKER=1 in your profile."
+
+  # Final prominent reminder if profile was modified
+  if [[ -n "$SHELL_PROFILE" ]] && grep -qF "openclaw-docker.sh" "$SHELL_PROFILE" 2>/dev/null; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Run now:  source $SHELL_PROFILE"
+    echo "  Or open a new terminal to use the 'openclaw' command."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  fi
+fi
