@@ -391,11 +391,8 @@ export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
-  if (probe && !apiKey) {
-    throw new Error("Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.");
-  }
+  const probe = apiKey ? (options.probe ?? true) : false;
 
   const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));

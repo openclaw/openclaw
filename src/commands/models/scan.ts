@@ -177,9 +177,9 @@ export async function modelsScanCommand(
   }
 
   const cfg = loadConfig();
-  const probe = opts.probe ?? true;
+  const requestedProbe = opts.probe ?? true;
   let storedKey: string | undefined;
-  if (probe) {
+  if (requestedProbe) {
     try {
       const resolved = await resolveApiKeyForProvider({
         provider: "openrouter",
@@ -190,6 +190,7 @@ export async function modelsScanCommand(
       storedKey = undefined;
     }
   }
+  const probe = storedKey ? requestedProbe : false;
   const results = await withProgressTotals(
     {
       label: "Scanning OpenRouter models...",

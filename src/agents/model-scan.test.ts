@@ -64,18 +64,30 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
-  it("requires an API key when probing", async () => {
-    const fetchImpl = createFetchFixture({ data: [] });
+  it("falls back to no-probe mode when API key is missing", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-model:free",
+          name: "Free Model",
+          context_length: 8_192,
+          supported_parameters: ["tools"],
+          modality: "text",
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
     const previousKey = process.env.OPENROUTER_API_KEY;
     try {
       delete process.env.OPENROUTER_API_KEY;
-      await expect(
-        scanOpenRouterModels({
-          fetchImpl,
-          probe: true,
-          apiKey: "",
-        }),
-      ).rejects.toThrow(/Missing OpenRouter API key/);
+      const results = await scanOpenRouterModels({
+        fetchImpl,
+        probe: true,
+        apiKey: "",
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.tool.skipped).toBe(true);
+      expect(results[0]?.image.skipped).toBe(true);
     } finally {
       if (previousKey === undefined) {
         delete process.env.OPENROUTER_API_KEY;
