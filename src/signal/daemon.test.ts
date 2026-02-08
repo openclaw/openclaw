@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifySignalCliLogLine } from "./daemon.js";
+import { classifySignalCliLogLine, spawnSignalDaemon } from "./daemon.js";
 
 describe("classifySignalCliLogLine", () => {
   it("treats INFO/DEBUG as log (even if emitted on stderr)", () => {
@@ -21,5 +21,47 @@ describe("classifySignalCliLogLine", () => {
   it("returns null for empty lines", () => {
     expect(classifySignalCliLogLine("")).toBe(null);
     expect(classifySignalCliLogLine("   ")).toBe(null);
+  });
+});
+
+describe("spawnSignalDaemon cliPath validation", () => {
+  it("rejects paths with null bytes", () => {
+    expect(() =>
+      spawnSignalDaemon({
+        cliPath: "signal-cli\0--malicious",
+        httpHost: "127.0.0.1",
+        httpPort: 8080,
+      }),
+    ).toThrow(/invalid.*cli.*path/i);
+  });
+
+  it("rejects paths with shell metacharacters", () => {
+    expect(() =>
+      spawnSignalDaemon({
+        cliPath: "signal-cli; rm -rf /",
+        httpHost: "127.0.0.1",
+        httpPort: 8080,
+      }),
+    ).toThrow(/invalid.*cli.*path/i);
+  });
+
+  it("rejects paths with newlines", () => {
+    expect(() =>
+      spawnSignalDaemon({
+        cliPath: "signal-cli\n--malicious",
+        httpHost: "127.0.0.1",
+        httpPort: 8080,
+      }),
+    ).toThrow(/invalid.*cli.*path/i);
+  });
+
+  it("rejects paths starting with dash (flag injection)", () => {
+    expect(() =>
+      spawnSignalDaemon({
+        cliPath: "-malicious",
+        httpHost: "127.0.0.1",
+        httpPort: 8080,
+      }),
+    ).toThrow(/invalid.*cli.*path/i);
   });
 });
