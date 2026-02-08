@@ -68,7 +68,9 @@ function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") 
     return value;
   }
   if (mode === "pretty") {
-    return parsed.toISOString().slice(11, 19);
+    const off = -parsed.getTimezoneOffset();
+    const d = new Date(parsed.getTime() + off * 60000);
+    return d.toISOString().slice(11, 19);
   }
   return parsed.toISOString();
 }
