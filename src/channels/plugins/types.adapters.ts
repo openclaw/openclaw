@@ -80,6 +80,12 @@ export type ChannelOutboundContext = {
   threadId?: string | number | null;
   accountId?: string | null;
   deps?: OutboundSendDeps;
+  /**
+   * Root directory for resolving relative media paths (e.g., sandbox workspace).
+   * When set, relative paths like "./image.png" are resolved against this directory
+   * instead of the process working directory.
+   */
+  sandboxRoot?: string;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

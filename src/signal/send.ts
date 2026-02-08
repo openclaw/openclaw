@@ -16,6 +16,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  /** Root directory for resolving relative media paths (e.g., sandbox workspace). */
+  sandboxRoot?: string;
 };
 
 export type SignalSendResult = {
@@ -119,8 +121,9 @@ function resolveSignalRpcContext(
 async function resolveAttachment(
   mediaUrl: string,
   maxBytes: number,
+  sandboxRoot?: string,
 ): Promise<{ path: string; contentType?: string }> {
-  const media = await loadWebMedia(mediaUrl, maxBytes);
+  const media = await loadWebMedia(mediaUrl, maxBytes, { sandboxRoot });
   const saved = await saveMediaBuffer(
     media.buffer,
     media.contentType ?? undefined,
@@ -161,7 +164,7 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes);
+    const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes, opts.sandboxRoot);
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {

@@ -52,6 +52,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** Root directory for resolving relative media paths (e.g., sandbox workspace). */
+  sandboxRoot?: string;
 };
 
 type TelegramSendResult = {
@@ -322,7 +324,7 @@ export async function sendMessageTelegram(
   };
 
   if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+    const media = await loadWebMedia(mediaUrl, opts.maxBytes, { sandboxRoot: opts.sandboxRoot });
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,

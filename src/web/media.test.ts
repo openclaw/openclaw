@@ -291,4 +291,66 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
   });
+
+  it("resolves relative paths against sandboxRoot when provided", async () => {
+    // Create a temporary sandbox directory with a PDF file (non-image to avoid optimization)
+    const sandboxDir = path.join(
+      os.tmpdir(),
+      `openclaw-sandbox-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    await fs.mkdir(sandboxDir, { recursive: true });
+
+    const pdfBuffer = Buffer.from("%PDF-1.4 test content");
+    const fileName = "test-doc.pdf";
+    const filePath = path.join(sandboxDir, fileName);
+    await fs.writeFile(filePath, pdfBuffer);
+    tmpFiles.push(filePath);
+
+    // Load using relative path with sandboxRoot
+    const result = await loadWebMedia(`./${fileName}`, 1024 * 1024, { sandboxRoot: sandboxDir });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/pdf");
+    expect(result.buffer.length).toBeGreaterThan(0);
+
+    // Cleanup sandbox directory
+    await fs.rm(sandboxDir, { recursive: true, force: true });
+  });
+
+  it("ignores sandboxRoot for absolute paths", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    // Even with sandboxRoot set, absolute paths should be used as-is
+    const sandboxDir = path.join(os.tmpdir(), "fake-sandbox");
+    const result = await loadWebMedia(file, 1024 * 1024, { sandboxRoot: sandboxDir });
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("ignores sandboxRoot for HTTP URLs", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      headers: { get: () => "application/pdf" },
+      status: 200,
+    } as Response);
+
+    // sandboxRoot should have no effect on HTTP URLs
+    const result = await loadWebMedia("https://example.com/doc.pdf", 1024 * 1024, {
+      sandboxRoot: "/some/sandbox/path",
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/pdf");
+
+    fetchMock.mockRestore();
+  });
 });

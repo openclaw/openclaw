@@ -346,8 +346,9 @@ async function sendDiscordMedia(
   maxLinesPerMessage?: number,
   embeds?: unknown[],
   chunkMode?: ChunkMode,
+  sandboxRoot?: string,
 ) {
-  const media = await loadWebMedia(mediaUrl);
+  const media = await loadWebMedia(mediaUrl, undefined, { sandboxRoot });
   const chunks = text
     ? chunkDiscordTextWithMode(text, {
         maxChars: DISCORD_TEXT_LIMIT,

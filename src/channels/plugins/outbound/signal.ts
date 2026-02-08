@@ -22,7 +22,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "signal", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, sandboxRoot }) => {
     const send = deps?.sendSignal ?? sendMessageSignal;
     const maxBytes = resolveChannelMediaMaxBytes({
       cfg,
@@ -34,6 +34,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
       mediaUrl,
       maxBytes,
       accountId: accountId ?? undefined,
+      sandboxRoot: sandboxRoot ?? undefined,
     });
     return { channel: "signal", ...result };
   },
