@@ -83,6 +83,7 @@ vi.mock("../defaults.js", () => ({
 
 vi.mock("../failover-error.js", () => ({
   FailoverError: class extends Error {},
+  resolveFailoverReasonFromError: vi.fn(() => null),
   resolveFailoverStatus: vi.fn(),
 }));
 

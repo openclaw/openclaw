@@ -9,6 +9,7 @@ describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ status: 401 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
   });
@@ -45,6 +46,17 @@ describe("failover-error", () => {
     });
     expect(err?.reason).toBe("format");
     expect(err?.status).toBe(400);
+  });
+
+  it("coerces 401 auth errors with status code even without matching message text", () => {
+    // Simulates an expired OAuth token error where the HTTP status is 401
+    // but the error message may not contain recognizable auth keywords.
+    const err = coerceToFailoverError(Object.assign(new Error("request failed"), { status: 401 }), {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    });
+    expect(err?.reason).toBe("auth");
+    expect(err?.status).toBe(401);
   });
 
   it("describes non-Error values consistently", () => {
