@@ -49,6 +49,30 @@ describe("Nix integration (U3, U5, U9)", () => {
       });
     });
 
+    it("STATE_DIR respects OPENCLAW_HOME when state override is unset", async () => {
+      await withEnvOverride(
+        { OPENCLAW_HOME: "/custom/home", OPENCLAW_STATE_DIR: undefined },
+        async () => {
+          const { STATE_DIR } = await import("./config.js");
+          expect(STATE_DIR).toBe(path.resolve("/custom/home/.openclaw"));
+        },
+      );
+    });
+
+    it("CONFIG_PATH defaults to OPENCLAW_HOME/.openclaw/openclaw.json", async () => {
+      await withEnvOverride(
+        {
+          OPENCLAW_HOME: "/custom/home",
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+        async () => {
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(path.resolve("/custom/home/.openclaw/openclaw.json"));
+        },
+      );
+    });
+
     it("CONFIG_PATH defaults to ~/.openclaw/openclaw.json when env not set", async () => {
       await withEnvOverride(
         { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },

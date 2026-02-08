@@ -49,6 +49,16 @@ describe("config io paths", () => {
     });
   });
 
+  it("uses OPENCLAW_HOME for default config path", async () => {
+    await withTempHome(async (home) => {
+      const io = createConfigIO({
+        env: { OPENCLAW_HOME: path.join(home, "svc-home") } as NodeJS.ProcessEnv,
+        homedir: () => path.join(home, "ignored-home"),
+      });
+      expect(io.configPath).toBe(path.join(home, "svc-home", ".openclaw", "openclaw.json"));
+    });
+  });
+
   it("honors explicit OPENCLAW_CONFIG_PATH override", async () => {
     await withTempHome(async (home) => {
       const customPath = await writeConfig(home, ".openclaw", 20002, "custom.json");
