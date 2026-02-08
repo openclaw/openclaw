@@ -40,7 +40,7 @@ export async function verifyGroupMembership(params: {
   botId: number;
   allowFrom: NormalizedAllowFrom;
 }): Promise<MembershipResult> {
-  const { chatId, api, botId: _botId, allowFrom } = params;
+  const { chatId, api, botId, allowFrom } = params;
   const key = getChatKey(chatId);
 
   // Check cache
@@ -68,14 +68,18 @@ export async function verifyGroupMembership(params: {
     return result;
   }
 
+  // Build the full set of trusted IDs: allowFrom entries + this bot
+  const trustedIds = new Set(numericIds);
+  trustedIds.add(botId);
+
   try {
     const totalCount = await api.getChatMemberCount(Number(chatId));
 
-    // Quick reject: if total members > allowed IDs + 1 (bot), there must be untrusted members
-    if (totalCount > numericIds.length + 1) {
+    // Quick reject: if total members > trusted IDs, there must be untrusted members
+    if (totalCount > trustedIds.size) {
       const result: MembershipResult = {
         trusted: false,
-        reason: `member-count-mismatch: ${totalCount} members but only ${numericIds.length} trusted IDs + bot`,
+        reason: `member-count-mismatch: ${totalCount} members but only ${trustedIds.size} trusted IDs`,
       };
       cache.set(key, { result, timestamp: Date.now() });
       return result;
@@ -83,7 +87,7 @@ export async function verifyGroupMembership(params: {
 
     // Verify each trusted ID is actually a member
     let presentCount = 0;
-    for (const userId of numericIds) {
+    for (const userId of trustedIds) {
       try {
         const member = await api.getChatMember(Number(chatId), userId);
         const status = member.status;
@@ -95,13 +99,13 @@ export async function verifyGroupMembership(params: {
       }
     }
 
-    // Trusted if: present allowed members + 1 bot == total count
-    const trusted = presentCount + 1 === totalCount;
+    // Trusted if all members are accounted for by the trusted set
+    const trusted = presentCount === totalCount;
     const result: MembershipResult = trusted
       ? { trusted: true }
       : {
           trusted: false,
-          reason: `untrusted-members: ${totalCount} total, ${presentCount} trusted + 1 bot = ${presentCount + 1}`,
+          reason: `untrusted-members: ${totalCount} total, ${presentCount} trusted`,
         };
     cache.set(key, { result, timestamp: Date.now() });
     return result;

@@ -46,7 +46,7 @@ describe("group-membership-cache", () => {
   it("returns trusted when all members are in allowlist + bot", async () => {
     const api = makeApi({
       memberCount: 3, // 2 trusted users + 1 bot
-      members: { 111: "member", 222: "member" },
+      members: { 111: "member", 222: "member", 999: "member" },
     });
     const result = await verifyGroupMembership({
       chatId: -100123,
@@ -76,7 +76,7 @@ describe("group-membership-cache", () => {
   it("caches results (no API call on second check)", async () => {
     const api = makeApi({
       memberCount: 2,
-      members: { 111: "member" },
+      members: { 111: "member", 999: "member" },
     });
     const allowFrom = makeAllowFrom(["111"]);
 
@@ -93,7 +93,7 @@ describe("group-membership-cache", () => {
   it("invalidateGroupMembership clears cache for that chat", async () => {
     const api = makeApi({
       memberCount: 2,
-      members: { 111: "member" },
+      members: { 111: "member", 999: "member" },
     });
     const allowFrom = makeAllowFrom(["111"]);
 
@@ -149,7 +149,7 @@ describe("group-membership-cache", () => {
   it("handles members who left the group correctly", async () => {
     const api = makeApi({
       memberCount: 2, // 1 trusted user + 1 bot
-      members: { 111: "member", 222: "left" },
+      members: { 111: "member", 222: "left", 999: "member" },
     });
     const result = await verifyGroupMembership({
       chatId: -100555,
@@ -157,7 +157,7 @@ describe("group-membership-cache", () => {
       botId: 999,
       allowFrom: makeAllowFrom(["111", "222"]),
     });
-    // 1 present + 1 bot = 2 total = trusted
+    // 2 present (111 + bot 999), 222 left → 2 present = 2 total = trusted
     expect(result.trusted).toBe(true);
   });
 
@@ -172,7 +172,7 @@ describe("group-membership-cache", () => {
       botId: 999,
       allowFrom: makeAllowFrom(["111"]),
     });
-    // 0 present + 1 bot = 1, but total is 2 → untrusted
+    // 0 present (all getChatMember calls fail), but total is 2 → untrusted
     expect(result.trusted).toBe(false);
   });
 });

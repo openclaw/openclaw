@@ -203,7 +203,13 @@ async function resolveTelegramCommandAuth(params: {
 
   if (isGroup && useAccessGroups) {
     const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-    const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
+    const groupPolicy =
+      firstDefined(
+        topicConfig?.groupPolicy,
+        groupConfig?.groupPolicy,
+        telegramCfg.groupPolicy,
+        defaultGroupPolicy,
+      ) ?? "open";
     if (groupPolicy === "disabled") {
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
