@@ -128,7 +128,7 @@ export function renderMessageGroup(
   });
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}${group.messages.some(m => isArabic(extractTextCached(m.message) || '')) ? ' chat-group--rtl' : ''}">
       ${renderAvatar(group.role, {
         name: assistantName,
         avatar: opts.assistantAvatar ?? null,
@@ -215,6 +215,12 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+const ARABIC_PATTERN = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+function isArabic(text: string): boolean {
+  return ARABIC_PATTERN.test(text);
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
@@ -241,12 +247,16 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-
+  
+  // RTL Detection
+  const isRtl = markdown && isArabic(markdown);
   const bubbleClasses = [
     "chat-bubble",
     canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
+    // We remove .chat-bubble--rtl because direction is now handled by the parent .chat-group--rtl
+    // and the specific dir="auto" on the text content div
   ]
     .filter(Boolean)
     .join(" ");
@@ -272,7 +282,7 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text" dir="auto">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

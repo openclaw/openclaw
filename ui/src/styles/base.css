@@ -86,6 +86,7 @@
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display:
     "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-arabic: "Tajawal", "Cairo", sans-serif;
 
   /* Shadows - Richer with subtle color */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -196,6 +197,14 @@
 html,
 body {
   height: 100%;
+  /* Global Direction Support */
+  direction: ltr;
+}
+
+[dir="rtl"] {
+  direction: rtl;
+  --font-body: var(--font-arabic), "Space Grotesk", sans-serif;
+  --font-display: var(--font-arabic), "Space Grotesk", sans-serif;
 }
 
 body {

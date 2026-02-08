@@ -1153,6 +1153,20 @@
   background: var(--secondary);
 }
 
+.chat-queue__item--rtl {
+  direction: rtl;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.chat-queue__item--rtl .chat-queue__remove {
+  grid-column: 1;
+}
+
+.chat-queue__item--rtl .chat-queue__text {
+  grid-column: 2;
+  text-align: right;
+}
+
 .chat-queue__text {
   color: var(--chat-text);
   font-size: 13px;

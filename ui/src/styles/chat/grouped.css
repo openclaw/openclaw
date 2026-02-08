@@ -8,8 +8,8 @@
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 16px;
-  margin-left: 4px;
-  margin-right: 16px;
+  margin-inline-start: 4px;
+  margin-inline-end: 16px;
 }
 
 /* User messages on right */
@@ -139,14 +139,11 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
-.chat-bubble.has-copy {
-  padding-right: 36px;
-}
-
-.chat-copy-btn {
+/* RTL Copy Button Adjustment */
+.chat-group--rtl .chat-copy-btn {
   position: absolute;
   top: 6px;
-  right: 8px;
+  inset-inline-end: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -253,7 +250,40 @@ img.chat-avatar {
   background: var(--bg-hover);
 }
 
-/* User bubbles have different styling */
+/* RTL Copy Button Adjustment */
+.chat-group--rtl .chat-copy-btn {
+  right: auto;
+  left: 8px; /* Move to left side for RTL bubbles */
+  inset-inline-end: auto; /* Reset logical property override if needed */
+  inset-inline-start: 8px;
+}
+
+/* RTL Group Layout */
+.chat-group.chat-group--rtl {
+  flex-direction: row-reverse;
+}
+
+/* For assistant messages in RTL (on the right), align content properly */
+.chat-group.chat-group--rtl .chat-group-messages {
+  align-items: flex-end;
+}
+
+/* User messages in RTL mode should be on left */
+.chat-group.user.chat-group--rtl {
+  flex-direction: row;
+  justify-content: flex-start;
+}
+
+/* User messages in RTL mode alignment */
+.chat-group.user.chat-group--rtl .chat-group-messages {
+  align-items: flex-start;
+}
+
+/* Fix footer alignment for RTL */
+.chat-group.chat-group--rtl .chat-group-footer {
+  flex-direction: row-reverse;
+}
+
 .chat-group.user .chat-bubble {
   background: var(--accent-subtle);
   border-color: transparent;
