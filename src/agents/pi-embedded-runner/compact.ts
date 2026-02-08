@@ -23,7 +23,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -108,6 +108,21 @@ export type CompactEmbeddedPiSessionParams = {
   ownerNumbers?: string[];
 };
 
+type ResolveCompactionAgentDirParams = {
+  agentDir?: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+};
+
+export function resolveCompactionAgentDir(params: ResolveCompactionAgentDirParams): string {
+  const cfg = params.config ?? {};
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: cfg,
+  });
+  return params.agentDir ?? resolveAgentDir(cfg, agentId) ?? resolveOpenClawAgentDir();
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -120,7 +135,11 @@ export async function compactEmbeddedPiSessionDirect(
 
   const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
   const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = resolveCompactionAgentDir({
+    agentDir: params.agentDir,
+    config: params.config,
+    sessionKey: params.sessionKey,
+  });
   await ensureOpenClawModelsJson(params.config, agentDir);
   const { model, error, authStorage, modelRegistry } = resolveModel(
     provider,
