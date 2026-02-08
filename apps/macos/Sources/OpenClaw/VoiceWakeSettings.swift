@@ -48,19 +48,34 @@ struct VoiceWakeSettings: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 14) {
+                // MARK: - Voice Wake Section
+                Text("Voice Wake")
+                    .font(.headline)
+                    .padding(.top, 4)
+
                 SettingsToggleRow(
                     title: "Enable Voice Wake",
-                    subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
-                        + "Voice recognition runs fully on-device.",
+                    subtitle: "Listens for a wake phrase, then transcribes your command. Wake detection always uses Apple Speech. If a Whisper model is selected below, your command audio is sent to it after wake.",
                     binding: self.voiceWakeBinding)
                     .disabled(!voiceWakeSupported)
 
+                self.triggerTable
+
+                VoiceWakeTestCard(
+                    testState: self.$testState,
+                    isTesting: self.$isTesting,
+                    onToggle: self.toggleTest)
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                // MARK: - Push-to-Talk Section
+                Text("Push-to-Talk")
+                    .font(.headline)
+
                 SettingsToggleRow(
                     title: "Hold Right Option to talk",
-                    subtitle: """
-                    Push-to-talk mode that starts listening while you hold the key
-                    and shows the preview overlay.
-                    """,
+                    subtitle: "Hold to record, release to send. Uses transcription model below.",
                     binding: self.$state.voicePushToTalkEnabled)
                     .disabled(!voiceWakeSupported)
 
@@ -73,18 +88,35 @@ struct VoiceWakeSettings: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
+                Divider()
+                    .padding(.vertical, 4)
+
+                // MARK: - Transcription Model
+                Text("Transcription Model")
+                    .font(.headline)
+
+                Text("All transcription runs locally on your device.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                self.transcriptionModelPicker
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                // MARK: - Audio Settings
+                Text("Audio")
+                    .font(.headline)
+
                 self.localePicker
                 self.micPicker
                 self.levelMeter
 
-                VoiceWakeTestCard(
-                    testState: self.$testState,
-                    isTesting: self.$isTesting,
-                    onToggle: self.toggleTest)
+                Divider()
+                    .padding(.vertical, 4)
 
+                // MARK: - Sounds
                 self.chimeSection
-
-                self.triggerTable
 
                 Spacer(minLength: 8)
             }
@@ -215,11 +247,8 @@ struct VoiceWakeSettings: View {
 
     private var chimeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Sounds")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-            }
+            Text("Sounds")
+                .font(.headline)
 
             self.chimeRow(
                 title: "Trigger sound",
@@ -261,6 +290,8 @@ struct VoiceWakeSettings: View {
             return
         }
 
+        // Sync trigger entries to state before starting test
+        self.syncTriggerEntriesToState()
         let triggers = self.sanitizedTriggers()
         self.tester.stop()
         self.testTimeoutTask?.cancel()
@@ -417,6 +448,124 @@ struct VoiceWakeSettings: View {
             }
             if self.loadingMics {
                 ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    /// Combined selection representing Apple Speech or a specific Whisper model.
+    private enum TranscriptionModelSelection: Hashable {
+        case appleSpeech
+        case whisper(WhisperTranscriber.Model)
+
+        var displayName: String {
+            switch self {
+            case .appleSpeech:
+                return "Apple Speech (built-in, real-time)"
+            case let .whisper(model):
+                let downloaded = WhisperTranscriber.modelExists(model)
+                let suffix = downloaded ? "" : " (not downloaded)"
+                return "Whisper — \(model.displayName)\(suffix)"
+            }
+        }
+    }
+
+    private var currentTranscriptionModel: TranscriptionModelSelection {
+        switch self.state.voiceWakeBackend {
+        case .appleSpeech:
+            return .appleSpeech
+        case .whisper:
+            return .whisper(self.state.voiceWakeWhisperModel)
+        }
+    }
+
+    private func setTranscriptionModel(_ selection: TranscriptionModelSelection) {
+        switch selection {
+        case .appleSpeech:
+            self.state.voiceWakeBackend = .appleSpeech
+        case let .whisper(model):
+            self.state.voiceWakeBackend = .whisper
+            self.state.voiceWakeWhisperModel = model
+        }
+    }
+
+    private var transcriptionModelPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Model")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+                Menu {
+                    Button {
+                        self.setTranscriptionModel(.appleSpeech)
+                    } label: {
+                        HStack {
+                            Text("Apple Speech (built-in, real-time)")
+                            if self.currentTranscriptionModel == .appleSpeech {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    Divider()
+                    ForEach(WhisperTranscriber.Model.allCases) { model in
+                        Button {
+                            self.setTranscriptionModel(.whisper(model))
+                        } label: {
+                            HStack {
+                                Text("Whisper — \(model.displayName)")
+                                if !WhisperTranscriber.modelExists(model) {
+                                    Text("(not downloaded)")
+                                        .foregroundStyle(.secondary)
+                                }
+                                if case let .whisper(selected) = self.currentTranscriptionModel, selected == model {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(self.currentTranscriptionModel.displayName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(6)
+                    .frame(minWidth: self.controlWidth, maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            }
+
+            // Whisper warnings (only show when Whisper is selected)
+            if self.state.voiceWakeBackend == .whisper {
+                if !WhisperTranscriber.isAvailable() {
+                    HStack(spacing: 10) {
+                        Color.clear.frame(width: self.fieldLabelWidth, height: 1)
+                        Text("Whisper requires download. Run: brew install whisper-cpp")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if !WhisperTranscriber.modelExists(self.state.voiceWakeWhisperModel) {
+                    HStack(spacing: 10) {
+                        Color.clear.frame(width: self.fieldLabelWidth, height: 1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Model not downloaded. Run:")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text("mkdir -p ~/.local/share/whisper-cpp && curl -L -o ~/.local/share/whisper-cpp/ggml-\(self.state.voiceWakeWhisperModel.rawValue).bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-\(self.state.voiceWakeWhisperModel.rawValue).bin")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
             }
         }
     }

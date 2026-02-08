@@ -104,6 +104,10 @@ struct MenuContent: View {
             .opacity(voiceWakeSupported ? 1 : 0.5)
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
+                self.voiceBackendMenu
+            }
+            if self.showWhisperModelPicker {
+                self.whisperModelMenu
             }
             Divider()
             Button {
@@ -457,6 +461,70 @@ struct MenuContent: View {
             }
         }
         .task { await self.loadMicrophones() }
+    }
+
+    private var voiceBackendMenu: some View {
+        Menu {
+            ForEach(AppState.VoiceWakeBackend.allCases) { backend in
+                Button {
+                    self.state.voiceWakeBackend = backend
+                } label: {
+                    Label(
+                        backend.displayName,
+                        systemImage: self.state.voiceWakeBackend == backend ? "checkmark" : "")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
+            }
+            if !WhisperTranscriber.isAvailable() {
+                Divider()
+                Label("whisper-cpp not installed", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+            }
+        } label: {
+            HStack {
+                Text("Backend")
+                Spacer()
+                Text(self.state.voiceWakeBackend.displayName)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var whisperModelMenu: some View {
+        Menu {
+            ForEach(WhisperTranscriber.Model.allCases) { model in
+                let available = WhisperTranscriber.modelExists(model)
+                Button {
+                    self.state.voiceWakeWhisperModel = model
+                } label: {
+                    HStack {
+                        if self.state.voiceWakeWhisperModel == model {
+                            Image(systemName: "checkmark")
+                        }
+                        Text(model.displayName)
+                        if !available {
+                            Text("(not downloaded)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(!available)
+            }
+        } label: {
+            HStack {
+                Text("Whisper Model")
+                Spacer()
+                Text(self.state.voiceWakeWhisperModel.displayName)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var showWhisperModelPicker: Bool {
+        self.showVoiceWakeMicPicker && self.state.voiceWakeBackend == .whisper
     }
 
     private var selectedMicLabel: String {

@@ -48,6 +48,9 @@ actor VoiceWakeRuntime {
     private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
 
+    // Rolling audio buffer for Whisper handoff
+    private let rollingBuffer = RollingAudioBuffer(maxDuration: 10.0, sampleRate: 16000)
+
     // Tunables
     // Silence threshold once we've captured user speech (post-trigger).
     private let silenceWindow: TimeInterval = 2.0
@@ -82,6 +85,8 @@ actor VoiceWakeRuntime {
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
+        let backend: AppState.VoiceWakeBackend
+        let whisperModel: WhisperTranscriber.Model
     }
 
     private struct RecognitionUpdate {
@@ -100,7 +105,9 @@ actor VoiceWakeRuntime {
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                 localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
                 triggerChime: state.voiceWakeTriggerChime,
-                sendChime: state.voiceWakeSendChime)
+                sendChime: state.voiceWakeSendChime,
+                backend: state.voiceWakeBackend,
+                whisperModel: state.voiceWakeWhisperModel)
             return (enabled, config)
         }
 
@@ -177,6 +184,12 @@ actor VoiceWakeRuntime {
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(buffer)
+                // Feed rolling buffer for Whisper handoff (extract samples for thread safety)
+                if let samples = extractMonoSamples(from: buffer) {
+                    Task.detached { [weak self, samples] in
+                        await self?.rollingBuffer.appendSamples(samples)
+                    }
+                }
                 guard let rms = Self.rmsLevel(buffer: buffer) else { return }
                 Task.detached { [weak self] in
                     await self?.noteAudioLevel(rms: rms)
@@ -241,6 +254,8 @@ actor VoiceWakeRuntime {
         self.preDetectTask = nil
         self.triggerOnlyTask?.cancel()
         self.triggerOnlyTask = nil
+        // Reset rolling buffer
+        Task { await self.rollingBuffer.reset() }
         self.haltRecognitionPipeline()
         self.recognizer = nil
         self.currentConfig = nil
@@ -555,6 +570,12 @@ actor VoiceWakeRuntime {
             await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
         }
 
+        // Trigger rolling buffer if Whisper backend is selected
+        if config.backend == .whisper {
+            await self.rollingBuffer.trigger()
+            self.logger.info("voicewake whisper rolling buffer triggered")
+        }
+
         let snapshot = self.committedTranscript + self.volatileTranscript
         let attributed = Self.makeAttributed(
             committed: self.committedTranscript,
@@ -609,9 +630,17 @@ actor VoiceWakeRuntime {
         self.captureTask?.cancel()
         self.captureTask = nil
 
-        let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Get transcript - either from Whisper or Apple Speech
+        var finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If Whisper backend is selected and rolling buffer was triggered, transcribe with Whisper
+        if config.backend == .whisper, await self.rollingBuffer.triggered {
+            finalTranscript = await self.transcribeRollingBuffer(model: config.whisperModel)
+        }
+
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "finalizeCapture", fields: [
             "finalLen": "\(finalTranscript.count)",
+            "backend": config.backend.rawValue,
         ])
         // Stop further recognition events so we don't retrigger immediately with buffered audio.
         self.haltRecognitionPipeline()
@@ -653,6 +682,58 @@ actor VoiceWakeRuntime {
         }
         self.overlayToken = nil
         self.scheduleRestartRecognizer()
+    }
+
+    // MARK: - Whisper Rolling Buffer Transcription
+
+    private func transcribeRollingBuffer(model: WhisperTranscriber.Model) async -> String {
+        let duration = await self.rollingBuffer.duration
+        self.logger.info("voicewake whisper buffer duration=\(String(format: "%.2f", duration), privacy: .public)s")
+
+        // Check if we have enough audio
+        if duration < 0.5 {
+            self.logger.info("voicewake whisper buffer too short, skipping")
+            await self.rollingBuffer.reset()
+            return ""
+        }
+
+        // Update overlay to show transcribing
+        if let token = self.overlayToken {
+            await MainActor.run {
+                VoiceSessionCoordinator.shared.updatePartial(
+                    token: token,
+                    text: "Transcribing...",
+                    attributed: Self.makeAttributed(committed: "", volatile: "Transcribing...", isFinal: false))
+            }
+        }
+
+        do {
+            // Export buffer to temp file
+            let tempFile = try await self.rollingBuffer.exportToTempFile()
+            
+            self.logger.info("voicewake whisper transcribing with model=\(model.rawValue, privacy: .public)")
+
+            let transcript = try await WhisperTranscriber.shared.transcribe(
+                audioURL: tempFile,
+                model: model)
+
+            // Cleanup
+            try? FileManager.default.removeItem(at: tempFile)
+            await self.rollingBuffer.reset()
+
+            self.logger.info("voicewake whisper transcription complete len=\(transcript.count, privacy: .public)")
+            
+            // Strip the wake phrase from the transcript since Whisper captured everything
+            let triggers = self.currentConfig?.triggers ?? []
+            let stripped = WakeWordGate.stripWake(text: transcript, triggers: triggers)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            return stripped
+        } catch {
+            self.logger.error("voicewake whisper transcription failed: \(error.localizedDescription, privacy: .public)")
+            await self.rollingBuffer.reset()
+            return ""
+        }
     }
 
     // MARK: - Audio level handling

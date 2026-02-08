@@ -32,7 +32,7 @@ struct SettingsRootView: View {
                     .tag(SettingsTab.channels)
 
                 VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
+                    .tabItem { Label("Voice", systemImage: "waveform.circle") }
                     .tag(SettingsTab.voiceWake)
 
                 ConfigSettings()
@@ -188,7 +188,7 @@ enum SettingsTab: CaseIterable {
         case .cron: "Cron"
         case .config: "Config"
         case .instances: "Instances"
-        case .voiceWake: "Voice Wake"
+        case .voiceWake: "Voice"
         case .permissions: "Permissions"
         case .debug: "Debug"
         case .about: "About"

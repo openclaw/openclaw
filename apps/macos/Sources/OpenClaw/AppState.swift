@@ -129,6 +129,40 @@ final class AppState {
             forKey: voiceWakeAdditionalLocalesKey) } }
     }
 
+    /// Transcription backend for voice input.
+    enum VoiceWakeBackend: String, CaseIterable, Identifiable {
+        case appleSpeech = "apple"
+        case whisper = "whisper"
+
+        var id: String { self.rawValue }
+
+        var displayName: String {
+            switch self {
+            case .appleSpeech: return "Apple Speech (on-device)"
+            case .whisper: return "Whisper (local)"
+            }
+        }
+    }
+
+    var voiceWakeBackend: VoiceWakeBackend {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeBackend.rawValue, forKey: voiceWakeBackendKey)
+                if self.swabbleEnabled {
+                    Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+            }
+        }
+    }
+
+    var voiceWakeWhisperModel: WhisperTranscriber.Model {
+        didSet {
+            self.ifNotPreview {
+                UserDefaults.standard.set(self.voiceWakeWhisperModel.rawValue, forKey: voiceWakeWhisperModelKey)
+            }
+        }
+    }
+
     var voicePushToTalkEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.voicePushToTalkEnabled,
@@ -260,6 +294,20 @@ final class AppState {
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
         self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
+        if let storedBackend = UserDefaults.standard.string(forKey: voiceWakeBackendKey),
+           let backend = VoiceWakeBackend(rawValue: storedBackend)
+        {
+            self.voiceWakeBackend = backend
+        } else {
+            self.voiceWakeBackend = .appleSpeech
+        }
+        if let storedWhisperModel = UserDefaults.standard.string(forKey: voiceWakeWhisperModelKey),
+           let model = WhisperTranscriber.Model(rawValue: storedWhisperModel)
+        {
+            self.voiceWakeWhisperModel = model
+        } else {
+            self.voiceWakeWhisperModel = .base
+        }
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)

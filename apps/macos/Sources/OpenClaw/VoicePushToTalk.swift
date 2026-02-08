@@ -114,6 +114,7 @@ actor VoicePushToTalk {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
+    // Apple Speech state
     private var recognizer: SFSpeechRecognizer?
     // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if push-to-talk is never used.
@@ -121,6 +122,11 @@ actor VoicePushToTalk {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
+
+    // Whisper state
+    private var whisperRecordingProcess: Process?
+    private var whisperTempFile: URL?
+    private var whisperStartTime: Date?
 
     // Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
@@ -140,6 +146,8 @@ actor VoicePushToTalk {
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
+        let backend: AppState.VoiceWakeBackend
+        let whisperModel: WhisperTranscriber.Model
     }
 
     func begin() async {
@@ -183,8 +191,14 @@ actor VoicePushToTalk {
         }
 
         do {
-            try await self.startRecognition(localeID: config.localeID, sessionID: sessionID)
+            switch config.backend {
+            case .appleSpeech:
+                try await self.startRecognition(localeID: config.localeID, sessionID: sessionID)
+            case .whisper:
+                try await self.startWhisperRecording(sessionID: sessionID)
+            }
         } catch {
+            self.logger.error("ptt start failed: \(error.localizedDescription, privacy: .public)")
             await MainActor.run {
                 VoiceWakeOverlayController.shared.dismiss()
             }
@@ -199,9 +213,15 @@ actor VoicePushToTalk {
         guard self.isCapturing else { return }
         self.isCapturing = false
         let sessionID = self.sessionID
+        let config = self.activeConfig
 
-        // Stop feeding Speech buffers first, then end the request. Stopping the engine here can race with
-        // Speech draining its converter chain (and we already stop/cancel in finalize).
+        // Handle Whisper backend
+        if config?.backend == .whisper {
+            await self.endWhisperRecording(sessionID: sessionID)
+            return
+        }
+
+        // Apple Speech: Stop feeding Speech buffers first, then end the request.
         if self.tapInstalled {
             self.audioEngine?.inputNode.removeTap(onBus: 0)
             self.tapInstalled = false
@@ -272,6 +292,117 @@ actor VoicePushToTalk {
                 await self.handle(transcript: transcript, isFinal: isFinal, sessionID: sessionID)
             }
         }
+    }
+
+    // MARK: - Whisper Backend
+
+    private func startWhisperRecording(sessionID: UUID) async throws {
+        // Create temp file for recording
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ptt-\(sessionID.uuidString).wav")
+        self.whisperTempFile = tempFile
+        self.whisperStartTime = Date()
+
+        // Start recording using sox/rec (records until terminated)
+        // Using a long duration that we'll interrupt when the user releases the key
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/rec")
+        process.arguments = [
+            "-q", // quiet
+            "-r", "16000", // 16kHz (whisper expects this)
+            "-c", "1", // mono
+            "-b", "16", // 16-bit
+            tempFile.path,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        self.whisperRecordingProcess = process
+
+        do {
+            try process.run()
+            self.logger.info("whisper recording started: \(tempFile.path, privacy: .public)")
+        } catch {
+            self.whisperTempFile = nil
+            self.whisperRecordingProcess = nil
+            throw error
+        }
+
+        // Update overlay to show "Recording..." since we don't have streaming transcription
+        if let token = self.overlayToken {
+            let prefix = self.adoptedPrefix
+            let text = prefix.isEmpty ? "Recording..." : "\(prefix) (recording...)"
+            let volatileText = prefix.isEmpty ? "Recording..." : " (recording...)"
+            await MainActor.run {
+                VoiceSessionCoordinator.shared.updatePartial(
+                    token: token,
+                    text: text,
+                    attributed: Self.makeAttributed(
+                        committed: prefix,
+                        volatile: volatileText,
+                        isFinal: false))
+            }
+        }
+    }
+
+    private func endWhisperRecording(sessionID: UUID) async {
+        guard sessionID == self.sessionID else { return }
+
+        // Terminate the recording process
+        if let process = self.whisperRecordingProcess, process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        self.whisperRecordingProcess = nil
+
+        guard let tempFile = self.whisperTempFile else {
+            await self.finalize(transcriptOverride: "", reason: "noTempFile", sessionID: sessionID)
+            return
+        }
+
+        // Check recording duration - if too short, skip transcription
+        let duration = Date().timeIntervalSince(self.whisperStartTime ?? Date())
+        if duration < 0.5 {
+            self.logger.info("whisper recording too short (\(duration, privacy: .public)s), skipping")
+            self.cleanupWhisperTempFile()
+            await self.finalize(transcriptOverride: "", reason: "tooShort", sessionID: sessionID)
+            return
+        }
+
+        // Update overlay to show transcribing
+        if let token = self.overlayToken {
+            await MainActor.run {
+                VoiceSessionCoordinator.shared.updatePartial(
+                    token: token,
+                    text: "Transcribing...",
+                    attributed: Self.makeAttributed(committed: "", volatile: "Transcribing...", isFinal: false))
+            }
+        }
+
+        // Run whisper transcription
+        let model = self.activeConfig?.whisperModel ?? .base
+        self.logger.info("whisper transcribing with model=\(model.rawValue, privacy: .public)")
+
+        do {
+            let transcript = try await WhisperTranscriber.shared.transcribe(
+                audioURL: tempFile,
+                model: model)
+            self.logger.info("whisper transcript: \(transcript, privacy: .public)")
+            self.cleanupWhisperTempFile()
+            await self.finalize(transcriptOverride: transcript, reason: "whisperComplete", sessionID: sessionID)
+        } catch {
+            self.logger.error("whisper transcription failed: \(error.localizedDescription, privacy: .public)")
+            self.cleanupWhisperTempFile()
+            await self.finalize(transcriptOverride: "", reason: "whisperError", sessionID: sessionID)
+        }
+    }
+
+    private func cleanupWhisperTempFile() {
+        if let tempFile = self.whisperTempFile {
+            try? FileManager.default.removeItem(at: tempFile)
+        }
+        self.whisperTempFile = nil
+        self.whisperStartTime = nil
     }
 
     private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) async {
@@ -373,7 +504,9 @@ actor VoicePushToTalk {
             micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
             localeID: state.voiceWakeLocaleID,
             triggerChime: state.voiceWakeTriggerChime,
-            sendChime: state.voiceWakeSendChime)
+            sendChime: state.voiceWakeSendChime,
+            backend: state.voiceWakeBackend,
+            whisperModel: state.voiceWakeWhisperModel)
     }
 
     // MARK: - Test helpers
