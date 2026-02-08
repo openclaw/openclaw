@@ -3,8 +3,20 @@ import { normalizeTargetForProvider } from "../infra/outbound/target-normalizati
 import { truncateUtf16Safe } from "../utils.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
-const TOOL_RESULT_MAX_CHARS = 8000;
-const TOOL_ERROR_MAX_CHARS = 400;
+/**
+ * Maximum characters for tool result content passed back to the model.
+ * Increased from 8000 to preserve more context from large outputs like
+ * git diffs, test results, and file contents that help the model
+ * understand the full state of operations.
+ */
+const TOOL_RESULT_MAX_CHARS = 16000;
+
+/**
+ * Maximum characters for tool error messages passed back to the model.
+ * Increased from 400 to preserve stack traces and diagnostic context
+ * that help the model understand and recover from failures.
+ */
+const TOOL_ERROR_MAX_CHARS = 2000;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
