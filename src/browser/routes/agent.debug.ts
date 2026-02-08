@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { assertSandboxPath } from "../agents/sandbox-paths.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
-import { toBoolean, toStringOrEmpty } from "./utils.js";
+import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+
+const TRACE_ROOT = "/tmp/openclaw/traces";
 
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
@@ -131,9 +134,19 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const id = crypto.randomUUID();
-      const dir = "/tmp/openclaw";
-      await fs.mkdir(dir, { recursive: true });
-      const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
+      await fs.mkdir(TRACE_ROOT, { recursive: true });
+      const rawPath = out.trim() || path.join(TRACE_ROOT, `browser-trace-${id}.zip`);
+      let tracePath = "";
+      try {
+        const validated = await assertSandboxPath({
+          filePath: rawPath,
+          cwd: TRACE_ROOT,
+          root: TRACE_ROOT,
+        });
+        tracePath = validated.resolved;
+      } catch {
+        return jsonError(res, 400, `trace path must stay within ${TRACE_ROOT}`);
+      }
       await pw.traceStopViaPlaywright({
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
@@ -142,7 +155,7 @@ export function registerBrowserAgentDebugRoutes(
       res.json({
         ok: true,
         targetId: tab.targetId,
-        path: path.resolve(tracePath),
+        path: tracePath,
       });
     } catch (err) {
       handleRouteError(ctx, res, err);

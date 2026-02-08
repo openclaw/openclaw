@@ -2,6 +2,7 @@ import type { Page } from "playwright-core";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertSandboxPath } from "../agents/sandbox-paths.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -17,10 +18,35 @@ import {
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
 
+const DOWNLOAD_ROOT = "/tmp/openclaw/downloads";
+
+function sanitizeDownloadName(fileName: string): string {
+  const trimmed = fileName.trim() ? fileName.trim() : "download.bin";
+  const safe = trimmed.replace(/[\\/]+/g, "_").replace(/\.+/g, ".");
+  return safe || "download.bin";
+}
+
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
-  const safeName = fileName.trim() ? fileName.trim() : "download.bin";
-  return path.join("/tmp/openclaw/downloads", `${id}-${safeName}`);
+  const safeName = sanitizeDownloadName(fileName);
+  return path.join(DOWNLOAD_ROOT, `${id}-${safeName}`);
+}
+
+async function resolveDownloadPath(rawPath: string): Promise<string> {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    throw new Error("path is required");
+  }
+  try {
+    const { resolved } = await assertSandboxPath({
+      filePath: trimmed,
+      cwd: DOWNLOAD_ROOT,
+      root: DOWNLOAD_ROOT,
+    });
+    return resolved;
+  } catch {
+    throw new Error(`download path must stay within ${DOWNLOAD_ROOT}`);
+  }
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
@@ -180,13 +206,14 @@ export async function waitForDownloadViaPlaywright(opts: {
       throw new Error("Download was superseded by another waiter");
     }
     const suggested = download.suggestedFilename?.() || "download.bin";
-    const outPath = opts.path?.trim() || buildTempDownloadPath(suggested);
+    const rawPath = opts.path?.trim() || buildTempDownloadPath(suggested);
+    const outPath = await resolveDownloadPath(rawPath);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await download.saveAs?.(outPath);
     return {
       url: download.url?.() || "",
       suggestedFilename: suggested,
-      path: path.resolve(outPath),
+      path: outPath,
     };
   } catch (err) {
     waiter.cancel();
@@ -211,10 +238,7 @@ export async function downloadViaPlaywright(opts: {
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);
-  const outPath = String(opts.path ?? "").trim();
-  if (!outPath) {
-    throw new Error("path is required");
-  }
+  const outPath = await resolveDownloadPath(String(opts.path ?? ""));
 
   state.armIdDownload = bumpDownloadArmId();
   const armId = state.armIdDownload;
@@ -242,7 +266,7 @@ export async function downloadViaPlaywright(opts: {
     return {
       url: download.url?.() || "",
       suggestedFilename: suggested,
-      path: path.resolve(outPath),
+      path: outPath,
     };
   } catch (err) {
     waiter.cancel();

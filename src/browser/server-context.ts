@@ -645,6 +645,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (msg.includes("not found")) {
       return { status: 404, message: msg };
     }
+    if (msg.includes("download path must stay within")) {
+      return { status: 400, message: msg };
+    }
     return null;
   };
 

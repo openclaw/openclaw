@@ -35,6 +35,8 @@ async function importModule() {
 }
 
 describe("pw-tools-core", () => {
+  const downloadRoot = "/tmp/openclaw/downloads";
+
   beforeEach(() => {
     currentPage = null;
     currentRefLocator = null;
@@ -68,7 +70,7 @@ describe("pw-tools-core", () => {
     currentPage = { on, off };
 
     const mod = await importModule();
-    const targetPath = path.resolve("/tmp/file.bin");
+    const targetPath = path.join(downloadRoot, "file.bin");
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -84,6 +86,41 @@ describe("pw-tools-core", () => {
     expect(saveAs).toHaveBeenCalledWith(targetPath);
     expect(res.path).toBe(targetPath);
   });
+
+  it("rejects download paths outside the sandbox root", async () => {
+    let downloadHandler: ((download: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") {
+        downloadHandler = handler;
+      }
+    });
+    const off = vi.fn();
+
+    const saveAs = vi.fn(async () => {});
+    const download = {
+      url: () => "https://example.com/file.bin",
+      suggestedFilename: () => "file.bin",
+      saveAs,
+    };
+
+    currentPage = { on, off };
+
+    const mod = await importModule();
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      path: "/tmp/file.bin",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    expect(downloadHandler).toBeDefined();
+    downloadHandler?.(download);
+
+    await expect(p).rejects.toThrow(/download path must stay within/);
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
   it("clicks a ref and saves the resulting download", async () => {
     let downloadHandler: ((download: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
@@ -106,7 +143,7 @@ describe("pw-tools-core", () => {
     currentPage = { on, off };
 
     const mod = await importModule();
-    const targetPath = path.resolve("/tmp/report.pdf");
+    const targetPath = path.join(downloadRoot, "report.pdf");
     const p = mod.downloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
@@ -115,15 +152,39 @@ describe("pw-tools-core", () => {
       timeoutMs: 1000,
     });
 
-    await Promise.resolve();
+    for (let i = 0; i < 25 && !downloadHandler; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(downloadHandler).toBeDefined();
-    expect(click).toHaveBeenCalledWith({ timeout: 1000 });
 
     downloadHandler?.(download);
 
     const res = await p;
+    expect(click).toHaveBeenCalledWith({ timeout: 1000 });
     expect(saveAs).toHaveBeenCalledWith(targetPath);
     expect(res.path).toBe(targetPath);
+  });
+
+  it("rejects click-download paths outside the sandbox root", async () => {
+    const on = vi.fn();
+    const off = vi.fn();
+
+    const click = vi.fn(async () => {});
+    currentRefLocator = { click };
+
+    currentPage = { on, off };
+
+    const mod = await importModule();
+    await expect(
+      mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: "/tmp/report.pdf",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/download path must stay within/);
+    expect(click).not.toHaveBeenCalled();
   });
   it("waits for a matching response and returns its body", async () => {
     let responseHandler: ((resp: unknown) => void) | undefined;
