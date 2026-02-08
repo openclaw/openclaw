@@ -3,6 +3,7 @@ import type { loadConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { getResolvedLoggerSettings } from "../logging.js";
+import { isLoopbackHost } from "./net.js";
 
 export function logGatewayStartup(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -10,7 +11,11 @@ export function logGatewayStartup(params: {
   bindHosts?: string[];
   port: number;
   tlsEnabled?: boolean;
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+  controlUiEnabled?: boolean;
+  log: {
+    info: (msg: string, meta?: Record<string, unknown>) => void;
+    warn: (msg: string, meta?: Record<string, unknown>) => void;
+  };
   isNixMode: boolean;
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
@@ -36,5 +41,13 @@ export function logGatewayStartup(params: {
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
+  }
+  // Warn if Control UI is explicitly enabled on non-loopback address
+  if (params.controlUiEnabled === true && !isLoopbackHost(params.bindHost)) {
+    params.log.warn(
+      "Control UI is enabled on a non-loopback address. " +
+        "This may expose the Control UI to the network. " +
+        "Consider using gateway.bind: 'loopback' or enabling gateway.controlUi.strictLoopback.",
+    );
   }
 }

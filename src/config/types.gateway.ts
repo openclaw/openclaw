@@ -74,6 +74,11 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /**
+   * Reject non-loopback Control UI requests with HTTP 403 (default: false).
+   * When false, non-loopback requests are allowed with a warning.
+   */
+  strictLoopback?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password";

@@ -85,6 +85,34 @@ keep it off unless you are actively debugging and can revert quickly.
 
 `openclaw security audit` warns when this setting is enabled.
 
+### Control UI Loopback Guard
+
+By default, the Control UI is accessible from any address when the Gateway binds
+to a non-loopback address (e.g., `0.0.0.0` or LAN). This can expose the Control
+UI to the network, which is a security risk.
+
+**Loopback Guard Behavior:**
+
+- Requests from loopback addresses (`127.0.0.1`, `::1`, `::ffff:127.0.0.1`) are
+  always allowed without warning.
+- Requests from non-loopback addresses trigger a warning in the logs.
+- In **strict mode**, non-loopback requests to the Control UI are rejected with
+  HTTP 403.
+
+**Configuration:**
+
+```yaml
+gateway:
+  controlUi:
+    strictLoopback: true # Reject non-loopback Control UI requests with 403
+```
+
+**Recommendations:**
+
+- Use `gateway.bind: "loopback"` (default) to avoid exposing the Control UI.
+- If you must bind to LAN, enable `strictLoopback` to reject non-local requests.
+- Use Tailscale Serve for remote access instead of binding to LAN.
+
 ## Reverse Proxy Configuration
 
 If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
