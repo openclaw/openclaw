@@ -356,8 +356,7 @@ export async function runAgentTurnWithFallback(params: {
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
+                if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
               }
