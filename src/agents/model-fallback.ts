@@ -247,8 +247,11 @@ export async function runWithModelFallback<T>(params: {
       });
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
+      if (profileIds.length > 0 && !isAnyProfileAvailable && i > 0) {
         // All profiles for this provider are in cooldown; skip without attempting
+        // BUT only if this isn't the first candidate we are trying in this run.
+        // This allows trying a model that was specifically requested or is next in line
+        // even if the provider is technically in cooldown from a previous interaction.
         attempts.push({
           provider: candidate.provider,
           model: candidate.model,

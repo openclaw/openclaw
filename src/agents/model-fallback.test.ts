@@ -160,7 +160,11 @@ describe("runWithModelFallback", () => {
       if (providerId === "fallback") {
         return "ok";
       }
-      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+      // Simulate a rate limit error so the fallback logic catches it and moves to the next candidate
+      const error = Object.assign(new Error(`simulated rate limit: ${providerId}/${modelId}`), {
+        status: 429,
+      });
+      throw error;
     });
 
     try {
@@ -172,8 +176,17 @@ describe("runWithModelFallback", () => {
         run,
       });
 
+      // With the "safety valve" logic, we expect the first attempt on a provider
+      // to PROCEED even if in cooldown, so it should fail with the error from `run`
+      // rather than skipping to the fallback immediately.
       expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      // Original expectation was: [["fallback", "ok-model"]]
+      // New expectation: The primary (provider/m1) is attempted first (safety valve), fails,
+      // and THEN it falls back.
+      expect(run.mock.calls).toEqual([
+        [provider, "m1"],
+        ["fallback", "ok-model"],
+      ]);
       expect(result.attempts[0]?.reason).toBe("rate_limit");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
