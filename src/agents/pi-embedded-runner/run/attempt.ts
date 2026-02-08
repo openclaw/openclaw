@@ -1069,16 +1069,18 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
+        const runSucceeded = !aborted && !promptError;
+        const runError = promptError ? describeUnknownError(promptError) : undefined;
+
+        // Run agent_end hooks to allow plugins to analyze the conversation.
+        // This is fire-and-forget, so we don't await.
         if (hookRunner?.hasHooks("agent_end")) {
           hookRunner
             .runAgentEnd(
               {
                 messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? describeUnknownError(promptError) : undefined,
+                success: runSucceeded,
+                error: runError,
                 durationMs: Date.now() - promptStartedAt,
               },
               {
@@ -1091,6 +1093,28 @@ export async function runEmbeddedAttempt(
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
+            });
+        }
+
+        // Run agent_error hooks only for failed runs.
+        if (!runSucceeded && hookRunner?.hasHooks("agent_error")) {
+          hookRunner
+            .runAgentError(
+              {
+                messages: messagesSnapshot,
+                success: false,
+                error: runError ?? "agent run failed",
+                durationMs: Date.now() - promptStartedAt,
+              },
+              {
+                agentId: hookAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+              },
+            )
+            .catch((err) => {
+              log.warn(`agent_error hook failed: ${err}`);
             });
         }
       } finally {

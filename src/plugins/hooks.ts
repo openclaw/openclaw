@@ -10,9 +10,12 @@ import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
+  PluginHookAgentErrorEvent,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeRecallEvent,
+  PluginHookBeforeRecallResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
@@ -20,6 +23,8 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
+  PluginHookGatewayPreStartEvent,
+  PluginHookGatewayPreStopEvent,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
@@ -41,10 +46,13 @@ import type {
 // Re-export types for consumers
 export type {
   PluginHookAgentContext,
+  PluginHookAgentErrorEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
+  PluginHookBeforeRecallEvent,
+  PluginHookBeforeRecallResult,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
@@ -65,6 +73,8 @@ export type {
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
   PluginHookGatewayContext,
+  PluginHookGatewayPreStartEvent,
+  PluginHookGatewayPreStopEvent,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
 };
@@ -99,6 +109,54 @@ function getHooksForName<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const shouldThrowForFailure = (hook: PluginHookRegistration): boolean =>
+    !catchErrors || hook.mode === "fail-closed";
+
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return promise;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`hook timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  };
+
+  const evaluateCondition = async <K extends PluginHookName>(
+    hook: PluginHookRegistration<K>,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<boolean> => {
+    if (!hook.condition) {
+      return true;
+    }
+    const shouldRun = await hook.condition(event, ctx);
+    return shouldRun;
+  };
+
+  const handleHookError = <K extends PluginHookName>(
+    hookName: K,
+    hook: PluginHookRegistration<K>,
+    err: unknown,
+  ): never | void => {
+    const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
+    if (shouldThrowForFailure(hook)) {
+      throw new Error(msg, { cause: err });
+    }
+    logger?.error(msg);
+  };
 
   /**
    * Run a hook that doesn't return a value (fire-and-forget style).
@@ -118,14 +176,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     const promises = hooks.map(async (hook) => {
       try {
-        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
-      } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
+        const shouldRun = await evaluateCondition(hook, event, ctx);
+        if (!shouldRun) {
+          return;
         }
+        await withTimeout(
+          Promise.resolve(
+            (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx),
+          ),
+          hook.timeoutMs ?? 0,
+        );
+      } catch (err) {
+        handleHookError(hookName, hook, err);
       }
     });
 
@@ -153,9 +215,16 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
-        )(event, ctx);
+        const shouldRun = await evaluateCondition(hook, event, ctx);
+        if (!shouldRun) {
+          continue;
+        }
+        const handlerResult = await withTimeout(
+          Promise.resolve(
+            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>)(event, ctx),
+          ),
+          hook.timeoutMs ?? 0,
+        );
 
         if (handlerResult !== undefined && handlerResult !== null) {
           if (mergeResults && result !== undefined) {
@@ -165,12 +234,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           }
         }
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError(hookName, hook, err);
       }
     }
 
@@ -205,6 +269,27 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_recall hook.
+   * Allows plugins to mutate memory recall query parameters before vector search.
+   * Runs sequentially and applies last-writer-wins merge semantics.
+   */
+  async function runBeforeRecall(
+    event: PluginHookBeforeRecallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeRecallResult | undefined> {
+    return runModifyingHook<"before_recall", PluginHookBeforeRecallResult>(
+      "before_recall",
+      event,
+      ctx,
+      (acc, next) => ({
+        query: next.query ?? acc?.query,
+        maxResults: next.maxResults ?? acc?.maxResults,
+        minScore: next.minScore ?? acc?.minScore,
+      }),
+    );
+  }
+
+  /**
    * Run agent_end hook.
    * Allows plugins to analyze completed conversations.
    * Runs in parallel (fire-and-forget).
@@ -232,6 +317,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    */
   async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
     return runVoidHook("llm_output", event, ctx);
+  }
+
+  /**
+   * Run agent_error hook.
+   * Allows plugins to handle failed agent runs separately from success completion hooks.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAgentError(
+    event: PluginHookAgentErrorEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("agent_error", event, ctx);
   }
 
   /**
@@ -371,6 +468,23 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
+        if (hook.condition) {
+          const gated = hook.condition({ ...event, message: current } as never, ctx as never);
+          if (typeof (gated as Promise<unknown>)?.then === "function") {
+            const msg =
+              `[hooks] tool_result_persist condition from ${hook.pluginId} returned a Promise; ` +
+              "sync hooks require synchronous conditions.";
+            if (shouldThrowForFailure(hook)) {
+              throw new Error(msg);
+            }
+            logger?.warn?.(msg);
+            continue;
+          }
+          if (gated === false) {
+            continue;
+          }
+        }
+
         // oxlint-disable-next-line typescript/no-explicit-any
         const out = (hook.handler as any)({ ...event, message: current }, ctx) as
           | PluginHookToolResultPersistResult
@@ -383,7 +497,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           const msg =
             `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
             `this hook is synchronous and the result was ignored.`;
-          if (catchErrors) {
+          if (!shouldThrowForFailure(hook)) {
             logger?.warn?.(msg);
             continue;
           }
@@ -395,12 +509,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           current = next;
         }
       } catch (err) {
-        const msg = `[hooks] tool_result_persist handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError("tool_result_persist", hook, err);
       }
     }
 
@@ -436,6 +545,28 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
+
+  /**
+   * Run gateway_pre_start hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runGatewayPreStart(
+    event: PluginHookGatewayPreStartEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("gateway_pre_start", event, ctx);
+  }
+
+  /**
+   * Run gateway_pre_stop hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runGatewayPreStop(
+    event: PluginHookGatewayPreStopEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("gateway_pre_stop", event, ctx);
+  }
 
   /**
    * Run gateway_start hook.
@@ -482,7 +613,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeAgentStart,
     runLlmInput,
     runLlmOutput,
+    runBeforeRecall,
     runAgentEnd,
+    runAgentError,
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,
@@ -498,6 +631,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runSessionStart,
     runSessionEnd,
     // Gateway hooks
+    runGatewayPreStart,
+    runGatewayPreStop,
     runGatewayStart,
     runGatewayStop,
     // Utility

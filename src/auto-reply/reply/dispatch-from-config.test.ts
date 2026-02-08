@@ -21,6 +21,7 @@ const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
     runMessageReceived: vi.fn(async () => {}),
+    runMessageSent: vi.fn(async () => {}),
   },
 }));
 
@@ -77,6 +78,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockReset();
+    hookMocks.runner.runMessageSent.mockReset();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
@@ -368,6 +370,39 @@ describe("dispatchReplyFromConfig", () => {
         channelId: "telegram",
         accountId: "acc-1",
         conversationId: "telegram:999",
+      }),
+    );
+  });
+
+  it("emits message_sent hook for final reply delivery", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "slack:C123",
+        content: "final hello",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "acc-1",
       }),
     );
   });

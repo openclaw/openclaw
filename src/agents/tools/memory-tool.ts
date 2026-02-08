@@ -5,6 +5,7 @@ import type { MemorySearchResult } from "../../memory/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
@@ -56,6 +57,9 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      let effectiveQuery = query;
+      let effectiveMaxResults = maxResults;
+      let effectiveMinScore = minScore;
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -64,14 +68,40 @@ export function createMemorySearchTool(options: {
         return jsonResult({ results: [], disabled: true, error });
       }
       try {
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("before_recall")) {
+          const hookResult = await hookRunner.runBeforeRecall(
+            {
+              query,
+              maxResults,
+              minScore,
+            },
+            {
+              agentId,
+              sessionKey: options.agentSessionKey,
+            },
+          );
+          if (typeof hookResult?.query === "string" && hookResult.query.trim()) {
+            effectiveQuery = hookResult.query;
+          }
+          if (
+            typeof hookResult?.maxResults === "number" &&
+            Number.isFinite(hookResult.maxResults)
+          ) {
+            effectiveMaxResults = hookResult.maxResults;
+          }
+          if (typeof hookResult?.minScore === "number" && Number.isFinite(hookResult.minScore)) {
+            effectiveMinScore = hookResult.minScore;
+          }
+        }
         const citationsMode = resolveMemoryCitationsMode(cfg);
         const includeCitations = shouldIncludeCitations({
           mode: citationsMode,
           sessionKey: options.agentSessionKey,
         });
-        const rawResults = await manager.search(query, {
-          maxResults,
-          minScore,
+        const rawResults = await manager.search(effectiveQuery, {
+          maxResults: effectiveMaxResults,
+          minScore: effectiveMinScore,
           sessionKey: options.agentSessionKey,
         });
         const status = manager.status();

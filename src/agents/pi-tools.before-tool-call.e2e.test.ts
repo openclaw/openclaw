@@ -11,12 +11,14 @@ describe("before_tool_call hook integration", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -34,6 +36,7 @@ describe("before_tool_call hook integration", () => {
     await tool.execute("call-1", { path: "/tmp/file" }, undefined, undefined);
 
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+    expect(hookRunner.runAfterToolCall).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledWith("call-1", { path: "/tmp/file" }, undefined, undefined);
   });
 
@@ -106,6 +109,53 @@ describe("before_tool_call hook integration", () => {
       },
     );
   });
+
+  it("emits after_tool_call on success", async () => {
+    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    await tool.execute("call-6", { cmd: "pwd" }, undefined, undefined);
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: undefined,
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
+  });
+
+  it("emits after_tool_call with error when execution throws", async () => {
+    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    const execute = vi.fn().mockRejectedValue(new Error("tool exploded"));
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+
+    await expect(tool.execute("call-7", { cmd: "pwd" }, undefined, undefined)).rejects.toThrow(
+      "tool exploded",
+    );
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: "tool exploded",
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+      }),
+    );
+  });
 });
 
 describe("before_tool_call hook deduplication (#15502)", () => {
@@ -150,19 +200,23 @@ describe("before_tool_call hook integration for client tools", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   });
 
   it("passes modified params to client tool callbacks", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "before_tool_call" || name === "after_tool_call",
+    );
     hookRunner.runBeforeToolCall.mockResolvedValue({ params: { extra: true } });
     const onClientToolCall = vi.fn();
     const [tool] = toClientToolDefinitions(
@@ -186,5 +240,17 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "client_tool",
+        params: { value: "ok", extra: true },
+        error: undefined,
+      }),
+      expect.objectContaining({
+        toolName: "client_tool",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
   });
 });

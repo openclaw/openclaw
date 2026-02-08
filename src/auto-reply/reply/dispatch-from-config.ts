@@ -148,6 +148,35 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
+  const emitMessageSentHook = async (args: {
+    to: string;
+    content: string;
+    success: boolean;
+    error?: string;
+    channelId: string;
+    conversationId?: string;
+  }) => {
+    if (!hookRunner?.hasHooks("message_sent")) {
+      return;
+    }
+    try {
+      await hookRunner.runMessageSent(
+        {
+          to: args.to,
+          content: args.content,
+          success: args.success,
+          error: args.error,
+        },
+        {
+          channelId: args.channelId,
+          accountId: ctx.AccountId,
+          conversationId: args.conversationId,
+        },
+      );
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_sent hook failed: ${String(err)}`);
+    }
+  };
   if (hookRunner?.hasHooks("message_received")) {
     const timestamp =
       typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
@@ -221,14 +250,14 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
-      return;
+      return false;
     }
     if (abortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReply({
       payload,
@@ -241,9 +270,20 @@ export async function dispatchReplyFromConfig(params: {
       abortSignal,
       mirror,
     });
+    const channelId = originatingChannel.toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+    await emitMessageSentHook({
+      to: originatingTo,
+      content: payload.text ?? "",
+      success: result.ok,
+      error: result.ok ? undefined : (result.error ?? "route-reply failed"),
+      channelId,
+      conversationId,
+    });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    return result.ok;
   };
 
   markProcessing();
@@ -257,26 +297,24 @@ export async function dispatchReplyFromConfig(params: {
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
-          cfg,
-        });
-        queuedFinal = result.ok;
-        if (result.ok) {
+        const sent = await sendPayloadAsync(payload);
+        queuedFinal = sent;
+        if (sent) {
           routedFinalCount += 1;
         }
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(payload);
+        const didQueue = dispatcher.sendFinalReply(payload);
+        queuedFinal = didQueue;
+        const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+        const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+        void emitMessageSentHook({
+          to: ctx.To ?? "",
+          content: payload.text ?? "",
+          success: didQueue,
+          error: didQueue ? undefined : "reply not queued",
+          channelId,
+          conversationId,
+        });
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
@@ -311,7 +349,17 @@ export async function dispatchReplyFromConfig(params: {
                 if (shouldRouteToOriginating) {
                   await sendPayloadAsync(ttsPayload, undefined, false);
                 } else {
-                  dispatcher.sendToolResult(ttsPayload);
+                  const didQueue = dispatcher.sendToolResult(ttsPayload);
+                  const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+                  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+                  void emitMessageSentHook({
+                    to: ctx.To ?? "",
+                    content: ttsPayload.text ?? "",
+                    success: didQueue,
+                    error: didQueue ? undefined : "reply not queued",
+                    channelId,
+                    conversationId,
+                  });
                 }
               };
               return run();
@@ -338,7 +386,17 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              const didQueue = dispatcher.sendBlockReply(ttsPayload);
+              const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+              const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+              void emitMessageSentHook({
+                to: ctx.To ?? "",
+                content: ttsPayload.text ?? "",
+                success: didQueue,
+                error: didQueue ? undefined : "reply not queued",
+                channelId,
+                conversationId,
+              });
             }
           };
           return run();
@@ -361,27 +419,24 @@ export async function dispatchReplyFromConfig(params: {
         ttsAuto: sessionTtsAuto,
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        // Route final reply to originating channel.
-        const result = await routeReply({
-          payload: ttsReply,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
-          cfg,
-        });
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
-        queuedFinal = result.ok || queuedFinal;
-        if (result.ok) {
+        const sent = await sendPayloadAsync(ttsReply);
+        queuedFinal = sent || queuedFinal;
+        if (sent) {
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        const didQueue = dispatcher.sendFinalReply(ttsReply);
+        queuedFinal = didQueue || queuedFinal;
+        const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+        const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+        void emitMessageSentHook({
+          to: ctx.To ?? "",
+          content: ttsReply.text ?? "",
+          success: didQueue,
+          error: didQueue ? undefined : "reply not queued",
+          channelId,
+          conversationId,
+        });
       }
     }
 
@@ -412,27 +467,24 @@ export async function dispatchReplyFromConfig(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReply({
-              payload: ttsOnlyPayload,
-              channel: originatingChannel,
-              to: originatingTo,
-              sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              threadId: ctx.MessageThreadId,
-              cfg,
-            });
-            queuedFinal = result.ok || queuedFinal;
-            if (result.ok) {
+            const sent = await sendPayloadAsync(ttsOnlyPayload);
+            queuedFinal = sent || queuedFinal;
+            if (sent) {
               routedFinalCount += 1;
-            }
-            if (!result.ok) {
-              logVerbose(
-                `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-              );
             }
           } else {
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
             queuedFinal = didQueue || queuedFinal;
+            const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+            const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+            void emitMessageSentHook({
+              to: ctx.To ?? "",
+              content: ttsOnlyPayload.text ?? "",
+              success: didQueue,
+              error: didQueue ? undefined : "reply not queued",
+              channelId,
+              conversationId,
+            });
           }
         }
       } catch (err) {

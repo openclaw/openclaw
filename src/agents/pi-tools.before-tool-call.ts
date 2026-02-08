@@ -65,6 +65,41 @@ export async function runBeforeToolCallHook(args: {
   return { blocked: false, params };
 }
 
+export async function runAfterToolCallHook(args: {
+  toolName: string;
+  params: unknown;
+  result?: unknown;
+  error?: string;
+  durationMs?: number;
+  ctx?: HookContext;
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("after_tool_call")) {
+    return;
+  }
+
+  const toolName = normalizeToolName(args.toolName || "tool");
+  const params = isPlainObject(args.params) ? args.params : {};
+  try {
+    await hookRunner.runAfterToolCall(
+      {
+        toolName,
+        params,
+        result: args.result,
+        error: args.error,
+        durationMs: args.durationMs,
+      },
+      {
+        toolName,
+        agentId: args.ctx?.agentId,
+        sessionKey: args.ctx?.sessionKey,
+      },
+    );
+  } catch (err) {
+    log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+  }
+}
+
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -120,5 +155,6 @@ export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
+  runAfterToolCallHook,
   isPlainObject,
 };

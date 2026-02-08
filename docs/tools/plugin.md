@@ -334,6 +334,69 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
+### Typed lifecycle hooks (plugin runtime)
+
+Plugins can also register typed lifecycle interception hooks with `api.lifecycle.on(...)`.
+This is separate from `registerPluginHooksFromDir` and maps to runtime lifecycle events.
+
+Use:
+
+- `api.on("hook_name", handler, opts)` for raw runtime hook names.
+- `api.lifecycle.on("phase", handler, opts)` for phase aliases (including proposal-style names like `preRecall` and `onError`).
+
+Example:
+
+```ts
+export default function register(api) {
+  api.lifecycle.on(
+    "tool.pre",
+    (payload) => {
+      // inspect or annotate tool invocation payload
+      if (payload.toolName === "dangerous_tool") {
+        return { block: true, blockReason: "blocked by policy" };
+      }
+      return { params: payload.params };
+    },
+    {
+      priority: 100,
+      timeoutMs: 500,
+      mode: "fail-open",
+      condition: (payload) => payload.toolName !== "dangerous_tool",
+    },
+  );
+}
+```
+
+Current canonical lifecycle phases:
+
+- `boot.pre` / `boot.post`
+- `message.pre` / `message.post`
+- `tool.pre` / `tool.post`
+- `agent.pre` / `agent.post`
+- `recall.pre` / `error`
+- `memory.compaction.pre` / `memory.compaction.post`
+- `shutdown.pre` / `shutdown.post`
+
+Proposal-style aliases supported by `api.lifecycle.on(...)`:
+
+- `preRequest` -> `message.pre`
+- `preRecall` -> `recall.pre` -> `before_recall`
+- `preResponse` -> `message.pre`
+- `preToolExecution` -> `tool.pre`
+- `preCompaction` -> `memory.compaction.pre`
+- `postRequest` -> `agent.post`
+- `postResponse` -> `message.post`
+- `postToolExecution` -> `tool.post`
+- `postCompaction` -> `memory.compaction.post`
+- `onError` -> `error` -> `agent_error` (only triggered for failed agent runs)
+
+Execution options:
+
+- `priority`: higher runs first
+- `timeoutMs`: max time per hook handler
+- `mode`: `fail-open` (log and continue) or `fail-closed` (throw)
+- `condition`: skip handler when it returns false
+
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or

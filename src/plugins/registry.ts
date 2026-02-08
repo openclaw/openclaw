@@ -9,6 +9,9 @@ import type {
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
+  PluginLifecycleHookHandlerMap,
+  PluginLifecycleHookOptions,
+  PluginLifecyclePhase,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -27,12 +30,40 @@ import type {
   PluginKind,
   PluginHookName,
   PluginHookHandlerMap,
+  PluginHookOptions,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
+
+const LIFECYCLE_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookName>> = {
+  preRequest: "message_received",
+  preRecall: "before_recall",
+  preResponse: "message_sending",
+  preToolExecution: "before_tool_call",
+  preCompaction: "before_compaction",
+  postRequest: "agent_end",
+  postResponse: "message_sent",
+  postToolExecution: "after_tool_call",
+  postCompaction: "after_compaction",
+  onError: "agent_error",
+  "boot.pre": "gateway_pre_start",
+  "agent.pre": "before_agent_start",
+  "agent.post": "agent_end",
+  "recall.pre": "before_recall",
+  error: "agent_error",
+  "message.pre": "message_sending",
+  "message.post": "message_sent",
+  "tool.pre": "before_tool_call",
+  "tool.post": "after_tool_call",
+  "memory.compaction.pre": "before_compaction",
+  "memory.compaction.post": "after_compaction",
+  "boot.post": "gateway_start",
+  "shutdown.pre": "gateway_pre_stop",
+  "shutdown.post": "gateway_stop",
+};
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -450,7 +481,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: PluginHookOptions<K>,
   ) => {
     record.hookCount += 1;
     registry.typedHooks.push({
@@ -458,8 +489,48 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       hookName,
       handler,
       priority: opts?.priority,
+      timeoutMs: opts?.timeoutMs,
+      mode: opts?.mode,
+      condition: opts?.condition,
       source: record.source,
     } as TypedPluginHookRegistration);
+  };
+
+  const registerLifecycleHook = <P extends PluginLifecyclePhase>(
+    record: PluginRecord,
+    phase: P,
+    handler: PluginLifecycleHookHandlerMap[P],
+    options?: PluginLifecycleHookOptions<P>,
+  ) => {
+    const mappedHook = LIFECYCLE_PHASE_TO_HOOK[phase];
+    if (!mappedHook) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `lifecycle phase not yet mapped to runtime events: ${phase}`,
+      });
+      return;
+    }
+
+    registerTypedHook(
+      record,
+      mappedHook,
+      ((event: unknown, _ctx: unknown) =>
+        handler(
+          event as never,
+          {
+            phase,
+            metadata: { hookName: mappedHook, pluginId: record.id },
+          } as never,
+        )) as PluginHookHandlerMap[typeof mappedHook],
+      {
+        priority: options?.priority,
+        timeoutMs: options?.timeoutMs,
+        mode: options?.mode,
+        condition: options?.condition as PluginHookOptions<typeof mappedHook>["condition"],
+      },
+    );
   };
 
   const normalizeLogger = (logger: PluginLogger): PluginLogger => ({
@@ -499,6 +570,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
+      lifecycle: {
+        on: (phase, handler, options) => registerLifecycleHook(record, phase, handler, options),
+      },
     };
   };
 
