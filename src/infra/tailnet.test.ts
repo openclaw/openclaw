@@ -1,8 +1,12 @@
 import os from "node:os";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { listTailnetAddresses } from "./tailnet.js";
 
 describe("tailnet address detection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("detects tailscale IPv4 and IPv6 addresses", () => {
     vi.spyOn(os, "networkInterfaces").mockReturnValue({
       lo0: [
@@ -27,5 +31,14 @@ describe("tailnet address detection", () => {
     const out = listTailnetAddresses();
     expect(out.ipv4).toEqual(["100.123.224.76"]);
     expect(out.ipv6).toEqual(["fd7a:115c:a1e0::8801:e04c"]);
+  });
+
+  it("returns empty lists when os.networkInterfaces throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const out = listTailnetAddresses();
+    expect(out).toEqual({ ipv4: [], ipv6: [] });
   });
 });

@@ -254,13 +254,16 @@ This prevents the user from seeing only "Agent failed before reply" and having n
 
 ## Auto-Notify on Completion
 
-For long-running background tasks, append a wake trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
+For long-running background tasks, append a trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat).
+
+Use a one-shot cron job to inject a main-session system event immediately:
 
 ```
 ... your task here.
 
 When completely finished, run this command to notify me:
-openclaw gateway wake --text "Done: [brief summary of what was built]" --mode now
+openclaw cron add --name "agent-done" --at +0s --wake now --delete-after-run \
+  --session main --system-event "Done: [brief summary of what was built]"
 ```
 
 **Example:**
@@ -268,10 +271,10 @@ openclaw gateway wake --text "Done: [brief summary of what was built]" --mode no
 ```bash
 bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
 
-When completely finished, run: openclaw gateway wake --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+When completely finished, run: openclaw cron add --name \"agent-done\" --at +0s --wake now --delete-after-run --session main --system-event \"Done: Built todos REST API with CRUD endpoints\"'"
 ```
 
-This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
+This posts immediately back into the main session.
 
 ---
 
