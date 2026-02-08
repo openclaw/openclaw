@@ -316,3 +316,14 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     moved: changedOrMoved,
   };
 }
+
+// TRACK 2: Filter delivery-mirror for Anthropic API compatibility
+function isDeliveryMirror(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") return false;
+  const m = msg as Record<string, unknown>;
+  return (
+    m.role === "assistant" &&
+    m.model === "delivery-mirror" &&
+    m.provider === "openclaw"
+  );
+}
