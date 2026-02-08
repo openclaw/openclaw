@@ -305,6 +305,94 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("resolves XAI API key from env", async () => {
+    const previousXaiKey = process.env.XAI_API_KEY;
+
+    try {
+      process.env.XAI_API_KEY = "xai-env-test-key";
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "xai",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("xai-env-test-key");
+      expect(resolved.source).toContain("XAI_API_KEY");
+    } finally {
+      if (previousXaiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previousXaiKey;
+      }
+    }
+  });
+
+  it("resolves XAI API key from auth profile", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousXaiKey = process.env.XAI_API_KEY;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-xai-profile-"));
+
+    try {
+      delete process.env.XAI_API_KEY;
+      process.env.OPENCLAW_STATE_DIR = tempDir;
+      process.env.OPENCLAW_AGENT_DIR = path.join(tempDir, "agent");
+      process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+      const authProfilesDir = process.env.OPENCLAW_AGENT_DIR;
+      await fs.mkdir(authProfilesDir, { recursive: true });
+      await fs.writeFile(
+        path.join(authProfilesDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "xai:default": {
+              type: "api_key",
+              provider: "xai",
+              key: "xai-profile-test-key",
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "xai",
+        agentDir: process.env.OPENCLAW_AGENT_DIR,
+      });
+      expect(resolved.apiKey).toBe("xai-profile-test-key");
+      expect(resolved.source).toContain("profile:xai:default");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      if (previousXaiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previousXaiKey;
+      }
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prefers Bedrock bearer token over access keys and profile", async () => {
     const previous = {
       bearer: process.env.AWS_BEARER_TOKEN_BEDROCK,

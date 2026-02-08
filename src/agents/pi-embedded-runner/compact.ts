@@ -405,7 +405,7 @@ export async function compactEmbeddedPiSessionDirect(
         authStorage,
         modelRegistry,
         model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        thinkingLevel: mapThinkingLevel(params.thinkLevel, model.compat),
         tools: builtInTools,
         customTools,
         sessionManager,
