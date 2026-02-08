@@ -95,9 +95,7 @@ describe("agents view", () => {
     );
     await Promise.resolve();
 
-    const primarySelect = container.querySelector(
-      ".agent-model-select select",
-    ) as HTMLSelectElement | null;
+    const primarySelect = container.querySelector<HTMLSelectElement>(".agent-model-select select");
     expect(primarySelect).not.toBeNull();
     expect(primarySelect!.value).toBe("groq/openai/gpt-oss-120b");
   });
@@ -132,9 +130,7 @@ describe("agents view", () => {
     );
     await Promise.resolve();
 
-    const primarySelect = container.querySelector(
-      ".agent-model-select select",
-    ) as HTMLSelectElement | null;
+    const primarySelect = container.querySelector<HTMLSelectElement>(".agent-model-select select");
     expect(primarySelect).not.toBeNull();
     expect(primarySelect!.value).toBe("groq/openai/gpt-oss-120b");
   });
@@ -169,16 +165,12 @@ describe("agents view", () => {
     );
     await Promise.resolve();
 
-    const primarySelect = container.querySelector(
-      ".agent-model-select select",
-    ) as HTMLSelectElement | null;
+    const primarySelect = container.querySelector<HTMLSelectElement>(".agent-model-select select");
     expect(primarySelect).not.toBeNull();
     // effectivePrimary falls through to defaultPrimary, so the default model is selected
     expect(primarySelect!.value).toBe("cloudflare/claude-sonnet-4-5");
     // The "Inherit default" option should still be present for non-default agents
-    const inheritOption = primarySelect!.querySelector('option[value=""]') as
-      | HTMLOptionElement
-      | undefined;
+    const inheritOption = primarySelect!.querySelector<HTMLOptionElement>('option[value=""]');
     expect(inheritOption).toBeDefined();
     expect(inheritOption?.textContent).toContain("Inherit default");
   });
@@ -205,15 +197,12 @@ describe("agents view", () => {
     );
     await Promise.resolve();
 
-    const primarySelect = container.querySelector(
-      ".agent-model-select select",
-    ) as HTMLSelectElement | null;
+    const primarySelect = container.querySelector<HTMLSelectElement>(".agent-model-select select");
     expect(primarySelect).not.toBeNull();
     expect(primarySelect!.value).toBe("some-unlisted/model");
     // Should have a "Current (...)" option prepended
-    const currentOption = primarySelect!.querySelector('option[value="some-unlisted/model"]') as
-      | HTMLOptionElement
-      | undefined;
+    const currentOption =
+      primarySelect!.querySelector<HTMLOptionElement>('option[value="some-unlisted/model"]');
     expect(currentOption).toBeDefined();
     expect(currentOption?.textContent).toContain("Current");
   });
