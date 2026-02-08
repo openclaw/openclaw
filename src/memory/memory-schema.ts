@@ -7,7 +7,15 @@ export function ensureMemoryIndexSchema(params: {
   ftsEnabled: boolean;
 }): { ftsAvailable: boolean; ftsError?: string } {
   // Enable WAL mode for concurrent read/write safety
-  params.db.exec(`PRAGMA journal_mode=WAL;`);
+  const walResult = params.db.prepare("PRAGMA journal_mode=WAL;").get() as
+    | { journal_mode?: string }
+    | undefined;
+  if (walResult?.journal_mode !== "wal") {
+    // Log to stderr directly — no subsystem logger available in schema helpers.
+    console.warn(
+      `[memory-schema] SQLite WAL mode not enabled (got: ${walResult?.journal_mode ?? "unknown"})`,
+    );
+  }
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,

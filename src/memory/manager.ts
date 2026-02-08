@@ -714,7 +714,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
     // Enable WAL mode for concurrent read/write safety (prevents corruption
     // when file-watcher, session-delta, and batch sync run simultaneously).
-    db.exec(`PRAGMA journal_mode=WAL;`);
+    const walResult = db.prepare("PRAGMA journal_mode=WAL;").get() as
+      | { journal_mode?: string }
+      | undefined;
+    if (walResult?.journal_mode !== "wal") {
+      log.warn(
+        `SQLite WAL mode not enabled (got: ${walResult?.journal_mode ?? "unknown"}), concurrent access may cause issues`,
+      );
+    }
     return db;
   }
 
