@@ -2482,6 +2482,12 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 }
 ```
 
+Tool calling note (OpenAI-compatible servers):
+
+- Some servers only support tool calling via `POST /v1/chat/completions` when the client sends
+  `tools` + `tool_choice`. If your `openai-completions` model never emits tool calls, set
+  `compat: { openaiCompletionsTools: true }` on that model entry to force Moltbot to include tools.
+
 ### OpenCode Zen (multi-model proxy)
 
 OpenCode Zen is a multi-model gateway with per-model endpoints. OpenClaw uses

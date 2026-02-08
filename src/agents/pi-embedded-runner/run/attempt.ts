@@ -453,9 +453,16 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
 
+      const openaiCompletionsTools =
+        params.model.api === "openai-completions" &&
+        (params.model.compat as { openaiCompletionsTools?: unknown } | undefined)
+          ?.openaiCompletionsTools === true;
+
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        modelApi: params.model.api,
+        openaiCompletionsTools,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
