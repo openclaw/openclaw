@@ -1,0 +1,146 @@
+diff --git a/src/agents/pi-embedded-helpers/openai.ts b/src/agents/pi-embedded-helpers/openai.ts
+index abc1234..def5678 100644
+--- a/src/agents/pi-embedded-helpers/openai.ts
++++ b/src/agents/pi-embedded-helpers/openai.ts
+@@ -59,6 +59,62 @@ function hasFollowingNonThinkingBlock(
+   return false;
+ }
+
++/**
++ * Check if an assistant message contains tool calls but no thinking block.
++ */
++function hasToolCallWithoutThinking(
++  content: Extract<AgentMessage, { role: "assistant" }>["content"],
++): boolean {
++  let hasToolCall = false;
++  let hasThinking = false;
++  for (const block of content) {
++    if (!block || typeof block !== "object") continue;
++    const type = (block as { type?: unknown }).type;
++    if (type === "toolCall") hasToolCall = true;
++    if (type === "thinking") hasThinking = true;
++  }
++  return hasToolCall && !hasThinking;
++}
++
++/**
++ * Check if any assistant message in the history has tool calls without thinking blocks.
++ * This is used to detect incompatibility when switching to a reasoning-enabled model.
++ */
++export function hasHistoryToolCallWithoutThinking(messages: AgentMessage[]): boolean {
++  for (const msg of messages) {
++    if (!msg || typeof msg !== "object") continue;
++    if ((msg as { role?: unknown }).role !== "assistant") continue;
++    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
++    if (!Array.isArray(assistantMsg.content)) continue;
++    if (hasToolCallWithoutThinking(assistantMsg.content)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++/**
++ * Add empty thinking blocks to assistant messages that have tool calls but no thinking.
++ * This ensures compatibility when switching to a reasoning-enabled model.
++ */
++export function addEmptyThinkingToToolCallMessages(messages: AgentMessage[]): AgentMessage[] {
++  return messages.map((msg) => {
++    if (!msg || typeof msg !== "object") return msg;
++    if ((msg as { role?: unknown }).role !== "assistant") return msg;
++    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
++    if (!Array.isArray(assistantMsg.content)) return msg;
++    if (!hasToolCallWithoutThinking(assistantMsg.content)) return msg;
++
++    // Prepend an empty thinking block
++    const emptyThinking = {
++      type: "thinking" as const,
++      thinking: "",
++    };
++    return {
++      ...assistantMsg,
++      content: [emptyThinking, ...assistantMsg.content],
++    } as AgentMessage;
++  });
++}
++
+ /**
+  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
+  * without the required following item.
+diff --git a/src/agents/pi-embedded-helpers.ts b/src/agents/pi-embedded-helpers.ts
+index abc1234..def5678 100644
+--- a/src/agents/pi-embedded-helpers.ts
++++ b/src/agents/pi-embedded-helpers.ts
+@@ -35,7 +35,11 @@ export {
+   sanitizeGoogleTurnOrdering,
+ } from "./pi-embedded-helpers/bootstrap.js";
+
+-export { downgradeOpenAIReasoningBlocks } from "./pi-embedded-helpers/openai.js";
++export {
++  downgradeOpenAIReasoningBlocks,
++  hasHistoryToolCallWithoutThinking,
++  addEmptyThinkingToToolCallMessages,
++} from "./pi-embedded-helpers/openai.js";
+
+ export {
+   sanitizeSessionMessagesImages,
+diff --git a/src/agents/pi-embedded-runner/google.ts b/src/agents/pi-embedded-runner/google.ts
+index abc1234..def5678 100644
+--- a/src/agents/pi-embedded-runner/google.ts
++++ b/src/agents/pi-embedded-runner/google.ts
+@@ -6,6 +6,8 @@ import { resolveTranscriptPolicy, type TranscriptPolicy } from "../transcript-po
+ import {
+   downgradeOpenAIReasoningBlocks,
+   sanitizeSessionMessagesImages,
++  hasHistoryToolCallWithoutThinking,
++  addEmptyThinkingToToolCallMessages,
+ } from "../pi-embedded-helpers.js";
+ import {
+   sanitizeToolCallInputs,
+@@ -325,6 +327,7 @@ export async function sanitizeSessionHistory(params: {
+   modelId?: string;
+   provider?: string;
+   sessionManager: SessionManager;
+   sessionId: string;
+   policy?: TranscriptPolicy;
++  thinkingEnabled?: boolean;
+ }): Promise<AgentMessage[]> {
+   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
+   const policy =
+@@ -366,9 +369,21 @@ export async function sanitizeSessionHistory(params: {
+         modelId: params.modelId,
+       })
+     : false;
+-  const sanitizedOpenAI =
+-    isOpenAIResponsesApi && modelChanged
+-      ? downgradeOpenAIReasoningBlocks(repairedTools)
+-      : repairedTools;
++
++  let sanitizedOpenAI = repairedTools;
++
++  // Handle OpenAI Responses API reasoning block cleanup
++  if (isOpenAIResponsesApi && modelChanged) {
++    sanitizedOpenAI = downgradeOpenAIReasoningBlocks(sanitizedOpenAI);
++  }
++
++  // When thinking is enabled and history has tool calls without thinking blocks,
++  // add empty thinking blocks to ensure API compatibility.
++  // This fixes: "400 thinking is enabled but reasoning_content is missing in assistant tool call message"
++  if (params.thinkingEnabled && hasHistoryToolCallWithoutThinking(sanitizedOpenAI)) {
++    sanitizedOpenAI = addEmptyThinkingToToolCallMessages(sanitizedOpenAI);
++  }
+
+   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
+     appendModelSnapshot(params.sessionManager, {
+diff --git a/src/agents/pi-embedded-runner/run/attempt.ts b/src/agents/pi-embedded-runner/run/attempt.ts
+index abc1234..def5678 100644
+--- a/src/agents/pi-embedded-runner/run/attempt.ts
++++ b/src/agents/pi-embedded-runner/run/attempt.ts
+@@ -541,6 +541,7 @@ export async function runEmbeddedAttempt(params: RunEmbeddedAttemptParams): Prom
+         const prior = await sanitizeSessionHistory({
+           messages: priorMessages,
+           modelApi: params.modelApi,
++          thinkingEnabled: params.thinkLevel !== "off",
+           provider: params.provider,
+           modelId: params.modelId,
+           sessionManager,
