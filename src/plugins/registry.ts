@@ -33,6 +33,11 @@ import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
+import {
+  createSandboxPolicy,
+  createSandboxedRuntime,
+  type PluginPermissions,
+} from "./sandbox-policy.js";
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -470,8 +475,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     params: {
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
+      permissions?: PluginPermissions;
     },
   ): OpenClawPluginApi => {
+    const logger = normalizeLogger(registryParams.logger);
+
+    // Create sandbox policy and apply it to the runtime
+    const sandboxPolicy = createSandboxPolicy(record.id, params.permissions, logger);
+    const sandboxedRuntime = createSandboxedRuntime(registryParams.runtime, sandboxPolicy, logger);
+
     return {
       id: record.id,
       name: record.name,
@@ -480,8 +492,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       config: params.config,
       pluginConfig: params.pluginConfig,
-      runtime: registryParams.runtime,
-      logger: normalizeLogger(registryParams.logger),
+      runtime: sandboxedRuntime,
+      logger,
       registerTool: (tool, opts) => registerTool(record, tool, opts),
       registerHook: (events, handler, opts) =>
         registerHook(record, events, handler, opts, params.config),

@@ -11,6 +11,7 @@ type HeldLock = {
   count: number;
   handle: fs.FileHandle;
   lockPath: string;
+  autoReleaseTimer?: ReturnType<typeof setTimeout>;
 };
 
 const HELD_LOCKS = new Map<string, HeldLock>();
@@ -36,6 +37,10 @@ function isAlive(pid: number): boolean {
  */
 function releaseAllLocksSync(): void {
   for (const [sessionFile, held] of HELD_LOCKS) {
+    // Clear auto-release timer if set
+    if (held.autoReleaseTimer) {
+      clearTimeout(held.autoReleaseTimer);
+    }
     try {
       if (typeof held.handle.close === "function") {
         void held.handle.close().catch(() => {});
@@ -113,12 +118,15 @@ export async function acquireSessionWriteLock(params: {
   sessionFile: string;
   timeoutMs?: number;
   staleMs?: number;
+  autoReleaseAfterMs?: number;
 }): Promise<{
   release: () => Promise<void>;
 }> {
   registerCleanupHandlers();
   const timeoutMs = params.timeoutMs ?? 10_000;
   const staleMs = params.staleMs ?? 30 * 60 * 1000;
+  // Auto-release after 5 minutes by default to prevent indefinite locks
+  const autoReleaseAfterMs = params.autoReleaseAfterMs ?? 5 * 60 * 1000;
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   await fs.mkdir(sessionDir, { recursive: true });
@@ -145,6 +153,9 @@ export async function acquireSessionWriteLock(params: {
           return;
         }
         HELD_LOCKS.delete(normalizedSessionFile);
+        if (current.autoReleaseTimer) {
+          clearTimeout(current.autoReleaseTimer);
+        }
         await current.handle.close();
         await fs.rm(current.lockPath, { force: true });
       },
@@ -161,7 +172,25 @@ export async function acquireSessionWriteLock(params: {
         JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
         "utf8",
       );
-      HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
+
+      // Set up auto-release timer to prevent indefinite locks if agent hangs
+      const autoReleaseTimer = setTimeout(async () => {
+        const current = HELD_LOCKS.get(normalizedSessionFile);
+        if (current) {
+          console.warn(
+            `[session-lock] Auto-releasing lock after ${autoReleaseAfterMs}ms: ${lockPath}`,
+          );
+          HELD_LOCKS.delete(normalizedSessionFile);
+          try {
+            await current.handle.close();
+            await fs.rm(current.lockPath, { force: true });
+          } catch {
+            // Best effort cleanup
+          }
+        }
+      }, autoReleaseAfterMs);
+
+      HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath, autoReleaseTimer });
       return {
         release: async () => {
           const current = HELD_LOCKS.get(normalizedSessionFile);
@@ -173,6 +202,9 @@ export async function acquireSessionWriteLock(params: {
             return;
           }
           HELD_LOCKS.delete(normalizedSessionFile);
+          if (current.autoReleaseTimer) {
+            clearTimeout(current.autoReleaseTimer);
+          }
           await current.handle.close();
           await fs.rm(current.lockPath, { force: true });
         },

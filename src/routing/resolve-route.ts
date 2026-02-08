@@ -10,6 +10,148 @@ import {
   sanitizeAgentId,
 } from "./session-key.js";
 
+// ============================================================================
+// ROUTING INDEXES - O(1) lookups instead of O(n) linear scans
+// ============================================================================
+
+export type RoutingIndexes = {
+  // channel -> peerKey -> agentId
+  byChannelAndPeer: Map<string, Map<string, string>>;
+  // channel -> guildId -> agentId
+  byChannelAndGuild: Map<string, Map<string, string>>;
+  // channel -> teamId -> agentId
+  byChannelAndTeam: Map<string, Map<string, string>>;
+  // channel -> accountId -> agentId (account-only bindings, no peer/guild/team)
+  byChannelAndAccount: Map<string, Map<string, string>>;
+  // channel -> agentId (wildcard * account bindings)
+  byChannelWildcard: Map<string, string>;
+};
+
+// Cache for routing indexes - avoids rebuilding on every route resolution
+let cachedIndexes: RoutingIndexes | null = null;
+let cachedConfigRef: WeakRef<OpenClawConfig> | null = null;
+
+function normalizeBindingChannelId(channel: string | undefined): string {
+  return (channel ?? "").trim().toLowerCase();
+}
+
+/**
+ * Build optimized routing indexes from config bindings.
+ * This converts O(n) linear scans to O(1) Map lookups.
+ */
+export function buildRoutingIndexes(cfg: OpenClawConfig): RoutingIndexes {
+  const indexes: RoutingIndexes = {
+    byChannelAndPeer: new Map(),
+    byChannelAndGuild: new Map(),
+    byChannelAndTeam: new Map(),
+    byChannelAndAccount: new Map(),
+    byChannelWildcard: new Map(),
+  };
+
+  for (const binding of listBindings(cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+
+    const channel = normalizeBindingChannelId(binding.match?.channel);
+    if (!channel) {
+      continue;
+    }
+
+    const agentId = binding.agentId;
+    if (!agentId) {
+      continue;
+    }
+
+    const accountIdRaw = (binding.match?.accountId ?? "").trim();
+    // Normalize accountId: empty means default, "*" means wildcard, otherwise specific
+    const accountKey = accountIdRaw === "*" ? "*" : accountIdRaw || DEFAULT_ACCOUNT_ID;
+
+    // Index: peer binding (includes accountId in key to preserve account scoping)
+    if (binding.match?.peer?.id && binding.match?.peer?.kind) {
+      const peerKind = (binding.match.peer.kind ?? "").trim().toLowerCase();
+      const peerId = (binding.match.peer.id ?? "").trim();
+      if (peerKind && peerId) {
+        // Key format: "accountId:peerKind:peerId" to preserve account matching semantics
+        const peerKey = `${accountKey}:${peerKind}:${peerId}`;
+        if (!indexes.byChannelAndPeer.has(channel)) {
+          indexes.byChannelAndPeer.set(channel, new Map());
+        }
+        indexes.byChannelAndPeer.get(channel)!.set(peerKey, agentId);
+      }
+    }
+
+    // Index: guild binding (includes accountId in key)
+    if (binding.match?.guildId) {
+      const guildId = (binding.match.guildId ?? "").trim();
+      if (guildId) {
+        const guildKey = `${accountKey}:${guildId}`;
+        if (!indexes.byChannelAndGuild.has(channel)) {
+          indexes.byChannelAndGuild.set(channel, new Map());
+        }
+        indexes.byChannelAndGuild.get(channel)!.set(guildKey, agentId);
+      }
+    }
+
+    // Index: team binding (includes accountId in key)
+    if (binding.match?.teamId) {
+      const teamId = (binding.match.teamId ?? "").trim();
+      if (teamId) {
+        const teamKey = `${accountKey}:${teamId}`;
+        if (!indexes.byChannelAndTeam.has(channel)) {
+          indexes.byChannelAndTeam.set(channel, new Map());
+        }
+        indexes.byChannelAndTeam.get(channel)!.set(teamKey, agentId);
+      }
+    }
+
+    // Index: account binding (no peer/guild/team)
+    const hasPeer = binding.match?.peer?.id;
+    const hasGuild = binding.match?.guildId;
+    const hasTeam = binding.match?.teamId;
+    if (!hasPeer && !hasGuild && !hasTeam) {
+      if (accountIdRaw === "*") {
+        indexes.byChannelWildcard.set(channel, agentId);
+      } else {
+        // Account-specific binding (includes empty accountId which means "default account only")
+        if (!indexes.byChannelAndAccount.has(channel)) {
+          indexes.byChannelAndAccount.set(channel, new Map());
+        }
+        indexes.byChannelAndAccount.get(channel)!.set(accountKey, agentId);
+      }
+    }
+  }
+
+  return indexes;
+}
+
+/**
+ * Get or build routing indexes for the given config.
+ * Uses a cache to avoid rebuilding indexes on every call.
+ */
+function getRoutingIndexes(cfg: OpenClawConfig): RoutingIndexes {
+  // Check if we have cached indexes for this config
+  if (cachedIndexes && cachedConfigRef) {
+    const cachedConfig = cachedConfigRef.deref();
+    if (cachedConfig === cfg) {
+      return cachedIndexes;
+    }
+  }
+
+  // Build new indexes and cache them
+  cachedIndexes = buildRoutingIndexes(cfg);
+  cachedConfigRef = new WeakRef(cfg);
+  return cachedIndexes;
+}
+
+/**
+ * Clear the routing index cache (useful for testing or config reload).
+ */
+export function clearRoutingIndexCache(): void {
+  cachedIndexes = null;
+  cachedConfigRef = null;
+}
+
 export type RoutePeerKind = "dm" | "group" | "channel";
 
 export type RoutePeer = {
@@ -62,17 +204,6 @@ function normalizeAccountId(value: string | undefined | null): string {
   return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
 }
 
-function matchesAccountId(match: string | undefined, actual: string): boolean {
-  const trimmed = (match ?? "").trim();
-  if (!trimmed) {
-    return actual === DEFAULT_ACCOUNT_ID;
-  }
-  if (trimmed === "*") {
-    return true;
-  }
-  return trimmed === actual;
-}
-
 export function buildAgentSessionKey(params: {
   agentId: string;
   channel: string;
@@ -118,68 +249,12 @@ function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string 
   return sanitizeAgentId(resolveDefaultAgentId(cfg));
 }
 
-function matchesChannel(
-  match: { channel?: string | undefined } | undefined,
-  channel: string,
-): boolean {
-  const key = normalizeToken(match?.channel);
-  if (!key) {
-    return false;
-  }
-  return key === channel;
-}
-
-function matchesPeer(
-  match: { peer?: { kind?: string; id?: string } | undefined } | undefined,
-  peer: RoutePeer,
-): boolean {
-  const m = match?.peer;
-  if (!m) {
-    return false;
-  }
-  const kind = normalizeToken(m.kind);
-  const id = normalizeId(m.id);
-  if (!kind || !id) {
-    return false;
-  }
-  return kind === peer.kind && id === peer.id;
-}
-
-function matchesGuild(
-  match: { guildId?: string | undefined } | undefined,
-  guildId: string,
-): boolean {
-  const id = normalizeId(match?.guildId);
-  if (!id) {
-    return false;
-  }
-  return id === guildId;
-}
-
-function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId: string): boolean {
-  const id = normalizeId(match?.teamId);
-  if (!id) {
-    return false;
-  }
-  return id === teamId;
-}
-
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
-
-  const bindings = listBindings(input.cfg).filter((binding) => {
-    if (!binding || typeof binding !== "object") {
-      return false;
-    }
-    if (!matchesChannel(binding.match, channel)) {
-      return false;
-    }
-    return matchesAccountId(binding.match?.accountId, accountId);
-  });
 
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
@@ -208,53 +283,80 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     };
   };
 
+  // Use optimized O(1) index lookups instead of O(n) linear scans
+  const indexes = getRoutingIndexes(input.cfg);
+
+  // Helper to lookup with account scoping: first try specific accountId, then wildcard "*"
+  const lookupWithAccountFallback = (
+    map: Map<string, string> | undefined,
+    baseKey: string,
+  ): string | undefined => {
+    if (!map) {
+      return undefined;
+    }
+    // Try specific account first
+    const specific = map.get(`${accountId}:${baseKey}`);
+    if (specific) {
+      return specific;
+    }
+    // Fallback to wildcard account
+    return map.get(`*:${baseKey}`);
+  };
+
+  // 1. Peer binding (O(1) lookup with account scoping)
   if (peer) {
-    const peerMatch = bindings.find((b) => matchesPeer(b.match, peer));
-    if (peerMatch) {
-      return choose(peerMatch.agentId, "binding.peer");
+    const peerBaseKey = `${peer.kind}:${peer.id}`;
+    const peerByChannel = indexes.byChannelAndPeer.get(channel);
+    const peerAgentId = lookupWithAccountFallback(peerByChannel, peerBaseKey);
+    if (peerAgentId) {
+      return choose(peerAgentId, "binding.peer");
     }
   }
 
-  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
+  // 2. Parent peer binding for thread inheritance (O(1) lookup with account scoping)
   const parentPeer = input.parentPeer
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
     : null;
   if (parentPeer && parentPeer.id) {
-    const parentPeerMatch = bindings.find((b) => matchesPeer(b.match, parentPeer));
-    if (parentPeerMatch) {
-      return choose(parentPeerMatch.agentId, "binding.peer.parent");
+    const parentPeerBaseKey = `${parentPeer.kind}:${parentPeer.id}`;
+    const peerByChannel = indexes.byChannelAndPeer.get(channel);
+    const parentPeerAgentId = lookupWithAccountFallback(peerByChannel, parentPeerBaseKey);
+    if (parentPeerAgentId) {
+      return choose(parentPeerAgentId, "binding.peer.parent");
     }
   }
 
+  // 3. Guild binding (O(1) lookup with account scoping)
   if (guildId) {
-    const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId));
-    if (guildMatch) {
-      return choose(guildMatch.agentId, "binding.guild");
+    const guildByChannel = indexes.byChannelAndGuild.get(channel);
+    const guildAgentId = lookupWithAccountFallback(guildByChannel, guildId);
+    if (guildAgentId) {
+      return choose(guildAgentId, "binding.guild");
     }
   }
 
+  // 4. Team binding (O(1) lookup with account scoping)
   if (teamId) {
-    const teamMatch = bindings.find((b) => matchesTeam(b.match, teamId));
-    if (teamMatch) {
-      return choose(teamMatch.agentId, "binding.team");
+    const teamByChannel = indexes.byChannelAndTeam.get(channel);
+    const teamAgentId = lookupWithAccountFallback(teamByChannel, teamId);
+    if (teamAgentId) {
+      return choose(teamAgentId, "binding.team");
     }
   }
 
-  const accountMatch = bindings.find(
-    (b) =>
-      b.match?.accountId?.trim() !== "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
-  );
-  if (accountMatch) {
-    return choose(accountMatch.agentId, "binding.account");
+  // 5. Account binding (O(1) lookup)
+  const accountByChannel = indexes.byChannelAndAccount.get(channel);
+  const accountAgentId = accountByChannel?.get(accountId);
+  if (accountAgentId) {
+    return choose(accountAgentId, "binding.account");
   }
 
-  const anyAccountMatch = bindings.find(
-    (b) =>
-      b.match?.accountId?.trim() === "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
-  );
-  if (anyAccountMatch) {
-    return choose(anyAccountMatch.agentId, "binding.channel");
+  // 6. Wildcard channel binding (O(1) lookup)
+  const wildcardAgentId = indexes.byChannelWildcard.get(channel);
+  if (wildcardAgentId) {
+    return choose(wildcardAgentId, "binding.channel");
   }
 
+  // 7. Default fallback
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }

@@ -2,6 +2,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRecord } from "./registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
+export type PluginPermissions = {
+  runCommandWithTimeout?: boolean;
+  writeConfigFile?: boolean;
+};
+
 export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
@@ -10,7 +15,7 @@ export type NormalizedPluginsConfig = {
   slots: {
     memory?: string | null;
   };
-  entries: Record<string, { enabled?: boolean; config?: unknown }>;
+  entries: Record<string, { enabled?: boolean; config?: unknown; permissions?: PluginPermissions }>;
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>();
@@ -36,6 +41,21 @@ const normalizeSlotValue = (value: unknown): string | null | undefined => {
   return trimmed;
 };
 
+const normalizePermissions = (perms: unknown): PluginPermissions | undefined => {
+  if (!perms || typeof perms !== "object" || Array.isArray(perms)) {
+    return undefined;
+  }
+  const p = perms as Record<string, unknown>;
+  const result: PluginPermissions = {};
+  if (typeof p.runCommandWithTimeout === "boolean") {
+    result.runCommandWithTimeout = p.runCommandWithTimeout;
+  }
+  if (typeof p.writeConfigFile === "boolean") {
+    result.writeConfigFile = p.writeConfigFile;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
 const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entries"] => {
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
     return {};
@@ -53,6 +73,7 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
       config: "config" in entry ? entry.config : undefined,
+      permissions: normalizePermissions(entry.permissions),
     };
   }
   return normalized;
