@@ -527,12 +527,12 @@ describe("tts", () => {
 
     it("handles null gracefully", () => {
       const result = formatTtsError("edge", null);
-      expect(result).toBe("edge: null");
+      expect(result).toBe("edge: unknown error");
     });
 
     it("handles undefined gracefully", () => {
       const result = formatTtsError("edge", undefined);
-      expect(result).toBe("edge: undefined");
+      expect(result).toBe("edge: unknown error");
     });
   });
 

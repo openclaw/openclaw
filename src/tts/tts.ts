@@ -517,6 +517,11 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
  * may not be an Error instance (e.g., string, object) or error.message is undefined.
  */
 export function formatTtsError(provider: string, error: unknown): string {
+  // Handle null/undefined explicitly to avoid "provider: undefined" output
+  if (error === null || error === undefined) {
+    return `${provider}: unknown error`;
+  }
+
   // Handle string throws directly
   if (typeof error === "string") {
     return `${provider}: ${error.trim() || "unknown error"}`;
@@ -558,11 +563,18 @@ export function formatTtsError(provider: string, error: unknown): string {
     }
   }
 
-  // Last resort fallback
-  const str = String(error);
-  if (str && str !== "[object Object]") {
-    return `${provider}: ${str}`;
+  // Handle remaining primitive types (number, boolean, symbol, bigint, function)
+  // These all have sensible string representations
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return `${provider}: ${String(error)}`;
   }
+  if (typeof error === "function") {
+    return `${provider}: ${error.name || "unknown error"}`;
+  }
+  if (typeof error === "symbol") {
+    return `${provider}: ${error.description || "unknown error"}`;
+  }
+
   return `${provider}: unknown error`;
 }
 
