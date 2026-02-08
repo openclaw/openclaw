@@ -617,17 +617,34 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### UCP 다음 단계
 - [x] ~~**Phase 2**: Checkout + Payment Handler + 재고 동기화~~ → ✅ 완료 (2026-02-08)
-- [ ] **Phase 3**: Merchant Center + Business Agent + Direct Offers (1~2주)
+- [x] ~~**Phase 3**: Merchant Center Feed + Structured Data + Conversational~~ → ✅ 완료 (2026-02-08)
+
+### UCP Phase 3 구현 (2026-02-08)
+- `GET /ucp/v1/feed/products.json` — Merchant Center JSON 피드
+- `GET /ucp/v1/feed/products.xml` — Google Shopping RSS 2.0 XML
+- `GET /ucp/v1/feed/products.tsv` — TSV 직접 업로드용
+- `GET /ucp/v1/feed/structured-data` — Schema.org ItemList JSON-LD
+- `GET /ucp/v1/feed/structured-data/{id}` — Schema.org Product JSON-LD
+- `GET /ucp/v1/feed/conversational/{id}` — AI 대화형 메타데이터
+- Discovery: product_feed, structured_data, conversational capabilities 추가
+- 커밋: `f154d8e`, `66e1098`, `11ffce1`, `f1c5b68`
+- 문서: D023 (Merchant Center 가이드), I033 (구현 기록)
+
+### 지니 액션 필요 (Merchant Center)
+- [ ] Google Merchant Center 계정 생성 (베트남 시장)
+- [ ] 상품 피드 URL 등록: `https://maibeauty-api-production.up.railway.app/ucp/v1/feed/products.xml`
+- [ ] Brand Profile 생성
+- [ ] Business Agent 활성화 (현재 미국만 → 글로벌 확장 시)
 
 ---
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `59c267a docs: D024 PRD + D025 설계 + D026 개발계획 — UCP Admin 모듈 (02-08)`
 - `f1c5b68 docs(ucp): add Phase 3 guide, implementation record, update STATUS (02-08)`
 - `11ffce1 feat(main): register UCP feed router (/ucp/v1/feed) (02-08)`
 - `66e1098 feat(ucp): update discovery with feed + structured data capabilities (02-08)`
 - `f154d8e feat(ucp): add product feed generator and structured data endpoints (02-08)`
-- `3b5ce76 docs: I032 UCP Phase 2 implementation record + STATUS update (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
