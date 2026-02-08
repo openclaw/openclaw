@@ -180,13 +180,19 @@ class FallbackMemoryManager implements MemorySearchManager {
     if (this.fallback) {
       return this.fallback;
     }
-    const fallback = await this.deps.fallbackFactory();
-    if (!fallback) {
-      log.warn("memory fallback requested but builtin index is unavailable");
+    try {
+      const fallback = await this.deps.fallbackFactory();
+      if (!fallback) {
+        log.warn("memory fallback requested but builtin index is unavailable");
+        return null;
+      }
+      this.fallback = fallback;
+      return this.fallback;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory fallback unavailable: ${message}`);
       return null;
     }
-    this.fallback = fallback;
-    return this.fallback;
   }
 }
 
