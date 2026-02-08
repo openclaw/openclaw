@@ -48,6 +48,7 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
@@ -560,9 +561,14 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // Re-run tool use/result pairing repair after truncation.
+        // limitHistoryTurns can break tool_use/tool_result pairs by cutting
+        // in the middle of a tool call sequence. This ensures any orphaned
+        // tool_use blocks get synthetic error results added.
+        const repairedAfterLimit = sanitizeToolUseResultPairing(limited);
+        cacheTrace?.recordStage("session:limited", { messages: repairedAfterLimit });
+        if (repairedAfterLimit.length > 0) {
+          activeSession.agent.replaceMessages(repairedAfterLimit);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
