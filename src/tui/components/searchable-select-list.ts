@@ -28,6 +28,8 @@ export class SearchableSelectList implements Component {
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
   private regexCache = new Map<string, RegExp>();
+  // eslint-disable-next-line no-control-regex -- intentional: matching ANSI escape sequences
+  private ansiRegex = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
@@ -47,6 +49,8 @@ export class SearchableSelectList implements Component {
       regex = new RegExp(this.escapeRegex(pattern), "gi");
       this.regexCache.set(pattern, regex);
     }
+    // Reset lastIndex to ensure consistent behavior (defensive)
+    regex.lastIndex = 0;
     return regex;
   }
 
@@ -132,6 +136,26 @@ export class SearchableSelectList implements Component {
     return item.label || item.value;
   }
 
+  private splitAnsiParts(text: string): Array<{ text: string; isAnsi: boolean }> {
+    const parts: Array<{ text: string; isAnsi: boolean }> = [];
+    const ansiRegex = this.ansiRegex;
+    ansiRegex.lastIndex = 0;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = ansiRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ text: text.slice(lastIndex, match.index), isAnsi: false });
+      }
+      parts.push({ text: match[0], isAnsi: true });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      parts.push({ text: text.slice(lastIndex), isAnsi: false });
+    }
+    return parts;
+  }
+
   private highlightMatch(text: string, query: string): string {
     const tokens = query
       .trim()
@@ -143,12 +167,34 @@ export class SearchableSelectList implements Component {
     }
 
     const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
-    let result = text;
+    let parts = this.splitAnsiParts(text);
+
     for (const token of uniqueTokens) {
+      // Skip ANSI escape sequences to avoid breaking color codes.
       const regex = this.getCachedRegex(token);
-      result = result.replace(regex, (match) => this.theme.matchHighlight(match));
+      const nextParts: Array<{ text: string; isAnsi: boolean }> = [];
+
+      for (const part of parts) {
+        if (part.isAnsi) {
+          nextParts.push(part);
+          continue;
+        }
+
+        regex.lastIndex = 0;
+        const replaced = part.text.replace(regex, (m) => this.theme.matchHighlight(m));
+        if (replaced === part.text) {
+          nextParts.push(part);
+          continue;
+        }
+
+        // Re-split only modified segments so new ANSI highlights are treated as ANSI.
+        nextParts.push(...this.splitAnsiParts(replaced));
+      }
+
+      parts = nextParts;
     }
-    return result;
+
+    return parts.map((part) => part.text).join("");
   }
 
   setSelectedIndex(index: number) {
@@ -217,94 +263,74 @@ export class SearchableSelectList implements Component {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
     const displayValue = this.getItemLabel(item);
+    const truncatedLabel = truncateToWidth(displayValue, width - prefixWidth);
 
-    if (item.description && width > 40) {
-      const maxValueWidth = Math.min(30, width - prefixWidth - 4);
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, query);
-      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
-      const spacing = " ".repeat(spacingWidth);
-      const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
-      const remainingWidth = width - descriptionStart - 2;
-      if (remainingWidth > 10) {
-        const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
-      }
-    }
+    const highlighted = query ? this.highlightMatch(truncatedLabel, query) : truncatedLabel;
+    const line = `${prefix}${highlighted}`;
 
-    const maxWidth = width - prefixWidth - 2;
-    const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
-    const valueText = this.highlightMatch(truncatedValue, query);
-    const line = `${prefix}${valueText}`;
-    return isSelected ? this.theme.selectedText(line) : line;
+    return this.ensureLineWidth(isSelected ? this.theme.selected(line) : line, width);
   }
 
-  handleInput(keyData: string): void {
-    if (isKeyRelease(keyData)) {
-      return;
+  private ensureLineWidth(text: string, width: number): string {
+    const currentWidth = visibleWidth(text);
+
+    if (currentWidth <= width) {
+      return text;
     }
 
-    const allowVimNav = !this.searchInput.getValue().trim();
+    return truncateToWidth(text, width);
+  }
 
-    // Navigation keys
-    if (
-      matchesKey(keyData, "up") ||
-      matchesKey(keyData, "ctrl+p") ||
-      (allowVimNav && keyData === "k")
-    ) {
-      this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.notifySelectionChange();
-      return;
-    }
-
-    if (
-      matchesKey(keyData, "down") ||
-      matchesKey(keyData, "ctrl+n") ||
-      (allowVimNav && keyData === "j")
-    ) {
-      this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
-      this.notifySelectionChange();
-      return;
-    }
-
-    if (matchesKey(keyData, "enter")) {
-      const item = this.filteredItems[this.selectedIndex];
-      if (item && this.onSelect) {
-        this.onSelect(item);
-      }
-      return;
-    }
-
-    const kb = getEditorKeybindings();
-    if (kb.matches(keyData, "selectCancel")) {
-      if (this.onCancel) {
-        this.onCancel();
-      }
-      return;
-    }
-
-    // Pass other keys to search input
-    const prevValue = this.searchInput.getValue();
-    this.searchInput.handleInput(keyData);
-    const newValue = this.searchInput.getValue();
-
-    if (prevValue !== newValue) {
+  handleKey(key: string): boolean {
+    // Handle search input updates
+    if (this.searchInput.handleKey(key)) {
       this.updateFilter();
+      return true;
     }
+
+    // Handle list navigation
+    const editorKeys = getEditorKeybindings();
+
+    if (matchesKey(key, editorKeys.up) || matchesKey(key, "up")) {
+      if (!isKeyRelease(key)) {
+        this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+        this.notifySelectionChange();
+      }
+      return true;
+    }
+
+    if (matchesKey(key, editorKeys.down) || matchesKey(key, "down")) {
+      if (!isKeyRelease(key)) {
+        this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
+        this.notifySelectionChange();
+      }
+      return true;
+    }
+
+    if (matchesKey(key, editorKeys.enter) || matchesKey(key, "enter")) {
+      if (!isKeyRelease(key)) {
+        const item = this.filteredItems[this.selectedIndex];
+        if (item) {
+          this.onSelect?.(item);
+        }
+      }
+      return true;
+    }
+
+    if (matchesKey(key, editorKeys.escape) || matchesKey(key, "escape")) {
+      if (!isKeyRelease(key)) {
+        this.onCancel?.();
+      }
+      return true;
+    }
+
+    return false;
   }
 
   private notifySelectionChange() {
     const item = this.filteredItems[this.selectedIndex];
-    if (item && this.onSelectionChange) {
-      this.onSelectionChange(item);
+    if (item) {
+      this.onSelectionChange?.(item);
     }
-  }
-
-  getSelectedItem(): SelectItem | null {
-    return this.filteredItems[this.selectedIndex] ?? null;
   }
 }
