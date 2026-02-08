@@ -270,6 +270,167 @@
   stroke: var(--accent-foreground);
 }
 
+/* ===========================================
+   Segment Toggle
+   =========================================== */
+
+.segment-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  gap: 2px;
+}
+
+:root[data-theme="light"] .segment-toggle {
+  background: var(--bg-hover);
+}
+
+.segment-toggle .segment {
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.segment-toggle .segment:hover:not(.active) {
+  color: var(--text);
+}
+
+.segment-toggle .segment.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* State Icons for skill groups */
+.state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.state-icon-ready {
+  background: var(--ok);
+  color: white;
+}
+
+.state-icon-disabled {
+  background: var(--muted);
+  color: var(--bg);
+}
+
+.state-icon-missing-deps {
+  background: var(--warn);
+  color: white;
+}
+
+.state-icon-blocked {
+  background: var(--danger);
+  color: white;
+}
+
+/* Skill State Summary */
+.skill-state-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-state-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-accent);
+  color: var(--text);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+}
+
+.skill-state-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.skill-state-chip.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+:root[data-theme="light"] .skill-state-chip {
+  background: var(--bg-hover);
+}
+
+:root[data-theme="light"] .skill-state-chip.active {
+  background: var(--accent);
+}
+
+/* State-specific colors matching skill item badges */
+.skill-state-chip.ready {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.3);
+  background: var(--ok-subtle);
+}
+
+.skill-state-chip.ready.active {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: white;
+}
+
+.skill-state-chip.disabled {
+  color: var(--muted);
+  border-color: var(--border);
+  background: var(--bg-accent);
+}
+
+.skill-state-chip.disabled.active {
+  background: var(--muted);
+  border-color: var(--muted);
+  color: var(--bg);
+}
+
+.skill-state-chip.missing-deps {
+  color: var(--warn);
+  border-color: rgba(245, 158, 11, 0.3);
+  background: var(--warn-subtle);
+}
+
+.skill-state-chip.missing-deps.active {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: white;
+}
+
+.skill-state-chip.blocked {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--danger-subtle, rgba(239, 68, 68, 0.12));
+}
+
+.skill-state-chip.blocked.active {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
 .theme-icon {
   width: 14px;
   height: 14px;

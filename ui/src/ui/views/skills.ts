@@ -16,7 +16,39 @@ const SKILL_SOURCE_GROUPS: Array<{ id: string; label: string; sources: string[] 
   { id: "extra", label: "Extra Skills", sources: ["openclaw-extra"] },
 ];
 
-function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
+function hasMissingDeps(s: SkillStatusEntry): boolean {
+  const { bins, env, config, os } = s.missing;
+  return bins.length > 0 || env.length > 0 || config.length > 0 || os.length > 0;
+}
+
+const SKILL_STATE_GROUPS: Array<{
+  id: string;
+  label: string;
+  match: (skill: SkillStatusEntry) => boolean;
+}> = [
+  {
+    id: "ready",
+    label: "Ready",
+    match: (s) => s.eligible && !s.disabled && !s.blockedByAllowlist && !hasMissingDeps(s),
+  },
+  {
+    id: "disabled",
+    label: "Disabled",
+    match: (s) => s.disabled,
+  },
+  {
+    id: "missing-deps",
+    label: "Missing Dependencies",
+    match: (s) => !s.disabled && hasMissingDeps(s),
+  },
+  {
+    id: "blocked",
+    label: "Blocked",
+    match: (s) => !s.disabled && s.blockedByAllowlist,
+  },
+];
+
+function groupSkillsBySource(skills: SkillStatusEntry[]): SkillGroup[] {
   const groups = new Map<string, SkillGroup>();
   for (const def of SKILL_SOURCE_GROUPS) {
     groups.set(def.id, { id: def.id, label: def.label, skills: [] });
@@ -42,15 +74,19 @@ function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
   return ordered;
 }
 
+export type SkillStateFilter = "all" | "ready" | "disabled" | "missing-deps" | "blocked";
+
 export type SkillsProps = {
   loading: boolean;
   report: SkillStatusReport | null;
   error: string | null;
   filter: string;
+  stateFilter: SkillStateFilter;
   edits: Record<string, string>;
   busyKey: string | null;
   messages: SkillMessageMap;
   onFilterChange: (next: string) => void;
+  onStateFilterChange: (state: SkillStateFilter) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
@@ -60,13 +96,25 @@ export type SkillsProps = {
 
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
-  const filter = props.filter.trim().toLowerCase();
-  const filtered = filter
+  const textFilter = props.filter.trim().toLowerCase();
+
+  // Apply text filter
+  const textFiltered = textFilter
     ? skills.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
+        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(textFilter),
       )
     : skills;
-  const groups = groupSkills(filtered);
+
+  // Apply state filter
+  let filtered = textFiltered;
+  if (props.stateFilter !== "all") {
+    const stateGroup = SKILL_STATE_GROUPS.find((g) => g.id === props.stateFilter);
+    if (stateGroup) {
+      filtered = filtered.filter(stateGroup.match);
+    }
+  }
+
+  const groups = groupSkillsBySource(filtered);
 
   return html`
     <section class="card">
@@ -89,7 +137,25 @@ export function renderSkills(props: SkillsProps) {
             placeholder="Search skills"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+      </div>
+
+      <div class="skill-state-summary" style="margin-top: 12px;">
+        <button
+          type="button"
+          class="skill-state-chip ${props.stateFilter === "all" ? "active" : ""}"
+          @click=${() => props.onStateFilterChange("all")}
+        >
+          All: ${textFiltered.length}
+        </button>
+        ${SKILL_STATE_GROUPS.map((g) => {
+          const count = textFiltered.filter(g.match).length;
+          const isActive = props.stateFilter === g.id;
+          return html`<button
+            type="button"
+            class="skill-state-chip ${g.id} ${isActive ? "active" : ""}"
+            @click=${() => props.onStateFilterChange(g.id as SkillStateFilter)}
+          >${g.label}: ${count}</button>`;
+        })}
       </div>
 
       ${
