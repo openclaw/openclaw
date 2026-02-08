@@ -102,7 +102,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForEvent(name: string) {
   for (let i = 0; i < 10; i++) {
-    if (getSlackHandlers()?.has(name)) return;
+    if (getSlackHandlers()?.has(name)) {
+      return;
+    }
     await flush();
   }
 }
@@ -135,7 +137,9 @@ describe("app_home_opened event", () => {
   });
 
   async function setupProvider(overrideConfig?: Record<string, unknown>) {
-    if (overrideConfig) config = overrideConfig;
+    if (overrideConfig) {
+      config = overrideConfig;
+    }
     // Don't await — it runs forever until aborted
     void monitorSlackProvider({
       botToken: "xoxb-test",
@@ -150,7 +154,9 @@ describe("app_home_opened event", () => {
     bodyOverrides: Record<string, unknown> = {},
   ) {
     const handler = getSlackHandlers()?.get("app_home_opened");
-    if (!handler) throw new Error("app_home_opened handler not registered");
+    if (!handler) {
+      throw new Error("app_home_opened handler not registered");
+    }
     await handler({
       event: {
         type: "app_home_opened",
