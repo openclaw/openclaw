@@ -277,13 +277,33 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Monitor for early exit
+  let earlyExitError: Error | null = null;
+  const onExit = (code: number | null) => {
+    earlyExitError = new Error(
+      `Chromium exited prematurely with code ${code}. Check logs for details.`,
+    );
+  };
+  proc.on("exit", onExit);
+
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
+    if (earlyExitError) {
+      throw earlyExitError;
+    }
     if (await isChromeReachable(profile.cdpUrl, 500)) {
       break;
     }
     await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // Cleanup listener
+  proc.off("exit", onExit);
+
+  if (earlyExitError) {
+    throw earlyExitError;
   }
 
   if (!(await isChromeReachable(profile.cdpUrl, 500))) {
