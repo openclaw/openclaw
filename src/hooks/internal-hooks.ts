@@ -25,6 +25,31 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   context: AgentBootstrapHookContext;
 };
 
+export type AgentContextOverflowHookContext = {
+  /** The session ID that hit context overflow */
+  sessionId: string;
+  /** Path to the session transcript file */
+  sessionFile: string;
+  /** Model provider (e.g., "anthropic", "openai") */
+  provider: string;
+  /** Model ID (e.g., "claude-sonnet-4-20250514") */
+  model: string;
+  /** Raw error message from the provider */
+  errorMessage?: string;
+  /** True if overflow occurred during compaction attempt */
+  isCompactionFailure?: boolean;
+  /** True if auto-compaction was attempted before giving up */
+  autoCompactionAttempted?: boolean;
+  /** True if overflow was thrown as exception rather than returned as payload */
+  thrownAsException?: boolean;
+};
+
+export type AgentContextOverflowHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "context_overflow";
+  context: AgentContextOverflowHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -178,4 +203,23 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
+}
+
+export function isAgentContextOverflowEvent(
+  event: InternalHookEvent,
+): event is AgentContextOverflowHookEvent {
+  if (event.type !== "agent" || event.action !== "context_overflow") {
+    return false;
+  }
+  const context = event.context as Partial<AgentContextOverflowHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  // Validate all required fields are present
+  return (
+    typeof context.sessionId === "string" &&
+    typeof context.sessionFile === "string" &&
+    typeof context.provider === "string" &&
+    typeof context.model === "string"
+  );
 }

@@ -170,9 +170,25 @@ Currently supported events:
 - **command:reset**: `/reset` command
 - **command:stop**: `/stop` command
 - **agent:bootstrap**: Before workspace bootstrap files are injected
+- **agent:context_overflow**: Agent hit context window limit (before session reset)
 - **gateway:startup**: Gateway startup (after channels start)
 
-More event types coming soon (session lifecycle, agent errors, etc.).
+### agent:context_overflow
+
+Emitted when an agent hits the context window limit. This event fires **before** any automatic session reset, allowing hooks to capture state for recovery purposes.
+
+**Context fields:**
+
+- `sessionId` (string): The session ID that overflowed
+- `sessionFile` (string): Path to the session transcript file
+- `provider` (string): Model provider (e.g., "anthropic", "openai")
+- `model` (string): Model ID (e.g., "claude-sonnet-4-20250514")
+- `errorMessage` (string): The raw error message from the provider
+- `isCompactionFailure` (boolean): True if overflow occurred during compaction
+- `autoCompactionAttempted` (boolean): True if auto-compaction was tried before giving up
+- `thrownAsException` (boolean): True if overflow was thrown rather than returned as payload
+
+**Example use case:** ClawVault's `emergency-save` feature uses this hook to auto-save session state before context death.
 
 ## Handler API
 

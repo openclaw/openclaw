@@ -25,6 +25,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -577,6 +578,27 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const trimmedMessage = message.replace(/\.\s*$/, "");
+
+      // Emit agent:context_overflow hook event for external handlers (e.g. ClawVault)
+      if (isContextOverflow) {
+        const hookEvent = createInternalHookEvent(
+          "agent",
+          "context_overflow",
+          params.sessionKey ?? params.followupRun.run.sessionId,
+          {
+            sessionId: params.getActiveSessionEntry()?.sessionId,
+            sessionFile: params.followupRun.run.sessionFile,
+            provider: fallbackProvider,
+            model: fallbackModel,
+            errorMessage: message,
+            isCompactionFailure: isCompactionFailure,
+            autoCompactionAttempted: autoCompactionCompleted,
+            thrownAsException: true,
+          },
+        );
+        void triggerInternalHook(hookEvent);
+      }
+
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
