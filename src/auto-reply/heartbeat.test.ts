@@ -132,6 +132,13 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n\n")).toBe(true);
   });
 
+  it("returns true for HTML comment-only content", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- noop -->")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!-- noop -->\n<!-- still comment -->`),
+    ).toBe(true);
+  });
+
   it("returns true for comments only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
@@ -179,5 +186,27 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("ignores HTML comments while detecting actionable content", () => {
+    const content = `<!-- intro -->
+- Task 1
+<!-- closing -->`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("handles multiline HTML comments", () => {
+    const content = `<!--
+multi
+line
+-->
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+    const contentWithTask = `<!--
+note
+-->
+- Task after comment
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(contentWithTask)).toBe(false);
   });
 });

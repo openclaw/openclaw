@@ -28,8 +28,40 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   }
 
   const lines = content.split("\n");
+  const htmlCommentState = { inComment: false };
+  const stripHtmlComments = (line: string): string => {
+    let result = "";
+    let index = 0;
+    while (index < line.length) {
+      if (htmlCommentState.inComment) {
+        const end = line.indexOf("-->", index);
+        if (end === -1) {
+          return result;
+        }
+        htmlCommentState.inComment = false;
+        index = end + 3;
+        continue;
+      }
+
+      const start = line.indexOf("<!--", index);
+      if (start === -1) {
+        result += line.slice(index);
+        break;
+      }
+
+      result += line.slice(index, start);
+      const end = line.indexOf("-->", start + 4);
+      if (end === -1) {
+        htmlCommentState.inComment = true;
+        return result;
+      }
+      index = end + 3;
+    }
+    return result;
+  };
   for (const line of lines) {
-    const trimmed = line.trim();
+    const withoutComments = stripHtmlComments(line);
+    const trimmed = withoutComments.trim();
     // Skip empty lines
     if (!trimmed) {
       continue;
