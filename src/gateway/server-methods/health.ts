@@ -7,7 +7,13 @@ import { formatForLog } from "../ws-log.js";
 
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params }) => {
-    const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
+    const {
+      getHealthCache,
+      getCurrentChannelBeingProbed,
+      isHealthRefreshInProgress,
+      refreshHealthSnapshot,
+      logHealth,
+    } = context;
     const wantsProbe = params?.probe === true;
     const now = Date.now();
     const cached = getHealthCache();
@@ -16,6 +22,12 @@ export const healthHandlers: GatewayRequestHandlers = {
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
+      return;
+    }
+    // When a refresh is in progress and client doesn't want full probe, return cached
+    // immediately. Avoids blocking probe/status on a slow channel (e.g. iMessage).
+    if (!wantsProbe && isHealthRefreshInProgress() && cached) {
+      respond(true, cached, undefined, { cached: true, refreshInProgress: true });
       return;
     }
     try {
@@ -28,5 +40,10 @@ export const healthHandlers: GatewayRequestHandlers = {
   status: async ({ respond }) => {
     const status = await getStatusSummary();
     respond(true, status, undefined);
+  },
+  "health.probeStatus": async ({ respond, context }) => {
+    const { getCurrentChannelBeingProbed } = context;
+    const currentChannel = getCurrentChannelBeingProbed();
+    respond(true, { currentChannel: currentChannel ?? undefined }, undefined);
   },
 };

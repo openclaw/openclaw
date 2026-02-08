@@ -8,6 +8,7 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { setCurrentChannelBeingProbed } from "../gateway/server/health-state.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -465,6 +466,7 @@ export async function getHealthSnapshot(params?: {
       let lastProbeAt: number | null = null;
       if (enabled && configured && doProbe && plugin.status?.probeAccount) {
         try {
+          setCurrentChannelBeingProbed(plugin.id);
           probe = await plugin.status.probeAccount({
             account,
             timeoutMs: cappedTimeout,
@@ -474,6 +476,8 @@ export async function getHealthSnapshot(params?: {
         } catch (err) {
           probe = { ok: false, error: formatErrorMessage(err) };
           lastProbeAt = Date.now();
+        } finally {
+          setCurrentChannelBeingProbed(null);
         }
       }
 

@@ -74,7 +74,7 @@ export async function probeGateway(opts: {
         connectLatencyMs = Date.now() - startedAt;
         try {
           const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
+            client.request("health", { probe: true }),
             client.request("status"),
             client.request("system-presence"),
             client.request("config.get", {}),
@@ -105,11 +105,23 @@ export async function probeGateway(opts: {
     });
 
     const timer = setTimeout(
-      () => {
+      async () => {
+        let errorMsg = connectError ? `connect failed: ${connectError}` : "timeout";
+        if (!connectError && errorMsg === "timeout") {
+          try {
+            const probeStatus = await client.request("health.probeStatus");
+            const status = probeStatus as { currentChannel?: string } | undefined;
+            if (status?.currentChannel) {
+              errorMsg = `timeout (health check blocked by channel: ${status.currentChannel}; try disabling it in config)`;
+            }
+          } catch {
+            // Ignore - use generic timeout message
+          }
+        }
         settle({
           ok: false,
           connectLatencyMs,
-          error: connectError ? `connect failed: ${connectError}` : "timeout",
+          error: errorMsg,
           close,
           health: null,
           status: null,

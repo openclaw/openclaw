@@ -50,6 +50,7 @@ const PAIRING_METHODS = new Set([
 const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
 const READ_METHODS = new Set([
   "health",
+  "health.probeStatus",
   "logs.tail",
   "channels.status",
   "status",
