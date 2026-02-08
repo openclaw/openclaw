@@ -48,3 +48,4 @@ Action:
 ```bash
 python3 skills/remote-agent/scripts/client.py --query "Run the data processing pipeline"
 ```
+
