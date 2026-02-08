@@ -215,6 +215,32 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       return { channel: "imessage", ...result };
     },
   },
+  heartbeat: {
+    checkReady: async ({ cfg, accountId }) => {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      if (!account.enabled) {
+        return { ok: false, reason: "imessage-disabled" };
+      }
+      if (!account.configured) {
+        return { ok: false, reason: "imessage-not-configured" };
+      }
+      try {
+        const probe = await getIMessageRuntime().channel.imessage.probeIMessage(2000, {
+          cliPath: account.config.cliPath,
+          dbPath: account.config.dbPath,
+        });
+        if (!probe.ok) {
+          return {
+            ok: false,
+            reason: probe.fatal ? "imessage-fatal-error" : "imessage-not-ready",
+          };
+        }
+        return { ok: true, reason: "ok" };
+      } catch (err) {
+        return { ok: false, reason: `imessage-probe-error: ${String(err)}` };
+      }
+    },
+  },
   status: {
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,

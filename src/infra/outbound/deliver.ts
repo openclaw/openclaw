@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type { ChannelHeartbeatDeps, ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
@@ -14,6 +14,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -47,7 +48,7 @@ export type OutboundSendDeps = {
     text: string,
     opts?: { mediaUrl?: string },
   ) => Promise<{ messageId: string; conversationId: string }>;
-};
+} & Partial<ChannelHeartbeatDeps>;
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -203,6 +204,31 @@ export async function deliverOutboundPayloads(params: {
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const results: OutboundDeliveryResult[] = [];
+  const channelPlugin = getChannelPlugin(channel);
+  if (channelPlugin?.heartbeat?.checkReady) {
+    const readiness = await channelPlugin.heartbeat.checkReady({
+      cfg,
+      accountId: accountId ?? null,
+      deps: deps
+        ? { webAuthExists: deps.webAuthExists, hasActiveWebListener: deps.hasActiveWebListener }
+        : undefined,
+    });
+    if (!readiness.ok) {
+      const error = new Error(
+        `Channel ${channel} is not ready: ${readiness.reason}. Message delivery skipped.`,
+      );
+      if (!params.bestEffort) {
+        throw error;
+      }
+      params.onError?.(error, {
+        text: payloads.map((p) => p.text ?? "").join("\n"),
+        mediaUrls: payloads.flatMap((p) => p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : [])),
+        channelData: undefined,
+      });
+      return results;
+    }
+  }
+
   const handler = await createChannelHandler({
     cfg,
     channel,
