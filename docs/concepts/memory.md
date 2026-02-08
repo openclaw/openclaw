@@ -142,9 +142,8 @@ out to QMD for retrieval. Key points:
 - Searches run via `memory.qmd.searchMode` (default `qmd query --json`; also
   supports `search` and `vsearch`). If the selected mode rejects flags on your
   QMD build, OpenClaw retries with `qmd query`. If QMD fails or the binary is
-  missing,
-  OpenClaw automatically falls back to the builtin SQLite manager so memory tools
-  keep working.
+  missing, OpenClaw automatically falls back to the builtin SQLite manager so
+  memory tools keep working.
 - OpenClaw does not expose QMD embed batch-size tuning today; batch behavior is
   controlled by QMD itself.
 - **First search may be slow**: QMD may download local GGUF models (reranker/query
