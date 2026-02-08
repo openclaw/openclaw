@@ -277,7 +277,7 @@ export function registerCompletionCli(program: Command) {
         throw new Error(`Unsupported shell: ${shell}`);
       }
       const script = getCompletionScript(shell, program);
-      console.log(script);
+      process.stdout.write(script);
     });
 }
 
