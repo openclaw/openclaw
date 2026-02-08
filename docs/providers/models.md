@@ -47,6 +47,7 @@ See [Venice AI](/providers/venice).
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
+- [ERNIE (Baidu Wenxin)](/providers/ernie)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

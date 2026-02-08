@@ -11,6 +11,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyErnieConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
@@ -27,6 +28,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setErnieApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -220,6 +222,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "ernie-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "ernie",
+      cfg: baseConfig,
+      flagValue: opts.ernieApiKey,
+      flagName: "--ernie-api-key",
+      envVar: "ERNIE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      setErnieApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ernie:default",
+      provider: "ernie",
+      mode: "api_key",
+    });
+    return applyErnieConfig(nextConfig);
   }
 
   if (authChoice === "xai-api-key") {

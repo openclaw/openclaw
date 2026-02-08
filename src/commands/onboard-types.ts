@@ -35,6 +35,7 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
+  | "ernie-api-key"
   | "xai-api-key"
   | "qianfan-api-key"
   | "skip";
@@ -81,6 +82,7 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   opencodeZenApiKey?: string;
+  ernieApiKey?: string;
   xaiApiKey?: string;
   qianfanApiKey?: string;
   gatewayPort?: number;

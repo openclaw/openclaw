@@ -205,6 +205,18 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
   });
 }
 
+export function setErnieApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "ernie:default",
+    credential: {
+      type: "api_key",
+      provider: "ernie",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export function setQianfanApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "qianfan:default",
