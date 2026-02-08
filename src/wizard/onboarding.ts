@@ -18,6 +18,7 @@ import {
 } from "../commands/auth-choice.js";
 import { applyPrimaryModel, promptDefaultModel } from "../commands/model-picker.js";
 import { setupChannels } from "../commands/onboard-channels.js";
+import { promptCustomApiConfig } from "../commands/onboard-custom.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -378,18 +379,22 @@ export async function runOnboardingWizard(
       includeSkip: true,
     }));
 
-  const authResult = await applyAuthChoice({
-    authChoice,
-    config: nextConfig,
-    prompter,
-    runtime,
-    setDefaultModel: true,
-    opts: {
-      tokenProvider: opts.tokenProvider,
-      token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
-    },
-  });
-  nextConfig = authResult.config;
+  if (authChoice === "custom-api-key") {
+    nextConfig = await promptCustomApiConfig({ prompter, runtime, config: nextConfig });
+  } else {
+    const authResult = await applyAuthChoice({
+      authChoice,
+      config: nextConfig,
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: opts.tokenProvider,
+        token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
+      },
+    });
+    nextConfig = authResult.config;
+  }
 
   if (authChoiceFromPrompt) {
     const modelSelection = await promptDefaultModel({

@@ -24,7 +24,8 @@ export type AuthChoiceGroupId =
   | "venice"
   | "qwen"
   | "qianfan"
-  | "xai";
+  | "xai"
+  | "custom";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -141,6 +142,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
   },
+  {
+    value: "custom",
+    label: "Custom / Local API",
+    hint: "Ollama, LocalAI, vLLM, compatible endpoints",
+    choices: ["custom-api-key"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -237,6 +244,8 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
+  options.push({ value: "custom-api-key", label: "Custom / Local API" });
+
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }
