@@ -187,6 +187,14 @@ export function resolveEnableState(
   if (origin === "bundled") {
     return { enabled: false, reason: "bundled (disabled by default)" };
   }
+  if (origin === "config") {
+    return {
+      enabled: false,
+      reason:
+        "config-origin plugins require explicit enablement " +
+        '(set enabled: true in plugins.entries["<plugin-id>"])',
+    };
+  }
   return { enabled: true };
 }
 

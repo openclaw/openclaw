@@ -85,6 +85,20 @@ function resolveUserPath(input: string): string {
   return path.resolve(trimmed);
 }
 
+/**
+ * Warn when a config path override is a relative path, which may indicate
+ * a malicious .env file planted in a repository's working directory.
+ */
+function warnIfRelativeConfigOverride(override: string): void {
+  if (!path.isAbsolute(override) && !override.startsWith("~")) {
+    console.warn(
+      `[security] OPENCLAW_CONFIG_PATH is a relative path ("${override}"). ` +
+        `This may indicate a malicious .env file in the current directory. ` +
+        `Use an absolute path instead.`,
+    );
+  }
+}
+
 export const STATE_DIR = resolveStateDir();
 
 /**
@@ -98,6 +112,7 @@ export function resolveCanonicalConfigPath(
 ): string {
   const override = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) {
+    warnIfRelativeConfigOverride(override);
     return resolveUserPath(override);
   }
   return path.join(stateDir, CONFIG_FILENAME);
@@ -135,6 +150,7 @@ export function resolveConfigPath(
 ): string {
   const override = env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
+    warnIfRelativeConfigOverride(override);
     return resolveUserPath(override);
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
@@ -174,6 +190,7 @@ export function resolveDefaultConfigCandidates(
 ): string[] {
   const explicit = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (explicit) {
+    warnIfRelativeConfigOverride(explicit);
     return [resolveUserPath(explicit)];
   }
 
