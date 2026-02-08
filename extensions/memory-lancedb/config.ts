@@ -7,6 +7,8 @@ export type MemoryConfig = {
     provider: "openai";
     model?: string;
     apiKey: string;
+    baseUrl?: string;
+    dimension?: number;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -46,9 +48,19 @@ function resolveDefaultDbPath(): string {
 
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
+// Known embedding models and their dimensions
+// Users can override with custom dimension for unlisted models
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
+  // OpenAI
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  // SiliconFlow / Chinese models
+  "BAAI/bge-m3": 1024,
+  "BAAI/bge-large-zh-v1.5": 1024,
+  "BAAI/bge-large-en-v1.5": 1024,
+  "Qwen/Qwen3-Embedding-8B": 4096,
+  // Jina
+  "jina-embeddings-v3": 1024,
 };
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -59,10 +71,17 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
   throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
 }
 
-export function vectorDimsForModel(model: string): number {
+export function vectorDimsForModel(model: string, customDimension?: number): number {
+  // Custom dimension takes precedence
+  if (customDimension !== undefined && customDimension > 0) {
+    return customDimension;
+  }
   const dims = EMBEDDING_DIMENSIONS[model];
   if (!dims) {
-    throw new Error(`Unsupported embedding model: ${model}`);
+    throw new Error(
+      `Unknown embedding model: ${model}. Please specify 'dimension' in config. ` +
+        `Known models: ${Object.keys(EMBEDDING_DIMENSIONS).join(", ")}`,
+    );
   }
   return dims;
 }
@@ -77,10 +96,11 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
-  const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
-  return model;
+function resolveOptionalEnvVars(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return resolveEnvVars(value);
 }
 
 export const memoryConfigSchema = {
@@ -95,15 +115,21 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimension"], "embedding config");
 
-    const model = resolveEmbeddingModel(embedding);
+    const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
+    const dimension = typeof embedding.dimension === "number" ? embedding.dimension : undefined;
+
+    // Validate dimension is available (either custom or known model)
+    vectorDimsForModel(model, dimension);
 
     return {
       embedding: {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl: resolveOptionalEnvVars(embedding.baseUrl as string | undefined),
+        dimension,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
@@ -112,15 +138,27 @@ export const memoryConfigSchema = {
   },
   uiHints: {
     "embedding.apiKey": {
-      label: "OpenAI API Key",
+      label: "API Key",
       sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      placeholder: "sk-...",
+      help: "API key for embeddings (OpenAI, SiliconFlow, or compatible provider)",
     },
     "embedding.model": {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      help: "Embedding model to use (e.g., text-embedding-3-small, BAAI/bge-m3, Qwen/Qwen3-Embedding-8B)",
+    },
+    "embedding.baseUrl": {
+      label: "Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Custom API base URL for OpenAI-compatible providers (e.g., https://api.siliconflow.cn/v1)",
+      advanced: true,
+    },
+    "embedding.dimension": {
+      label: "Embedding Dimension",
+      placeholder: "auto",
+      help: "Vector dimension for custom models. Leave empty for known models.",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",

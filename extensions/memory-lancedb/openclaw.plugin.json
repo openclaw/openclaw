@@ -3,15 +3,27 @@
   "kind": "memory",
   "uiHints": {
     "embedding.apiKey": {
-      "label": "OpenAI API Key",
+      "label": "API Key",
       "sensitive": true,
-      "placeholder": "sk-proj-...",
-      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+      "placeholder": "sk-...",
+      "help": "API key for embeddings (OpenAI, SiliconFlow, or compatible provider)"
     },
     "embedding.model": {
       "label": "Embedding Model",
       "placeholder": "text-embedding-3-small",
-      "help": "OpenAI embedding model to use"
+      "help": "Embedding model (e.g., text-embedding-3-small, BAAI/bge-m3, Qwen/Qwen3-Embedding-8B)"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Custom API base URL for OpenAI-compatible providers (e.g., https://api.siliconflow.cn/v1)",
+      "advanced": true
+    },
+    "embedding.dimension": {
+      "label": "Embedding Dimension",
+      "placeholder": "auto",
+      "help": "Vector dimension for custom models. Leave empty for known models.",
+      "advanced": true
     },
     "dbPath": {
       "label": "Database Path",
@@ -39,8 +51,13 @@
             "type": "string"
           },
           "model": {
-            "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimension": {
+            "type": "number"
           }
         },
         "required": ["apiKey"]

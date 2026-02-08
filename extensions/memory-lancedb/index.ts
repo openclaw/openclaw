@@ -2,7 +2,8 @@
  * OpenClaw Memory (LanceDB) Plugin
  *
  * Long-term memory with vector search for AI conversations.
- * Uses LanceDB for storage and OpenAI for embeddings.
+ * Uses LanceDB for storage and OpenAI-compatible APIs for embeddings.
+ * Supports OpenAI, SiliconFlow, and other compatible embedding providers.
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
@@ -166,8 +167,12 @@ class Embeddings {
   constructor(
     apiKey: string,
     private model: string,
+    baseUrl?: string,
   ) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ 
+      apiKey,
+      baseURL: baseUrl,
+    });
   }
 
   async embed(text: string): Promise<number[]> {
@@ -250,9 +255,9 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small", cfg.embedding.dimension);
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!, cfg.embedding.baseUrl);
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
