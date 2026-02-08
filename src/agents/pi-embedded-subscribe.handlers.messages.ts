@@ -17,6 +17,43 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+/**
+ * Patterns that suggest a model intended to make a tool call but none were parsed.
+ * This happens with OpenRouter and some other providers that don't stream tool_calls
+ * as proper deltas, causing the SDK to miss them.
+ */
+const TOOL_CALL_INTENT_PATTERNS = [
+  // JSON-like tool call structures
+  /\{\s*"(?:name|function|tool)":\s*"[^"]+"/i,
+  // XML-like tool call tags (common in some models)
+  /<(?:tool_call|function_call|tool_use)[^>]*>/i,
+  // Explicit "I'll use X tool" phrasing that ends abruptly
+  /I(?:'ll| will) (?:use|call|invoke) (?:the )?(\w+)(?:\s+tool)?[.!]?\s*$/i,
+];
+
+/**
+ * Check if text contains patterns suggesting a tool call was intended but not parsed.
+ * Returns the suspected tool name if detected, undefined otherwise.
+ */
+function detectUnparsedToolCallIntent(text: string): string | undefined {
+  if (!text || text.length < 10) {
+    return undefined;
+  }
+  for (const pattern of TOOL_CALL_INTENT_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) {
+      // Try to extract a tool name from the match
+      if (match[1]) {
+        return match[1];
+      }
+      // For JSON/XML patterns, try to extract the tool name
+      const nameMatch = /["']?(?:name|function|tool)["']?\s*[:=]\s*["']?([^"',\s>]+)/i.exec(text);
+      return nameMatch?.[1] ?? "unknown";
+    }
+  }
+  return undefined;
+}
+
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
@@ -357,6 +394,23 @@ export function handleMessageEnd(
           replyToCurrent,
         });
       }
+    }
+  }
+
+  // Guard: Detect potential tool call parsing failures (common with OpenRouter)
+  // If the message ends with patterns suggesting a tool call was intended but
+  // no tool execution events were fired, log a warning for debugging.
+  // Use stripped text (not rawText) to avoid false positives from JSON examples
+  // or structured content in the assistant's message.
+  const toolMetaCount = ctx.state.toolMetas.length;
+  if (toolMetaCount === 0) {
+    const suspectedTool = detectUnparsedToolCallIntent(text);
+    if (suspectedTool) {
+      ctx.log.warn(
+        `Potential tool call parsing failure detected (tool: ${suspectedTool}). ` +
+          `This may indicate the provider (e.g., OpenRouter) is not streaming tool_calls properly. ` +
+          `Message ended without tool execution events despite apparent tool call intent.`,
+      );
     }
   }
 
