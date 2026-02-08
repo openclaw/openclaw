@@ -170,6 +170,7 @@ export type SlackThreadStarter = {
   files?: SlackFile[];
 };
 
+const MAX_THREAD_STARTER_CACHE_SIZE = 10_000; // Prevent unbounded growth
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
 
 export async function resolveSlackThreadStarter(params: {
@@ -180,6 +181,9 @@ export async function resolveSlackThreadStarter(params: {
   const cacheKey = `${params.channelId}:${params.threadTs}`;
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) {
+    // Refresh LRU order on hit
+    THREAD_STARTER_CACHE.delete(cacheKey);
+    THREAD_STARTER_CACHE.set(cacheKey, cached);
     return cached;
   }
   try {
@@ -200,6 +204,14 @@ export async function resolveSlackThreadStarter(params: {
       ts: message.ts,
       files: message.files,
     };
+    // Enforce size limit before inserting new entry (use > to allow exactly MAX entries)
+    while (THREAD_STARTER_CACHE.size > MAX_THREAD_STARTER_CACHE_SIZE) {
+      const oldestKey = THREAD_STARTER_CACHE.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      THREAD_STARTER_CACHE.delete(oldestKey);
+    }
     THREAD_STARTER_CACHE.set(cacheKey, starter);
     return starter;
   } catch {
