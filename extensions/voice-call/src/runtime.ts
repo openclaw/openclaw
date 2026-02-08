@@ -40,7 +40,23 @@ function isLoopbackBind(bind: string | undefined): boolean {
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
-function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
+function resolveProvider(config: VoiceCallConfig, logger?: Logger): VoiceCallProvider {
+  // Production guard: prevent skipSignatureVerification in production
+  if (config.skipSignatureVerification) {
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction) {
+      throw new Error(
+        "skipSignatureVerification cannot be enabled in production (NODE_ENV=production). " +
+          "This setting disables webhook security and should only be used for local development.",
+      );
+    }
+    // Warn in non-production environments
+    logger?.warn(
+      "[voice-call] WARNING: skipSignatureVerification is enabled. " +
+        "Webhook signature verification is DISABLED. This is insecure and should only be used for local development.",
+    );
+  }
+
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackBind(config.serve?.bind) &&
@@ -118,7 +134,7 @@ export async function createVoiceCallRuntime(params: {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
-  const provider = resolveProvider(config);
+  const provider = resolveProvider(config, log);
   const manager = new CallManager(config);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
