@@ -888,7 +888,48 @@ chmod 600 ~/.openclaw/credentials/notion-api-key.txt
 echo 'export NOTION_API_KEY="$(cat ~/.openclaw/credentials/notion-api-key.txt)"' >> ~/.bashrc
 ```
 
-#### 12. USER.md Setup
+#### 12. Context Overflow: Prompt Too Large
+
+**Symptom:**
+```
+Context overflow: prompt too large for the model. Try again with less input or a larger-context model.
+```
+
+**Root Cause:** The session conversation history + system prompt + skills prompt exceeded the model's context window (200K tokens for Opus). Happens during intensive multi-turn tasks.
+
+**Immediate Fix:** Send `/new` in Telegram to start a fresh session. This command is processed before the agent, so it works even when context is full.
+
+**Prevention:**
+- Use `/compact` proactively during long conversations to compress context
+- Compaction mode `"safeguard"` (default) auto-compacts when context fills, but can't recover once the overflow error is hit
+- For intensive tasks, break work into multiple sessions
+
+**Available Telegram Session Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/new` | Start fresh session (clears all context) |
+| `/reset` | Reset current session |
+| `/compact` | Compress context to free space (use proactively) |
+| `/stop` | Stop the current run |
+| `/model` | Show/switch model (`/model codex`, `/model opus`) |
+| `/think` | Set thinking level (off/low/medium/high/xhigh) |
+| `/help` | Show available commands |
+| `/status` | Show current status and model info |
+| `/restart` | Restart the gateway (requires `commands.restart: true`) |
+
+**Enabling `/restart`:** Add `"restart": true` to the `commands` section in `openclaw.json`:
+```json
+{
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true
+  }
+}
+```
+
+#### 13. USER.md Setup
 
 **No issues encountered.** The USER.md file creation worked smoothly using direct file write with heredoc.
 
