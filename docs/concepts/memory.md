@@ -101,6 +101,56 @@ embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
+### Redis backend
+
+Set `plugins.slots.memory = "memory-redis"` for a Redis-backed long-term memory
+with vector similarity search. Unlike the file-based approach, Redis memory:
+
+- Stores memories as structured documents (not Markdown files)
+- Uses RediSearch vector indexes for fast semantic search
+- Supports auto-capture (extracts facts from conversations automatically)
+- Supports auto-recall (injects relevant memories before each turn)
+- Works well for multi-instance deployments (shared Redis)
+
+**Prerequisites**
+
+- **Redis 8+** or **Redis Stack** (includes RediSearch for vector search)
+- Embedding provider (local via Ollama, OpenAI, or Gemini)
+
+**Quick start with Docker:**
+
+```bash
+docker run -d --name redis-stack -p 127.0.0.1:6379:6379 \
+  -v redis-data:/data --restart unless-stopped redis/redis-stack:latest
+```
+
+**Config example (Ollama embeddings):**
+
+```json5
+{
+  plugins: {
+    slots: { memory: "memory-redis" },
+    entries: {
+      "memory-redis": {
+        config: {
+          redis: { url: "redis://localhost:6379" },
+          embedding: {
+            provider: "openai",
+            apiKey: "ollama",
+            model: "nomic-embed-text",
+            baseUrl: "http://localhost:11434/v1",
+          },
+          autoRecall: true,
+          autoCapture: true,
+        },
+      },
+    },
+  },
+}
+```
+
+See the [Memory Redis plugin](/plugins/memory-redis) README for full configuration options.
+
 ### QMD backend (experimental)
 
 Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for

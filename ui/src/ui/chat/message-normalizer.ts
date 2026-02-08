@@ -5,6 +5,16 @@
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
+ * Strip injected memory context from user messages.
+ * Memory plugins prepend `<relevant-memories>...</relevant-memories>` blocks
+ * to user prompts for AI context, but these should be hidden from the UI.
+ */
+function stripInjectedMemoryContext(text: string): string {
+  // Remove <relevant-memories>...</relevant-memories> blocks (including newlines after)
+  return text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "").trim();
+}
+
+/**
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
@@ -34,17 +44,28 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // Extract content
   let content: MessageContentItem[] = [];
 
+  // Only strip injected memory context from user messages (where it's prepended)
+  const shouldStripMemory = role === "user";
+
   if (typeof m.content === "string") {
-    content = [{ type: "text", text: m.content }];
+    const text = shouldStripMemory ? stripInjectedMemoryContext(m.content) : m.content;
+    content = [{ type: "text", text }];
   } else if (Array.isArray(m.content)) {
-    content = m.content.map((item: Record<string, unknown>) => ({
-      type: (item.type as MessageContentItem["type"]) || "text",
-      text: item.text as string | undefined,
-      name: item.name as string | undefined,
-      args: item.args || item.arguments,
-    }));
+    content = m.content.map((item: Record<string, unknown>) => {
+      let text = item.text as string | undefined;
+      if (shouldStripMemory && typeof text === "string") {
+        text = stripInjectedMemoryContext(text);
+      }
+      return {
+        type: (item.type as MessageContentItem["type"]) || "text",
+        text,
+        name: item.name as string | undefined,
+        args: item.args || item.arguments,
+      };
+    });
   } else if (typeof m.text === "string") {
-    content = [{ type: "text", text: m.text }];
+    const text = shouldStripMemory ? stripInjectedMemoryContext(m.text) : m.text;
+    content = [{ type: "text", text }];
   }
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();

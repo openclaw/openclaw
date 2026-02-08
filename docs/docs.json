@@ -974,7 +974,7 @@
               },
               {
                 "group": "Extensions",
-                "pages": ["plugins/voice-call", "plugins/zalouser"]
+                "pages": ["plugins/memory-redis", "plugins/voice-call", "plugins/zalouser"]
               },
               {
                 "group": "Automation",
