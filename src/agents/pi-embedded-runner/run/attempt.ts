@@ -175,7 +175,8 @@ function applyBeforeAgentStartSystemPromptPatch(
     return baseSystemPrompt.trimEnd();
   }
   const cleanBase = stripBeforeAgentStartSystemPromptPatch(baseSystemPrompt.trimEnd());
-  const taggedPatch = `${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN}\n${trimmedPatch}\n${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE}`;
+  const sanitizedPatch = trimmedPatch.replaceAll(BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE, "");
+  const taggedPatch = `${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_OPEN}\n${sanitizedPatch}\n${BEFORE_AGENT_START_SYSTEM_PROMPT_PATCH_CLOSE}`;
   if (!cleanBase) {
     return taggedPatch;
   }
