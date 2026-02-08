@@ -24,6 +24,12 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
+export function sendForbidden(res: ServerResponse, message: string) {
+  sendJson(res, 403, {
+    error: { message, type: "forbidden" },
+  });
+}
+
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },

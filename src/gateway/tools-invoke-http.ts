@@ -7,6 +7,11 @@ import {
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
 import {
+  formatSandboxToolPolicyBlockedMessage,
+  resolveSandboxRuntimeStatus,
+} from "../agents/sandbox.js";
+import { isToolAllowed } from "../agents/sandbox/tool-policy.js";
+import {
   buildPluginToolGroups,
   collectExplicitAllowlist,
   expandPolicyWithPluginGroups,
@@ -24,6 +29,7 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
+  sendForbidden,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
@@ -167,6 +173,18 @@ export async function handleToolsInvokeHttpRequest(
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
+
+  // Check sandbox policy before proceeding. Sandboxed sessions have restricted tool access.
+  const sandboxRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+  if (sandboxRuntime.sandboxed) {
+    if (!isToolAllowed(sandboxRuntime.toolPolicy, toolName)) {
+      const message =
+        formatSandboxToolPolicyBlockedMessage({ cfg, sessionKey, toolName }) ??
+        `Tool "${toolName}" is blocked by sandbox policy (mode=${sandboxRuntime.mode}, session=${sessionKey})`;
+      sendForbidden(res, message);
+      return true;
+    }
+  }
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(

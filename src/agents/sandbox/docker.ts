@@ -9,11 +9,32 @@ import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
+type ExecDockerOptions = {
+  allowFailure?: boolean;
+  signal?: AbortSignal;
+  input?: string | Uint8Array;
+};
+
+export function execDocker(args: string[], opts?: ExecDockerOptions) {
   return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
+    let settled = false;
     const child = spawn("docker", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [opts?.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+      signal: opts?.signal,
     });
+    const settleReject = (err: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(err);
+    };
+    child.once("error", (err) => {
+      settleReject(err);
+    });
+    if (opts?.input !== undefined && child.stdin) {
+      child.stdin.end(opts.input);
+    }
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => {
@@ -23,6 +44,10 @@ export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
       stderr += chunk.toString();
     });
     child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !opts?.allowFailure) {
         reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
