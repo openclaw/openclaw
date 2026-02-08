@@ -11,6 +11,26 @@ import {
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+const WhatsAppPairingConfigSchema = z
+  .object({
+    /** Notify the owner when a new pairing request is received. Default: false. */
+    notifyOwner: z.boolean().optional().default(false),
+    /** Chat JID to send pairing notifications to (e.g., "554788703000@s.whatsapp.net"). */
+    ownerChat: z.string().optional(),
+    /** Include the original message content in the notification. Default: true. */
+    includeMessage: z.boolean().optional().default(true),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.notifyOwner && !value.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownerChat"],
+        message: "ownerChat is required when notifyOwner is true",
+      });
+    }
+  });
+
 export const WhatsAppAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -24,6 +44,7 @@ export const WhatsAppAccountSchema = z
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
+    pairing: WhatsAppPairingConfigSchema.optional(),
     selfChatMode: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
@@ -84,6 +105,7 @@ export const WhatsAppConfigSchema = z
     configWrites: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
+    pairing: WhatsAppPairingConfigSchema.optional(),
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
     selfChatMode: z.boolean().optional(),
