@@ -89,6 +89,8 @@ function enqueueChatMessage(
       refreshSessions,
     },
   ];
+  // Re-scroll so latest messages stay visible when queue box appears/grows
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
 async function sendChatMessageNow(
@@ -154,6 +156,8 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  // Re-scroll when queue shrinks to reclaim space for messages
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
 export async function handleSendChat(
