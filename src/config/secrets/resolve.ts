@@ -252,6 +252,9 @@ function substituteSecrets(
 function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): SecretsProvider {
   switch (config.provider) {
     case "gcp":
+      if (!config.gcp?.project) {
+        throw new SecretsProviderError("GCP secrets provider requires 'gcp.project' to be set");
+      }
       return createGcpSecretsProvider(config.gcp);
     case "env":
       return createEnvSecretsProvider(env);
