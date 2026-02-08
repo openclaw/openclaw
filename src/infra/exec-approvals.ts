@@ -1306,7 +1306,64 @@ export type ExecAllowlistAnalysis = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
+  /** Warnings about suspicious command patterns (e.g. remote code execution, eval). */
+  securityWarnings: string[];
+  /** When true, the command contains patterns that must be hard-blocked before approval. */
+  securityBlocked: boolean;
 };
+
+// Patterns that indicate potentially dangerous command semantics.
+// These are checked even when a command passes allowlist evaluation.
+const SUSPICIOUS_PIPE_TARGETS = new Set(["sh", "bash", "zsh", "dash", "ksh", "csh", "fish"]);
+const SUSPICIOUS_BINARIES = new Set(["eval", "exec", "source"]);
+const SUSPICIOUS_CURL_PIPE_RE = /\b(curl|wget)\b.*\|\s*(sh|bash|zsh|dash|python|perl|ruby|node)\b/;
+const SUSPICIOUS_ENV_OVERRIDE_RE =
+  /\b(LD_PRELOAD|LD_LIBRARY_PATH|BASH_ENV|DYLD_INSERT_LIBRARIES)\s*=/;
+
+type SuspiciousPatternResult = {
+  warnings: string[];
+  blocked: boolean;
+};
+
+function detectSuspiciousPatterns(
+  command: string,
+  segments: ExecCommandSegment[],
+): SuspiciousPatternResult {
+  const warnings: string[] = [];
+  let blocked = false;
+
+  // Check for curl/wget piped to shell — BLOCK (remote code execution).
+  if (SUSPICIOUS_CURL_PIPE_RE.test(command)) {
+    warnings.push(
+      "[BLOCKED] Remote code execution pattern detected: output piped to shell interpreter",
+    );
+    blocked = true;
+  }
+
+  // Check for dangerous environment variable injection in command text — BLOCK.
+  if (SUSPICIOUS_ENV_OVERRIDE_RE.test(command)) {
+    warnings.push("[BLOCKED] Dangerous environment variable override detected in command");
+    blocked = true;
+  }
+
+  for (const seg of segments) {
+    const bin = seg.argv[0]?.toLowerCase() ?? "";
+    const baseBin = bin.split("/").pop() ?? "";
+
+    // Check for eval/exec/source as command — BLOCK.
+    if (SUSPICIOUS_BINARIES.has(baseBin)) {
+      warnings.push(`[BLOCKED] Suspicious command: "${baseBin}" can execute arbitrary code`);
+      blocked = true;
+    }
+
+    // Check if a pipe targets a shell interpreter — WARN (non-remote source).
+    if (segments.length > 1 && SUSPICIOUS_PIPE_TARGETS.has(baseBin) && seg !== segments[0]) {
+      warnings.push(`Pipeline feeds into shell interpreter "${baseBin}"`);
+    }
+  }
+
+  return { warnings, blocked };
+}
 
 /**
  * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
@@ -1335,6 +1392,8 @@ export function evaluateShellAllowlist(params: {
         allowlistSatisfied: false,
         allowlistMatches: [],
         segments: [],
+        securityWarnings: [],
+        securityBlocked: false,
       };
     }
     const evaluation = evaluateExecAllowlist({
@@ -1345,11 +1404,14 @@ export function evaluateShellAllowlist(params: {
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
     });
+    const suspicious = detectSuspiciousPatterns(params.command, analysis.segments);
     return {
       analysisOk: true,
       allowlistSatisfied: evaluation.allowlistSatisfied,
       allowlistMatches: evaluation.allowlistMatches,
       segments: analysis.segments,
+      securityWarnings: suspicious.warnings,
+      securityBlocked: suspicious.blocked,
     };
   }
 
@@ -1369,6 +1431,8 @@ export function evaluateShellAllowlist(params: {
         allowlistSatisfied: false,
         allowlistMatches: [],
         segments: [],
+        securityWarnings: [],
+        securityBlocked: false,
       };
     }
 
@@ -1383,20 +1447,26 @@ export function evaluateShellAllowlist(params: {
     });
     allowlistMatches.push(...evaluation.allowlistMatches);
     if (!evaluation.allowlistSatisfied) {
+      const suspicious = detectSuspiciousPatterns(params.command, segments);
       return {
         analysisOk: true,
         allowlistSatisfied: false,
         allowlistMatches,
         segments,
+        securityWarnings: suspicious.warnings,
+        securityBlocked: suspicious.blocked,
       };
     }
   }
 
+  const suspicious = detectSuspiciousPatterns(params.command, segments);
   return {
     analysisOk: true,
     allowlistSatisfied: true,
     allowlistMatches,
     segments,
+    securityWarnings: suspicious.warnings,
+    securityBlocked: suspicious.blocked,
   };
 }
 

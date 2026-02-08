@@ -239,6 +239,14 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "totp",
+    description: "TOTP two-factor authentication",
+    register: async (program) => {
+      const mod = await import("../totp-cli.js");
+      mod.registerTotpCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {

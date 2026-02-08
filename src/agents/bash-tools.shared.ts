@@ -122,12 +122,26 @@ export function killSession(session: { pid?: number; child?: ChildProcessWithout
   }
 }
 
-export function resolveWorkdir(workdir: string, warnings: string[]) {
+export function resolveWorkdir(workdir: string, warnings: string[], allowedRoots?: string[]) {
   const current = safeCwd();
   const fallback = current ?? homedir();
   try {
     const stats = statSync(workdir);
     if (stats.isDirectory()) {
+      // When allowedRoots is configured, restrict workdir to those directories.
+      if (allowedRoots && allowedRoots.length > 0) {
+        const resolved = path.resolve(workdir);
+        const isAllowed = allowedRoots.some((root) => {
+          const resolvedRoot = path.resolve(root);
+          return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+        });
+        if (!isAllowed) {
+          warnings.push(
+            `Warning: workdir "${workdir}" is outside allowed roots; using "${fallback}".`,
+          );
+          return fallback;
+        }
+      }
       return workdir;
     }
   } catch {

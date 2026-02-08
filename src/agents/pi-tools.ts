@@ -12,6 +12,7 @@ import type { SandboxContext } from "./sandbox.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { wrapToolsWithTotpGate } from "../totp/totp-tool-gate.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import {
@@ -442,9 +443,28 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
     }),
   );
+  // TOTP tool gate: protect sensitive tools when TOTP is enabled for the Telegram account.
+  const telegramCfg = options?.config?.channels?.telegram;
+  const totpAccountCfg =
+    options?.agentAccountId && telegramCfg?.accounts?.[options.agentAccountId]?.totp
+      ? telegramCfg.accounts[options.agentAccountId].totp
+      : telegramCfg?.totp;
+  const isTelegramChannel = options?.messageProvider === "telegram";
+  const totpSenderId = options?.senderId ?? undefined;
+  const withTotp =
+    isTelegramChannel &&
+    totpAccountCfg?.enabled &&
+    totpAccountCfg.protectedToolGroups?.length &&
+    totpSenderId
+      ? wrapToolsWithTotpGate(withHooks, {
+          totpConfig: totpAccountCfg,
+          senderId: totpSenderId,
+        })
+      : withHooks;
+
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withTotp.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withTotp;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names

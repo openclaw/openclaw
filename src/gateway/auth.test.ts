@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizeGatewayConnect } from "./auth.js";
+import { authorizeGatewayConnect, isLocalDirectRequest } from "./auth.js";
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {
@@ -62,18 +62,61 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_missing_config");
   });
 
-  it("treats local tailscale serve hostnames as direct", async () => {
+  it("does not treat .ts.net hostnames as local direct requests", async () => {
+    // After the security fix, .ts.net hostnames should not bypass auth.
+    // They should go through the Tailscale whois auth flow instead.
     const res = await authorizeGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      connectAuth: { token: "secret" },
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: { host: "gateway.tailnet-1234.ts.net:443" },
       } as never,
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.method).toBe("token");
+    // Without tailscale auth enabled and no token provided, should fail.
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects tailscale login with invalid characters", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "peter\x00injected",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+    // Invalid login should cause tailscale auth to fail
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects tailscale login exceeding max length", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+          "tailscale-user-login": "a".repeat(300),
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+    expect(res.ok).toBe(false);
   });
 
   it("allows tailscale identity to satisfy token mode auth", async () => {
@@ -97,5 +140,40 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+});
+
+describe("isLocalDirectRequest", () => {
+  it("returns true for localhost requests", () => {
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { host: "localhost:3000" },
+    } as never);
+    expect(result).toBe(true);
+  });
+
+  it("returns false for .ts.net hostname", () => {
+    // After the security fix, .ts.net should NOT be treated as local.
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { host: "gateway.tailnet-1234.ts.net:443" },
+    } as never);
+    expect(result).toBe(false);
+  });
+
+  it("returns false for non-loopback addresses", () => {
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "192.168.1.100" },
+      headers: { host: "localhost" },
+    } as never);
+    expect(result).toBe(false);
+  });
+
+  it("returns true for ::1 loopback", () => {
+    const result = isLocalDirectRequest({
+      socket: { remoteAddress: "::1" },
+      headers: { host: "127.0.0.1:8080" },
+    } as never);
+    expect(result).toBe(true);
   });
 });

@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { logWarn } from "../logger.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
 export type ResolvedGatewayAuthMode = "token" | "password";
 
@@ -115,7 +116,8 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
 
   const host = getHostName(req.headers?.host);
   const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  const hostIsTailscaleServe = host.endsWith(".ts.net");
+  // Removed: .ts.net hostname bypass — Tailscale requests must use the proper
+  // resolveVerifiedTailscaleUser() auth flow with whois verification.
 
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
@@ -124,7 +126,7 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  return hostIsLocal && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -135,14 +137,35 @@ function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
   if (typeof login !== "string" || !login.trim()) {
     return null;
   }
+
+  const trimmedLogin = login.trim();
+  // Validate login format and length (alphanumeric, dots, @, +, hyphens).
+  if (trimmedLogin.length > 256 || !/^[\w.@+-]+$/.test(trimmedLogin)) {
+    logWarn(`tailscale auth: invalid login header format: ${trimmedLogin.slice(0, 50)}`);
+    return null;
+  }
+
   const nameRaw = req.headers["tailscale-user-name"];
   const profilePic = req.headers["tailscale-user-profile-pic"];
-  const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : login.trim();
-  return {
-    login: login.trim(),
-    name,
-    profilePic: typeof profilePic === "string" && profilePic.trim() ? profilePic.trim() : undefined,
-  };
+  // Sanitize display name (strip control chars, enforce max length).
+  const name =
+    typeof nameRaw === "string" && nameRaw.trim()
+      ? nameRaw
+          .trim()
+          .replace(/[\x00-\x1f\x7f]/g, "")
+          .slice(0, 256)
+      : trimmedLogin;
+
+  // Validate profile pic URL (must be https, under 2048 chars).
+  let pic: string | undefined;
+  if (typeof profilePic === "string" && profilePic.trim()) {
+    const trimmedPic = profilePic.trim();
+    if (trimmedPic.startsWith("https://") && trimmedPic.length <= 2048) {
+      pic = trimmedPic;
+    }
+  }
+
+  return { login: trimmedLogin, name, profilePic: pic };
 }
 
 function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
@@ -181,9 +204,13 @@ async function resolveVerifiedTailscaleUser(params: {
   }
   const whois = await tailscaleWhois(clientIp);
   if (!whois?.login) {
+    logWarn(`tailscale auth: whois lookup failed for IP ${clientIp}`);
     return { ok: false, reason: "tailscale_whois_failed" };
   }
   if (normalizeLogin(whois.login) !== normalizeLogin(tailscaleUser.login)) {
+    logWarn(
+      `tailscale auth: header login "${tailscaleUser.login}" does not match whois login "${whois.login}" for IP ${clientIp}`,
+    );
     return { ok: false, reason: "tailscale_user_mismatch" };
   }
   return {

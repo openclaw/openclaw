@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
@@ -267,6 +268,39 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
+// Trusted directories where Tailscale binaries are expected to reside.
+// Binaries outside these paths will be rejected before sudo elevation.
+const TRUSTED_TAILSCALE_DIRS = new Set([
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+  "/Applications/Tailscale.app/Contents/MacOS",
+]);
+
+function assertTrustedBinaryPath(bin: string): void {
+  // Bare command names (e.g. "tailscale") resolve via PATH and are acceptable.
+  if (!bin.includes("/")) {
+    return;
+  }
+  try {
+    const resolved = realpathSync(bin);
+    const dir = path.dirname(resolved);
+    if (!TRUSTED_TAILSCALE_DIRS.has(dir)) {
+      throw new Error(
+        `Security: Tailscale binary is in untrusted directory "${dir}". ` +
+          `Expected one of: ${[...TRUSTED_TAILSCALE_DIRS].join(", ")}`,
+      );
+    }
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") {
+      // Binary doesn't exist (yet); let execution fail naturally.
+      return;
+    }
+    throw err;
+  }
+}
+
 // Helper to attempt a command, and retry with sudo if it fails.
 async function execWithSudoFallback(
   exec: typeof runExec,
@@ -280,6 +314,8 @@ async function execWithSudoFallback(
     if (!isPermissionDeniedError(err)) {
       throw err;
     }
+    // Validate binary path before elevating to sudo.
+    assertTrustedBinaryPath(bin);
     logVerbose(`Command failed, retrying with sudo: ${bin} ${args.join(" ")}`);
     try {
       return await exec("sudo", ["-n", bin, ...args], opts);

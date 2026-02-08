@@ -1,6 +1,11 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type {
+  DmPolicy,
+  TelegramGroupConfig,
+  TelegramTotpConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
@@ -54,6 +59,7 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import { checkTotpGate } from "./totp-gate.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -102,6 +108,7 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  totpConfig?: TelegramTotpConfig;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -142,6 +149,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
+  totpConfig,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   recordChannelActivity({
@@ -301,6 +309,46 @@ export const buildTelegramMessageContext = async ({
         return null;
       }
     }
+  }
+
+  // TOTP 2FA gate for DMs
+  if (!isGroup && totpConfig?.enabled) {
+    const totpUserId = msg.from?.id ? String(msg.from.id) : String(chatId);
+    const totpMessageText = msg.text ?? msg.caption ?? "";
+    const totpResult = await checkTotpGate({
+      telegramUserId: totpUserId,
+      messageText: totpMessageText,
+      totpConfig,
+    });
+    if (totpResult.action === "prompt") {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: () => bot.api.sendMessage(chatId, "Please enter your 6-digit authenticator code."),
+      });
+      return null;
+    }
+    if (totpResult.action === "rejected") {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: () => bot.api.sendMessage(chatId, "Invalid code. Please try again."),
+      });
+      return null;
+    }
+    if (totpResult.action === "rate_limited") {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: () => bot.api.sendMessage(chatId, "Too many attempts. Please wait and try again."),
+      });
+      return null;
+    }
+    if (totpResult.action === "verified") {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: () => bot.api.sendMessage(chatId, "Authenticated. Your session is now active."),
+      });
+      return null;
+    }
+    // action === "pass" -> continue normally
   }
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();

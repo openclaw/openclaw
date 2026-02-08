@@ -19,8 +19,14 @@ import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./h
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
+  maxMessages?: number;
+  maxMessageChars?: number;
   trustedProxies?: string[];
 };
+
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
+const DEFAULT_MAX_MESSAGES = 200;
+const DEFAULT_MAX_MESSAGE_CHARS = 100_000;
 
 type OpenAiChatMessage = {
   role?: unknown;
@@ -195,7 +201,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
   if (body === undefined) {
     return true;
   }
@@ -204,6 +210,32 @@ export async function handleOpenAiHttpRequest(
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
+
+  // Validate message count and content size limits.
+  const maxMessages = opts.maxMessages ?? DEFAULT_MAX_MESSAGES;
+  const maxMessageChars = opts.maxMessageChars ?? DEFAULT_MAX_MESSAGE_CHARS;
+  const rawMessages = asMessages(payload.messages);
+  if (rawMessages.length > maxMessages) {
+    sendJson(res, 400, {
+      error: {
+        message: `Too many messages (${rawMessages.length}). Maximum is ${maxMessages}.`,
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
+  for (const msg of rawMessages) {
+    const content = extractTextContent(msg.content);
+    if (content.length > maxMessageChars) {
+      sendJson(res, 400, {
+        error: {
+          message: `Message content exceeds maximum length of ${maxMessageChars} characters.`,
+          type: "invalid_request_error",
+        },
+      });
+      return true;
+    }
+  }
 
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });

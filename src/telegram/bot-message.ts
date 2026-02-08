@@ -72,6 +72,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveGroupActivation,
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
+      totpConfig: telegramCfg.totp,
     });
     if (!context) {
       return;

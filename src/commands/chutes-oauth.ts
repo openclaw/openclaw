@@ -1,5 +1,5 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
@@ -68,7 +68,11 @@ async function waitForLocalCallback(params: {
           res.end("Missing code");
           return;
         }
-        if (!state || state !== params.expectedState) {
+        if (
+          !state ||
+          state.length !== params.expectedState.length ||
+          !timingSafeEqual(Buffer.from(state), Buffer.from(params.expectedState))
+        ) {
           res.statusCode = 400;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.end("Invalid state");

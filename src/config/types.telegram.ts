@@ -41,6 +41,24 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+export type TelegramTotpConfig = {
+  /** Enable TOTP 2FA for DMs (default: false). */
+  enabled?: boolean;
+  /** Session duration in seconds after successful TOTP (default: 86400 = 24h). */
+  sessionDurationSeconds?: number;
+  /** Max failed TOTP attempts before temporary lockout (default: 5). */
+  maxAttempts?: number;
+  /** Rate limit window in seconds (default: 300 = 5 min). */
+  rateLimitWindowSeconds?: number;
+  /**
+   * Tool groups that require TOTP authentication before execution.
+   * Uses the same group names as tool policies (e.g. "group:fs", "group:web", "group:runtime").
+   * Individual tool names are also accepted (e.g. "exec", "write", "web_search").
+   * Default: [] (no tools gated by TOTP beyond the DM gate).
+   */
+  protectedToolGroups?: string[];
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -138,6 +156,8 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /** TOTP two-factor authentication for DMs. */
+  totp?: TelegramTotpConfig;
 };
 
 export type TelegramTopicConfig = {

@@ -1,5 +1,6 @@
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { timingSafeEqual } from "node:crypto";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -148,16 +149,24 @@ export function createHooksRequestHandler(
     }
 
     if (url.searchParams.has("token")) {
+      logHooks.warn(
+        `hook auth rejected: token in query parameter from ${req.socket?.remoteAddress ?? "unknown"}`,
+      );
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(
-        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
-      );
+      res.end("Bad Request");
       return true;
     }
 
     const token = extractHookToken(req);
-    if (!token || token !== hooksConfig.token) {
+    const tokenValid =
+      !!token &&
+      token.length === hooksConfig.token.length &&
+      timingSafeEqual(Buffer.from(token), Buffer.from(hooksConfig.token));
+    if (!tokenValid) {
+      logHooks.warn(
+        `hook auth failed from ${req.socket?.remoteAddress ?? "unknown"} ${req.method ?? ""} ${url.pathname}`,
+      );
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
@@ -314,6 +323,12 @@ export function createGatewayHttpServer(opts: {
       return;
     }
 
+    // Security headers for all HTTP responses.
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
@@ -409,6 +424,34 @@ export function createGatewayHttpServer(opts: {
   return httpServer;
 }
 
+// Per-IP WebSocket connection rate limiter.
+// Limits upgrade attempts to prevent connection flood attacks.
+const WS_RATE_LIMIT_WINDOW_MS = 60_000;
+const WS_RATE_LIMIT_MAX = 30;
+
+const wsUpgradeAttempts = new Map<string, { count: number; resetAt: number }>();
+
+// Periodically clean stale entries to prevent memory leak.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of wsUpgradeAttempts) {
+    if (now > entry.resetAt) {
+      wsUpgradeAttempts.delete(ip);
+    }
+  }
+}, WS_RATE_LIMIT_WINDOW_MS).unref();
+
+function checkWsUpgradeRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = wsUpgradeAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    wsUpgradeAttempts.set(ip, { count: 1, resetAt: now + WS_RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= WS_RATE_LIMIT_MAX;
+}
+
 export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
@@ -419,6 +462,13 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // Rate-limit WebSocket upgrade attempts per IP.
+      const clientIp = req.socket?.remoteAddress ?? "";
+      if (clientIp && !checkWsUpgradeRateLimit(clientIp)) {
+        socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
