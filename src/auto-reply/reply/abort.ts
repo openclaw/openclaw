@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { resolveEmbeddedSessionLane } from "../../agents/pi-embedded.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
@@ -14,6 +15,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { abortActiveTaskInLane } from "../../process/command-queue.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
@@ -121,7 +123,12 @@ export function stopSubagentsForRequester(params: {
     const sessionId = entry?.sessionId;
     const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
 
-    if (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    if (
+      aborted ||
+      cleared.followupCleared > 0 ||
+      cleared.laneCleared > 0 ||
+      cleared.activeAborted > 0
+    ) {
       stopped += 1;
     }
   }
@@ -164,6 +171,7 @@ export async function tryFastAbortFromMessage(params: {
 
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
+  let activeTaskAborted = false;
 
   if (targetKey) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -171,10 +179,11 @@ export async function tryFastAbortFromMessage(params: {
     const { entry, key } = resolveSessionEntryForKey(store, targetKey);
     const sessionId = entry?.sessionId;
     const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+
     const cleared = clearSessionQueues([key ?? targetKey, sessionId]);
-    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0 || cleared.activeAborted > 0) {
       logVerbose(
-        `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+        `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} active=${cleared.activeAborted} keys=${cleared.keys.join(",")}`,
       );
     }
     if (entry && key) {
@@ -194,12 +203,27 @@ export async function tryFastAbortFromMessage(params: {
       setAbortMemory(abortKey, true);
     }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-    return { handled: true, aborted, stoppedSubagents: stopped };
+    return {
+      handled: true,
+      aborted: aborted || cleared.activeAborted > 0,
+      stoppedSubagents: stopped,
+    };
+  }
+
+  // Also try to abort active task when targetKey is not set
+  const requesterLane = requesterSessionKey
+    ? resolveEmbeddedSessionLane(requesterSessionKey)
+    : null;
+  if (requesterLane) {
+    activeTaskAborted = abortActiveTaskInLane(requesterLane);
+  }
+  if (activeTaskAborted) {
+    logVerbose(`abort: aborted active task in requester lane=${requesterLane}`);
   }
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-  return { handled: true, aborted: false, stoppedSubagents: stopped };
+  return { handled: true, aborted: activeTaskAborted, stoppedSubagents: stopped };
 }

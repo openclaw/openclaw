@@ -12,3 +12,5 @@ export type {
   QueueMode,
   QueueSettings,
 } from "./queue/types.js";
+// Export abortActiveTaskInLane for external use (e.g., /stop command)
+export { abortActiveTaskInLane } from "../../process/command-queue.js";
