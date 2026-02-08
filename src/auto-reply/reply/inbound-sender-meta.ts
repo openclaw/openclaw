@@ -8,7 +8,7 @@ export function formatInboundBodyWithSenderMeta(params: { body: string; ctx: Msg
     return body;
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
-  if (!chatType || chatType === "direct") {
+  if (!params.ctx.ForceIncludeSenderMeta && (!chatType || chatType === "direct")) {
     return body;
   }
   if (hasSenderMetaLine(body, params.ctx)) {

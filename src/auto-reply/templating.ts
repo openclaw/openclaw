@@ -104,6 +104,8 @@ export type MsgContext = {
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;
   WasMentioned?: boolean;
+  /** Force sender meta in body even for DMs (for auth-required channels like Feishu). */
+  ForceIncludeSenderMeta?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

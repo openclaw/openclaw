@@ -151,6 +151,30 @@ describe("formatInboundBodyWithSenderMeta", () => {
       "[Signal Group] Alice (A1): hi",
     );
   });
+
+  it("includes sender meta for direct messages when ForceIncludeSenderMeta is set", () => {
+    const ctx: MsgContext = {
+      ChatType: "direct",
+      SenderName: "Alice",
+      SenderId: "ou_123abc",
+      ForceIncludeSenderMeta: true,
+    };
+    expect(formatInboundBodyWithSenderMeta({ ctx, body: "hi" })).toBe(
+      "hi\n[from: Alice (ou_123abc)]",
+    );
+  });
+
+  it("includes sender meta for dm messages when ForceIncludeSenderMeta is set", () => {
+    const ctx: MsgContext = {
+      ChatType: "dm",
+      SenderName: "Bob",
+      SenderId: "ou_456def",
+      ForceIncludeSenderMeta: true,
+    };
+    expect(formatInboundBodyWithSenderMeta({ ctx, body: "hello" })).toBe(
+      "hello\n[from: Bob (ou_456def)]",
+    );
+  });
 });
 
 describe("inbound dedupe", () => {

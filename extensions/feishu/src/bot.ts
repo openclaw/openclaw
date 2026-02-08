@@ -827,6 +827,7 @@ export async function handleFeishuMessage(params: {
       MessageSid: ctx.messageId,
       Timestamp: Date.now(),
       WasMentioned: ctx.mentionedBot,
+      ForceIncludeSenderMeta: true,
       CommandAuthorized: true,
       OriginatingChannel: "feishu" as const,
       OriginatingTo: feishuTo,
