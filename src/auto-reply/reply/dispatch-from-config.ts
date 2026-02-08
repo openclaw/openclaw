@@ -5,6 +5,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -77,6 +78,8 @@ const resolveSessionTtsAuto = (
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  /** When true, Ralph persistence loop requests another iteration. */
+  ralphContinue?: boolean;
 };
 
 export async function dispatchReplyFromConfig(params: {
@@ -448,6 +451,22 @@ export async function dispatchReplyFromConfig(params: {
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed");
+
+    // Ralph persistence loop: trigger reply-complete hook
+    if (cfg.ralph?.enabled && sessionKey) {
+      const ralphEvent = createInternalHookEvent("agent", "reply-complete", sessionKey, {
+        channel,
+        chatId,
+        sessionKey,
+      });
+      await triggerInternalHook(ralphEvent);
+      // Continue unless a hook handler explicitly set shouldContinue to false
+      if (ralphEvent.context.shouldContinue !== false) {
+        markIdle("message_completed");
+        return { queuedFinal, counts, ralphContinue: true };
+      }
+    }
+
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {

@@ -97,6 +97,14 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  ralph?: {
+    /** Enable Ralph persistence loop. When active, the agent continues working after each reply. */
+    enabled?: boolean;
+    /** Maximum continuation iterations per inbound message. Default: 5. */
+    maxIterations?: number;
+    /** Prompt to inject for each continuation. */
+    continuationPrompt?: string;
+  };
 };
 
 export type ConfigValidationIssue = {

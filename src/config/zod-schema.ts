@@ -594,6 +594,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    ralph: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxIterations: z.number().int().positive().optional(),
+        continuationPrompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
