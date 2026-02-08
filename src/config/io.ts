@@ -58,6 +58,47 @@ const SHELL_ENV_EXPECTED_KEYS = [
 const CONFIG_BACKUP_COUNT = 5;
 const loggedInvalidConfigs = new Set<string>();
 
+/**
+ * Determines if the process should exit on invalid config.
+ * Default: true for gateway processes, false for CLI tools.
+ * Override with OPENCLAW_EXIT_ON_INVALID_CONFIG=0 to disable.
+ */
+function shouldExitOnInvalidConfig(env: NodeJS.ProcessEnv): boolean {
+  const explicit = env.OPENCLAW_EXIT_ON_INVALID_CONFIG?.trim();
+  if (explicit === "0" || explicit === "false") {
+    return false;
+  }
+  if (explicit === "1" || explicit === "true") {
+    return true;
+  }
+  // Default: exit for gateway (long-running), don't exit for CLI (one-shot)
+  // Gateway sets this title; CLI tools typically don't
+  return process.title === "openclaw" || env.OPENCLAW_GATEWAY_MODE === "1";
+}
+
+/**
+ * Formats a helpful error message for common config mistakes.
+ */
+function formatConfigErrorHelp(details: string): string {
+  const lines = [details];
+
+  // Check for common mistakes and add helpful hints
+  if (details.includes("agents.defaults.model")) {
+    lines.push("");
+    lines.push("Expected format for agents.defaults.model:");
+    lines.push('  { "model": "anthropic/claude-sonnet-4-20250514" }');
+    lines.push('  or simply a string: "anthropic/claude-sonnet-4-20250514"');
+  }
+
+  if (details.includes("gateway.auth")) {
+    lines.push("");
+    lines.push("Expected format for gateway.auth:");
+    lines.push('  { "mode": "token", "token": "your-secret-token" }');
+  }
+
+  return lines.join("\n");
+}
+
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
 function hashConfigRaw(raw: string | null): string {
@@ -311,8 +352,17 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.logger.error(err.message);
         throw err;
       }
-      const error = err as { code?: string };
+      const error = err as { code?: string; details?: string };
       if (error?.code === "INVALID_CONFIG") {
+        // For invalid config, exit cleanly instead of returning empty config
+        // which would cause high CPU loops. Reload path uses readConfigFileSnapshot
+        // which logs warnings but doesn't exit (keeps old config).
+        if (shouldExitOnInvalidConfig(deps.env)) {
+          const helpMessage = formatConfigErrorHelp(error.details ?? "Invalid configuration");
+          deps.logger.error(`\nConfiguration error - gateway cannot start:\n${helpMessage}`);
+          deps.logger.error("\nFix the config file and restart. Exiting with code 1.");
+          process.exit(1);
+        }
         return {};
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
