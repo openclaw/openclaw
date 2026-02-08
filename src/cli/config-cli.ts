@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { danger, info } from "../globals.js";
+import { danger, info, warn } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -336,6 +336,31 @@ export function registerConfigCli(program: Command) {
         }
         await writeConfigFile(next);
         defaultRuntime.log(info(`Removed ${path}. Restart the gateway to apply.`));
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  cmd
+    .command("backups")
+    .description("Move legacy config backups into backups/")
+    .action(async () => {
+      try {
+        const { migrateLegacyConfigBackups } = await import("../config/config.js");
+        const result = await migrateLegacyConfigBackups();
+        if (result.moved.length === 0) {
+          defaultRuntime.log(info("No legacy config backups found."));
+          return;
+        }
+        const dir = shortenHomePath(result.backupDir);
+        const label = result.moved.length === 1 ? "backup" : "backups";
+        defaultRuntime.log(info(`Moved ${result.moved.length} config ${label} to ${dir}.`));
+        if (result.skipped.length > 0) {
+          defaultRuntime.error(
+            warn(`Skipped ${result.skipped.length} config backup(s). Check logs for details.`),
+          );
+        }
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

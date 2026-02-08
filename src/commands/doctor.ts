@@ -11,7 +11,12 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import {
+  CONFIG_PATH,
+  readConfigFileSnapshot,
+  resolveConfigBackupBasePath,
+  writeConfigFile,
+} from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -284,7 +289,7 @@ export async function doctorCommand(
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
     await writeConfigFile(cfg);
     logConfigUpdated(runtime);
-    const backupPath = `${CONFIG_PATH}.bak`;
+    const backupPath = resolveConfigBackupBasePath(configPath);
     if (fs.existsSync(backupPath)) {
       runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }

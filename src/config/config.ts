@@ -1,11 +1,13 @@
 export {
   createConfigIO,
   loadConfig,
+  migrateLegacyConfigBackups,
   parseConfigJson5,
   readConfigFileSnapshot,
   resolveConfigSnapshotHash,
   writeConfigFile,
 } from "./io.js";
+export type { ConfigBackupMigrationResult } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
