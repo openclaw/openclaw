@@ -259,6 +259,77 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:main"]?.sessionId).toBe("fresh");
   });
 
+  it("rewrites legacy sessionFile paths in the target sessions store", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const homedir = () => root;
+    const targetStateDir = path.join(root, ".openclaw");
+    const legacyStateDir = path.join(root, ".clawdbot");
+    const legacyStateDirAlt = path.join(root, ".moltbot");
+    const targetDir = path.join(targetStateDir, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      "agent:main:main": {
+        sessionId: "legacy",
+        updatedAt: 10,
+        sessionFile: path.join(
+          legacyStateDir,
+          "agents",
+          "main",
+          "sessions",
+          "legacy.jsonl",
+        ),
+      },
+      "agent:main:alt": {
+        sessionId: "legacy-alt",
+        updatedAt: 10,
+        sessionFile: path.join(
+          legacyStateDirAlt,
+          "agents",
+          "main",
+          "sessions",
+          "legacy-alt.jsonl",
+        ),
+      },
+      "agent:main:already": {
+        sessionId: "already",
+        updatedAt: 11,
+        sessionFile: path.join(
+          targetStateDir,
+          "agents",
+          "main",
+          "sessions",
+          "current.jsonl",
+        ),
+      },
+      "agent:main:root": {
+        sessionId: "root",
+        updatedAt: 12,
+        sessionFile: legacyStateDir,
+      },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: targetStateDir } as NodeJS.ProcessEnv,
+      homedir,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionFile?: string }>;
+    expect(store["agent:main:main"]?.sessionFile).toBe(
+      path.join(targetStateDir, "agents", "main", "sessions", "legacy.jsonl"),
+    );
+    expect(store["agent:main:alt"]?.sessionFile).toBe(
+      path.join(targetStateDir, "agents", "main", "sessions", "legacy-alt.jsonl"),
+    );
+    expect(store["agent:main:already"]?.sessionFile).toBe(
+      path.join(targetStateDir, "agents", "main", "sessions", "current.jsonl"),
+    );
+    expect(store["agent:main:root"]?.sessionFile).toBe(legacyStateDir);
+  });
+
   it("prefers the newest entry when collapsing main aliases", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = { session: { mainKey: "work" } };
