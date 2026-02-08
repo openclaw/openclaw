@@ -17,17 +17,28 @@ Compaction **summarizes older conversation** into a compact summary entry and ke
 - The compaction summary
 - Recent messages after the compaction point
 
-Compaction **persists** in the session’s JSONL history.
+Compaction **persists** in the session's JSONL history.
+
+## Compaction modes
+
+`agents.defaults.compaction.mode` controls the summarization strategy:
+
+| Mode | Description |
+|------|-------------|
+| `default` | Standard summarization. Works well for most sessions. |
+| `safeguard` | Chunked summarization for very long histories. Better preserves detail in extended sessions. |
+
+If unset, defaults to `default`.
 
 ## Configuration
 
-See [Compaction config & modes](/concepts/compaction) for the `agents.defaults.compaction` settings.
+See [Gateway configuration](/gateway/configuration#agentsdefaultscompaction-reserve-headroom--memory-flush) for the full `agents.defaults.compaction` settings, including `reserveTokensFloor` and `memoryFlush` options.
 
 ## Auto-compaction (default on)
 
-When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
+When a session nears or exceeds the model's context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
 
-You’ll see:
+You'll see:
 
 - `🧹 Auto-compaction complete` in verbose mode
 - `/status` showing `🧹 Compactions: <count>`
