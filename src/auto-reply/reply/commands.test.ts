@@ -11,8 +11,14 @@ import {
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
-import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
+
+const callGatewayMock = vi.fn();
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
@@ -256,6 +262,7 @@ describe("handleCommands context", () => {
 describe("handleCommands subagents", () => {
   it("lists subagents when none exist", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -263,11 +270,13 @@ describe("handleCommands subagents", () => {
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Subagents: none");
+    expect(result.reply?.text).toContain("active subagents:");
+    expect(result.reply?.text).toContain("recent (last 30m):");
   });
 
   it("lists subagents for the current command session over the target session", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
@@ -289,8 +298,8 @@ describe("handleCommands subagents", () => {
     params.sessionKey = "agent:main:slack:slash:u1";
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Subagents (current session)");
-    expect(result.reply?.text).toContain("agent:main:subagent:abc");
+    expect(result.reply?.text).toContain("active subagents:");
+    expect(result.reply?.text).toContain("do thing");
   });
 
   it("omits subagent status line when none exist", async () => {
@@ -309,6 +318,7 @@ describe("handleCommands subagents", () => {
 
   it("returns help for unknown subagents action", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -321,6 +331,7 @@ describe("handleCommands subagents", () => {
 
   it("returns usage for subagents info without target", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -333,6 +344,7 @@ describe("handleCommands subagents", () => {
 
   it("includes subagent count in /status when active", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
@@ -356,6 +368,7 @@ describe("handleCommands subagents", () => {
 
   it("includes subagent details in /status when verbose", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
@@ -393,6 +406,7 @@ describe("handleCommands subagents", () => {
 
   it("returns info for a subagent", async () => {
     resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
@@ -416,6 +430,59 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Run: run-1");
     expect(result.reply?.text).toContain("Status: done");
+  });
+
+  it("kills subagents via /kill alias without a confirmation reply", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/kill 1", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("steers subagents via /steer alias", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-steer-1" };
+      }
+      return {};
+    });
+    addSubagentRunForTests({
+      runId: "run-1",
+      childSessionKey: "agent:main:subagent:abc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/steer 1 check timer.ts instead", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("steered");
   });
 });
 

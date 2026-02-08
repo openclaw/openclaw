@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -73,6 +74,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "timeoutSeconds").type).toBe("number");
+    expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
   it("sessions_list filters kinds and includes messages", async () => {
@@ -671,5 +673,150 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("subagents lists active and recent runs", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-active",
+      childSessionKey: "agent:main:subagent:active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "investigate auth",
+      cleanup: "keep",
+      createdAt: now - 2 * 60_000,
+      startedAt: now - 2 * 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-recent",
+      childSessionKey: "agent:main:subagent:recent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize findings",
+      cleanup: "keep",
+      createdAt: now - 15 * 60_000,
+      startedAt: now - 14 * 60_000,
+      endedAt: now - 5 * 60_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-old",
+      childSessionKey: "agent:main:subagent:old",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old completed run",
+      cleanup: "keep",
+      createdAt: now - 90 * 60_000,
+      startedAt: now - 89 * 60_000,
+      endedAt: now - 80 * 60_000,
+      outcome: { status: "ok" },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: unknown[];
+      recent?: unknown[];
+      text?: string;
+    };
+    expect(details.status).toBe("ok");
+    expect(details.active).toHaveLength(1);
+    expect(details.recent).toHaveLength(1);
+    expect(details.text).toContain("active subagents:");
+    expect(details.text).toContain("recent (last 30m):");
+    resetSubagentRegistryForTests();
+  });
+
+  it("subagents steer sends guidance to a running run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-steer-1" };
+      }
+      return {};
+    });
+    addSubagentRunForTests({
+      runId: "run-steer",
+      childSessionKey: "agent:main:subagent:steer",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "prepare release notes",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-steer", {
+      action: "steer",
+      target: "1",
+      message: "skip changelog and focus on tests",
+    });
+    const details = result.details as { status?: string; runId?: string; text?: string };
+    expect(details.status).toBe("accepted");
+    expect(details.runId).toBe("run-steer-1");
+    expect(details.text).toContain("steered");
+    const agentCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(agentCall?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        lane: "subagent",
+        sessionKey: "agent:main:subagent:steer",
+      },
+    });
+    resetSubagentRegistryForTests();
+  });
+
+  it("subagents kill stops a running run", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    addSubagentRunForTests({
+      runId: "run-kill",
+      childSessionKey: "agent:main:subagent:kill",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "long running task",
+      cleanup: "keep",
+      createdAt: Date.now() - 60_000,
+      startedAt: Date.now() - 60_000,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-kill", {
+      action: "kill",
+      target: "1",
+    });
+    const details = result.details as { status?: string; text?: string };
+    expect(details.status).toBe("ok");
+    expect(details.text).toContain("killed");
+    resetSubagentRegistryForTests();
   });
 });

@@ -271,6 +271,15 @@
         "timeoutSeconds"
       ]
     },
+    "subagents": {
+      "emoji": "🤖",
+      "title": "Subagents",
+      "actions": {
+        "list": { "label": "list", "detailKeys": ["recentMinutes"] },
+        "kill": { "label": "kill", "detailKeys": ["target"] },
+        "steer": { "label": "steer", "detailKeys": ["target"] }
+      }
+    },
     "session_status": {
       "emoji": "📊",
       "title": "Session Status",
