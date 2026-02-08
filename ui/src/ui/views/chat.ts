@@ -70,6 +70,322 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
 };
 
+// --- Voice input (Web Speech API) ---
+
+const SpeechRecognitionCtor: typeof SpeechRecognition | undefined =
+  (globalThis as any).SpeechRecognition ?? (globalThis as any).webkitSpeechRecognition;
+
+type VoiceState = {
+  listening: boolean;
+  recognition: SpeechRecognition | null;
+  interim: string;
+  accumulated: string; // all finalized text so far in this session
+  ttsEnabled: boolean; // auto-speak assistant replies (persists until user toggles off)
+  speaking: boolean; // currently speaking
+};
+const voiceState: VoiceState = {
+  listening: false,
+  recognition: null,
+  interim: "",
+  accumulated: "",
+  ttsEnabled: false,
+  speaking: false,
+};
+
+// --- Server-side TTS connection state ---
+let ttsGatewayHttpUrl: string | null = null;
+let ttsGatewayToken: string | null = null;
+
+/** Set the gateway connection info for server-side TTS. Call from app-render. */
+export function setTtsGatewayInfo(gatewayWsUrl: string, token: string) {
+  // Convert ws:// → http://, wss:// → https://
+  ttsGatewayHttpUrl = gatewayWsUrl
+    .replace(/^wss:\/\//i, "https://")
+    .replace(/^ws:\/\//i, "http://")
+    .replace(/\/+$/, "");
+  ttsGatewayToken = token || null;
+}
+
+// --- Browser TTS for voice replies ---
+let ttsRerender: (() => void) | null = null;
+let preferredVoice: SpeechSynthesisVoice | null = null;
+
+// Pick the best available voice — prefer natural/premium voices
+function selectBestVoice(): SpeechSynthesisVoice | null {
+  if (!("speechSynthesis" in globalThis)) {
+    return null;
+  }
+  const voices = speechSynthesis.getVoices();
+  if (voices.length === 0) {
+    return null;
+  }
+
+  // Ranked preferences: natural-sounding English voices
+  // macOS 15+ "Premium" voices are neural and sound very natural.
+  // Prefer those, then Enhanced, then Google/Microsoft, then basic.
+  const preferred = [
+    // macOS Premium neural voices (macOS 15+)
+    "Zoe (Premium)",
+    "Evan (Premium)",
+    "Ava (Premium)",
+    "Tom (Premium)",
+    "Fiona (Premium)",
+    "Joelle (Premium)",
+    // macOS Enhanced voices (still decent)
+    "Samantha (Enhanced)",
+    "Karen (Enhanced)",
+    "Daniel (Enhanced)",
+    // Google voices (Chrome)
+    "Google UK English Female",
+    "Google UK English Male",
+    "Google US English",
+    // Microsoft voices (Edge/Windows)
+    "Microsoft Zira",
+    "Microsoft David",
+    // Basic macOS fallbacks
+    "Samantha",
+    "Karen",
+    "Daniel",
+  ];
+
+  for (const name of preferred) {
+    const match = voices.find((v) => v.name === name);
+    if (match) {
+      return match;
+    }
+  }
+
+  // Try any Premium voice
+  const premiumVoice = voices.find((v) => v.name.includes("(Premium)") && v.lang.startsWith("en"));
+  if (premiumVoice) {
+    return premiumVoice;
+  }
+
+  // Fallback: any English voice that's not "Google 日本語" etc.
+  const englishVoice = voices.find((v) => v.lang.startsWith("en") && !v.name.includes("Google 日"));
+  return englishVoice ?? voices[0];
+}
+
+// Voices load async in some browsers
+if ("speechSynthesis" in globalThis) {
+  speechSynthesis.addEventListener("voiceschanged", () => {
+    preferredVoice = selectBestVoice();
+  });
+  preferredVoice = selectBestVoice();
+}
+
+function cleanTextForSpeech(text: string): string {
+  return text
+    .replace(/MEDIA:\S+/g, "")
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/#{1,6}\s*/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[<>]/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\p{Emoji_Presentation}/gu, "")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function speakWithBrowserTts(clean: string) {
+  if (!("speechSynthesis" in globalThis)) {
+    return;
+  }
+  const utterance = new SpeechSynthesisUtterance(clean);
+  if (preferredVoice) {
+    utterance.voice = preferredVoice;
+  }
+  utterance.rate = 1.05;
+  utterance.pitch = 1.0;
+  utterance.onstart = () => {
+    voiceState.speaking = true;
+    ttsRerender?.();
+  };
+  utterance.onend = () => {
+    voiceState.speaking = false;
+    ttsRerender?.();
+  };
+  utterance.onerror = () => {
+    voiceState.speaking = false;
+    ttsRerender?.();
+  };
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utterance);
+}
+
+function speakText(text: string) {
+  if (!voiceState.ttsEnabled) {
+    return;
+  }
+  const clean = cleanTextForSpeech(text);
+  if (!clean) {
+    return;
+  }
+
+  // Try server-side TTS first (Edge TTS neural voices)
+  if (ttsGatewayHttpUrl) {
+    voiceState.speaking = true;
+    ttsRerender?.();
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (ttsGatewayToken) {
+      headers.Authorization = `Bearer ${ttsGatewayToken}`;
+    }
+
+    fetch(`${ttsGatewayHttpUrl}/api/tts/synthesize`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: clean }),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`TTS server error: ${res.status}`);
+        }
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => {
+          voiceState.speaking = false;
+          ttsRerender?.();
+          URL.revokeObjectURL(url);
+        };
+        audio.onerror = () => {
+          voiceState.speaking = false;
+          ttsRerender?.();
+          URL.revokeObjectURL(url);
+        };
+        audio.play().catch(() => {
+          voiceState.speaking = false;
+          ttsRerender?.();
+          URL.revokeObjectURL(url);
+        });
+      })
+      .catch(() => {
+        // Fall back to browser TTS
+        speakWithBrowserTts(clean);
+      });
+    return;
+  }
+
+  // Fallback: browser Speech API
+  speakWithBrowserTts(clean);
+}
+
+function stopSpeaking() {
+  if ("speechSynthesis" in globalThis) {
+    speechSynthesis.cancel();
+  }
+  voiceState.speaking = false;
+}
+
+function stopVoiceRecognition() {
+  if (voiceState.recognition) {
+    voiceState.recognition.onend = null;
+    voiceState.recognition.stop();
+    voiceState.recognition = null;
+  }
+  voiceState.listening = false;
+  voiceState.interim = "";
+}
+
+function startVoiceRecognition(props: ChatProps, rerender: () => void) {
+  if (!SpeechRecognitionCtor) {
+    return;
+  }
+  stopVoiceRecognition();
+
+  // Start fresh: capture what's already in the draft, accumulate on top
+  voiceState.accumulated = props.draft;
+
+  const recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event: SpeechRecognitionEvent) => {
+    let finalTranscript = "";
+    let interimTranscript = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      if (result.isFinal) {
+        finalTranscript += result[0].transcript;
+      } else {
+        interimTranscript += result[0].transcript;
+      }
+    }
+    if (finalTranscript) {
+      const spacer = voiceState.accumulated && !voiceState.accumulated.endsWith(" ") ? " " : "";
+      voiceState.accumulated += spacer + finalTranscript;
+      props.onDraftChange(voiceState.accumulated);
+      voiceState.interim = "";
+    } else {
+      voiceState.interim = interimTranscript;
+    }
+    rerender();
+  };
+
+  recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    if (event.error === "aborted" || event.error === "no-speech") {
+      return;
+    }
+    console.error("Speech recognition error:", event.error);
+    stopVoiceRecognition();
+    rerender();
+  };
+
+  recognition.onend = () => {
+    if (voiceState.listening && voiceState.recognition === recognition) {
+      try {
+        recognition.start();
+      } catch {
+        stopVoiceRecognition();
+        rerender();
+      }
+    }
+  };
+
+  voiceState.recognition = recognition;
+  voiceState.listening = true;
+  recognition.start();
+  rerender();
+}
+
+function toggleVoiceRecognition(props: ChatProps, rerender: () => void) {
+  if (voiceState.listening) {
+    // 2nd click: stop listening, enable TTS, auto-send
+    const textToSend = voiceState.accumulated.trim();
+    stopVoiceRecognition();
+    voiceState.ttsEnabled = true;
+    if (textToSend) {
+      // Ensure draft is set then send (onSend reads draft and clears it)
+      props.onDraftChange(textToSend);
+      // Use microtask so Lit updates draft before onSend reads it
+      queueMicrotask(() => props.onSend());
+    }
+    voiceState.accumulated = "";
+    rerender();
+  } else {
+    startVoiceRecognition(props, rerender);
+  }
+}
+
+function toggleTts(rerender: () => void) {
+  if (voiceState.ttsEnabled) {
+    voiceState.ttsEnabled = false;
+    stopSpeaking();
+  } else {
+    voiceState.ttsEnabled = true;
+  }
+  rerender();
+}
+
 const COMPACTION_TOAST_DURATION_MS = 5000;
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
@@ -185,7 +501,11 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
-export function renderChat(props: ChatProps) {
+// Track message count so we can detect new assistant messages for TTS
+let prevMessageCount = 0;
+let prevStreamText: string | null = null;
+
+export function renderChat(props: ChatProps, rerender?: () => void) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -196,6 +516,31 @@ export function renderChat(props: ChatProps) {
     name: props.assistantName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
   };
+
+  // Keep rerender ref for TTS callbacks
+  if (rerender) {
+    ttsRerender = rerender;
+  }
+
+  // Speak new assistant replies when TTS is enabled
+  const msgCount = props.messages.length;
+  if (voiceState.ttsEnabled && msgCount > prevMessageCount && msgCount > 0) {
+    const last = props.messages[msgCount - 1] as Record<string, unknown>;
+    const role = typeof last.role === "string" ? last.role.toLowerCase() : "";
+    if (role === "assistant") {
+      const content = typeof last.content === "string" ? last.content : "";
+      if (content) {
+        speakText(content);
+      }
+    }
+  }
+  prevMessageCount = msgCount;
+
+  // Also speak when a stream finishes (stream goes from text → null)
+  if (voiceState.ttsEnabled && prevStreamText && props.stream === null) {
+    speakText(prevStreamText);
+  }
+  prevStreamText = props.stream;
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
@@ -369,6 +714,11 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
+        ${
+          voiceState.interim
+            ? html`<div class="chat-voice-interim">${voiceState.interim}</div>`
+            : nothing
+        }
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
             <span>Message</span>
@@ -404,6 +754,36 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            ${
+              SpeechRecognitionCtor && rerender
+                ? html`
+                <button
+                  class="btn chat-mic-btn ${voiceState.listening ? "chat-mic-btn--listening" : ""}"
+                  type="button"
+                  title=${voiceState.listening ? "Stop & send" : "Start voice input"}
+                  aria-label=${voiceState.listening ? "Stop & send" : "Start voice input"}
+                  @click=${() => toggleVoiceRecognition(props, rerender)}
+                >
+                  ${voiceState.listening ? icons.micOff : icons.mic}
+                </button>
+              `
+                : nothing
+            }
+            ${
+              rerender
+                ? html`
+                <button
+                  class="btn chat-tts-btn ${voiceState.ttsEnabled ? "chat-tts-btn--active" : ""} ${voiceState.speaking ? "chat-tts-btn--speaking" : ""}"
+                  type="button"
+                  title=${voiceState.ttsEnabled ? "Turn off voice replies" : "Turn on voice replies"}
+                  aria-label=${voiceState.ttsEnabled ? "Turn off voice replies" : "Turn on voice replies"}
+                  @click=${() => toggleTts(rerender)}
+                >
+                  ${voiceState.ttsEnabled ? icons.volume2 : icons.volumeX}
+                </button>
+              `
+                : nothing
+            }
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}

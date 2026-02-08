@@ -1,7 +1,29 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
+
+## Architecture Overview
+
+OpenClaw is a personal AI assistant control plane that bridges messaging channels to AI agents.
+
+**Data flow:** User → Channel (WhatsApp/Telegram/Slack/Discord/etc.) → Gateway (routing via bindings) → Agent (Pi with tools/sandbox/memory) → LLM (Anthropic/OpenAI/etc.) → back through the chain.
+
+**Core components:**
+
+- **CLI** (`src/cli/`, `src/commands/`): Commander.js-based CLI. Entry: `openclaw.mjs` → `src/entry.ts` → `src/cli/run-main.ts` → `src/cli/program/build-program.ts`.
+- **Gateway** (`src/gateway/server.impl.ts`): WebSocket + HTTP server that orchestrates channels, agents, plugins, discovery (mDNS), and cron. Serves the web control UI. Exposes OpenAI-compatible `/v1/chat/completions` endpoint.
+- **Agents** (`src/agents/`): Pi agent runtime with model selection/failover (`model-selection.ts`, `model-catalog.ts`), auth profiles, tools (`src/agents/tools/`), sandbox (Docker/Podman), vector memory, skills, and workspace isolation.
+- **Channels** (`src/channels/`): Plugin-based via `ChannelPlugin` interface (`src/channels/plugins/types.plugin.ts`) with adapters (Auth, Messaging, Status, Gateway, Setup, Onboarding, Heartbeat). Core channels live in `src/<channel>/`; extensions in `extensions/`.
+- **Routing** (`src/routing/`): Maps channel messages to agent sessions via configurable bindings.
+- **Config** (`src/config/`): YAML-based (`~/.openclaw/config.yaml`), Zod-validated (`zod-schema.ts`), hot-reloadable, with env substitution and config includes.
+- **Plugin SDK** (`src/plugin-sdk/`): Public API for extensions. Plugins loaded via `jiti` at runtime.
+- **Web UI** (`ui/`): Vite + Lit web components control interface served by gateway.
+- **Mobile apps** (`apps/`): macOS (SwiftUI menubar app, gateway host), iOS, Android — connect via gateway for voice, canvas, nodes. Shared Swift code in `apps/shared/OpenClawKit/`.
 
 ## Project Structure & Module Organization
 
