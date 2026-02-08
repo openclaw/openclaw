@@ -56,10 +56,17 @@ export async function generateVoiceResponse(
   }
   const cfg = coreConfig;
 
+  const configuredAgentId = voiceConfig.responseAgentId?.trim();
+  const agentId = configuredAgentId || "main";
+  const sessionKeyPrefix = voiceConfig.responseSessionKeyPrefix?.trim() || "voice";
+
   // Build voice-specific session key based on phone number
   const normalizedPhone = from.replace(/\D/g, "");
-  const sessionKey = `voice:${normalizedPhone}`;
-  const agentId = "main";
+  const buildSessionKey = (id: string): string =>
+    id === "main"
+      ? `${sessionKeyPrefix}:${normalizedPhone}`
+      : `${sessionKeyPrefix}:${id}:${normalizedPhone}`;
+  const sessionKey = buildSessionKey(agentId);
 
   // Resolve paths
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
@@ -68,6 +75,8 @@ export async function generateVoiceResponse(
 
   // Ensure workspace exists
   await deps.ensureAgentWorkspace({ dir: workspaceDir });
+
+  console.log(`[voice-call] Using response agent "${agentId}" for voice responses`);
 
   // Load or create session entry
   const sessionStore = deps.loadSessionStore(storePath);
@@ -104,7 +113,7 @@ export async function generateVoiceResponse(
   // Build system prompt with conversation history
   const basePrompt =
     voiceConfig.responseSystemPrompt ??
-    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
+    `You are ${agentName}, a helpful voice assistant on a phone call. Always respond with a short spoken reply (1-2 sentences). Never output the tokens HEARTBEAT_OK or NO_REPLY. Do not use markdown or code blocks. If unsure, ask a brief clarifying question. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
 
   let extraSystemPrompt = basePrompt;
   if (transcript.length > 0) {
@@ -117,6 +126,7 @@ export async function generateVoiceResponse(
   // Resolve timeout
   const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
+  const lane = agentId === "main" ? "voice" : `voice:${agentId}`;
 
   try {
     const result = await deps.runEmbeddedPiAgent({
@@ -133,21 +143,78 @@ export async function generateVoiceResponse(
       verboseLevel: "off",
       timeoutMs,
       runId,
-      lane: "voice",
+      lane,
       extraSystemPrompt,
       agentDir,
     });
 
     // Extract text from payloads
-    const texts = (result.payloads ?? [])
+    const heartbeatTokens = ["HEARTBEAT_OK", "NO_REPLY"];
+    let sawSentinel = false;
+    const stripHeartbeatTokens = (value: string): string => {
+      let output = value;
+      for (const token of heartbeatTokens) {
+        const pattern = new RegExp(`\\b${token}\\b`, "g");
+        if (pattern.test(output)) {
+          sawSentinel = true;
+        }
+        output = output.replace(pattern, "");
+      }
+      return output.replace(/\s+/g, " ").trim();
+    };
+
+    const rawTexts = (result.payloads ?? [])
       .filter((p) => p.text && !p.isError)
       .map((p) => p.text?.trim())
       .filter(Boolean);
 
-    const text = texts.join(" ") || null;
+    const texts = rawTexts.map((value) => stripHeartbeatTokens(value)).filter(Boolean);
+
+    const rawText = rawTexts.join(" ").trim();
+    const rawPreview = rawText ? rawText.slice(0, 240) : "";
+
+    let text = texts.join(" ") || null;
+
+    // Guardrail: the agent may emit heartbeat/silent reply sentinels.
+    // Never speak those out loud on a phone call; treat them as non-content.
+    if (text) {
+      text = stripHeartbeatTokens(text);
+      if (!text) {
+        text = null;
+      }
+    }
 
     if (!text && result.meta.aborted) {
+      if (rawPreview) {
+        console.warn(
+          `[voice-call] Voice response empty (reason=aborted) raw="${rawPreview}"`,
+        );
+      } else {
+        console.warn("[voice-call] Voice response empty (reason=aborted) raw=<empty>");
+      }
       return { text: null, error: "Response generation was aborted" };
+    }
+
+    if (!text && sawSentinel) {
+      if (rawPreview) {
+        console.warn(
+          `[voice-call] Voice response empty (reason=suppressed-sentinel) raw="${rawPreview}"`,
+        );
+      } else {
+        console.warn(
+          "[voice-call] Voice response empty (reason=suppressed-sentinel) raw=<empty>",
+        );
+      }
+      return { text: null };
+    }
+
+    if (!text) {
+      if (rawPreview) {
+        console.warn(`[voice-call] Voice response empty (reason=empty) raw="${rawPreview}"`);
+      } else {
+        console.warn("[voice-call] Voice response empty (reason=empty) raw=<empty>");
+      }
+      return { text: null };
     }
 
     return { text };

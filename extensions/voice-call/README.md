@@ -77,6 +77,7 @@ Notes:
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+- Set `responseAgentId: "voice"` to use a dedicated voice agent that always produces spoken replies (recommended for Telnyx auto-responses).
 
 ## TTS for calls
 

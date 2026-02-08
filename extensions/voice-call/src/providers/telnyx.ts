@@ -179,8 +179,12 @@ export class TelnyxProvider implements VoiceCallProvider {
         callId = data.payload.client_state;
       }
     }
+    // IMPORTANT: Telnyx often omits client_state on later events (notably call.transcription).
+    // If we fall back to call_control_id as callId, it won't match OpenClaw's internal callId
+    // and the manager may not associate the event with the active call.
+    // So: only use decoded client_state as callId; otherwise leave callId empty and rely on providerCallId mapping.
     if (!callId) {
-      callId = data.payload?.call_control_id || "";
+      callId = "";
     }
 
     const baseEvent = {
@@ -210,14 +214,44 @@ export class TelnyxProvider implements VoiceCallProvider {
           text: data.payload?.text || "",
         };
 
-      case "call.transcription":
+      case "call.transcription": {
+        // Telnyx docs show: payload.transcription_data = { transcript, is_final, confidence }
+        // In practice, Telnyx may vary field names; be defensive.
+        const td = (data.payload as any)?.transcription_data as
+          | {
+              transcript?: string;
+              is_final?: boolean;
+              confidence?: number;
+              text?: string;
+              transcription?: string;
+            }
+          | undefined;
+
+        const transcript =
+          td?.transcript ??
+          (td as any)?.text ??
+          (td as any)?.transcription ??
+          (data.payload as any)?.transcription ??
+          "";
+
+        const rawConfidence = td?.confidence as unknown;
+        const confidence =
+          typeof rawConfidence === "number"
+            ? rawConfidence
+            : typeof rawConfidence === "string"
+              ? Number.parseFloat(rawConfidence)
+              : undefined;
+
+        const isFinal = typeof td?.is_final === "boolean" ? td.is_final : false;
+
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript: data.payload?.transcription || "",
-          isFinal: data.payload?.is_final ?? true,
-          confidence: data.payload?.confidence,
+          transcript: typeof transcript === "string" ? transcript : "",
+          isFinal,
+          confidence: Number.isFinite(confidence) ? confidence : undefined,
         };
+      }
 
       case "call.hangup":
         return {
@@ -351,9 +385,13 @@ interface TelnyxEvent {
     call_control_id?: string;
     client_state?: string;
     text?: string;
-    transcription?: string;
-    is_final?: boolean;
-    confidence?: number;
+    // Real-time transcription events:
+    // payload.transcription_data = { transcript, is_final, confidence }
+    transcription_data?: {
+      transcript?: string;
+      is_final?: boolean;
+      confidence?: number;
+    };
     hangup_cause?: string;
     digit?: string;
     [key: string]: unknown;
