@@ -40,7 +40,6 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverAssistantError,
-  isFailoverErrorMessage,
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
