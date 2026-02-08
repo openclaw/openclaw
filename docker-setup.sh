@@ -129,7 +129,7 @@ upsert_env() {
   local -a keys=("$@")
   local tmp
   tmp="$(mktemp)"
-  declare -A seen=()
+  local -a seen=()
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -137,9 +137,18 @@ upsert_env() {
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen["$k"]=1
           replaced=true
+          local already_seen=false
+          if [[ ${#seen[@]} -gt 0 ]]; then
+            for s in "${seen[@]}"; do
+              [[ "$s" == "$k" ]] && already_seen=true && break
+            done
+          fi
+
+          if [[ "$already_seen" == false ]]; then
+            printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+            seen+=("$k")
+          fi
           break
         fi
       done
@@ -150,7 +159,14 @@ upsert_env() {
   fi
 
   for k in "${keys[@]}"; do
-    if [[ -z "${seen[$k]:-}" ]]; then
+    local found=false
+    for s in "${seen[@]}"; do
+      if [[ "$s" == "$k" ]]; then
+        found=true
+        break
+      fi
+    done
+    if [[ "$found" == false ]]; then
       printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
     fi
   done

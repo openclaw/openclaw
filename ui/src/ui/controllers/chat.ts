@@ -73,6 +73,7 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
+  const runId = generateUUID();
 
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
@@ -92,15 +93,17 @@ export async function sendChatMessage(
   state.chatMessages = [
     ...state.chatMessages,
     {
+      id: runId, // Use runId as temporary ID to prevent key collisions
       role: "user",
       content: contentBlocks,
       timestamp: now,
+      optimistic: true,
     },
   ];
 
   state.chatSending = true;
   state.lastError = null;
-  const runId = generateUUID();
+  // const runId = generateUUID(); // Moved up
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
@@ -194,6 +197,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    if (payload.message) {
+      state.chatMessages = [...state.chatMessages, payload.message];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
