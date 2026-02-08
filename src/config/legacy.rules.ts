@@ -86,6 +86,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
       "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/exec settings) instead (auto-migrated on load).",
   },
   {
+    path: ["memorySearch"],
+    message:
+      "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+  },
+  {
     path: ["tools", "bash"],
     message: "tools.bash was removed; use tools.exec instead (auto-migrated on load).",
   },
