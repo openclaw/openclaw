@@ -348,6 +348,16 @@ export async function initSessionState(params: {
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
   await updateSessionStore(storePath, (store) => {
+    // If this is a reset, archive the previous session entry so it remains
+    // visible in the sessions list. Without this, the old session transcript
+    // exists on disk but sessions.json loses the reference (keyed by sessionKey).
+    // Skip if archived key already exists to avoid overwriting on repeated resets.
+    if (resetTriggered && previousSessionEntry) {
+      const archivedKey = `${sessionKey}:session:${previousSessionEntry.sessionId}`;
+      if (!store[archivedKey]) {
+        store[archivedKey] = previousSessionEntry;
+      }
+    }
     // Preserve per-session overrides while resetting compaction state on /new.
     store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
   });
