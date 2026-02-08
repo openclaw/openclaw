@@ -38,4 +38,9 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+  it("classifies proxy auth exhaustion errors as auth", () => {
+    expect(classifyFailoverReason("auth_unavailable: no auth available")).toBe("auth");
+    expect(classifyFailoverReason("no auth available")).toBe("auth");
+    expect(classifyFailoverReason("auth_unavailable")).toBe("auth");
+  });
 });
