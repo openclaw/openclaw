@@ -254,6 +254,8 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Prune bloated sessions when loading from disk (startup). Default: disabled. */
+  startupPruning?: AgentCompactionStartupPruningConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -265,4 +267,15 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentCompactionStartupPruningConfig = {
+  /** Enable startup pruning when loading sessions from disk (default: false). */
+  enabled?: boolean;
+  /** Target max tokens to load from session file (default: 80% of context window). */
+  targetTokens?: number;
+  /** Strategy for pruning: keep-recent (drop oldest) or keep-summarized (summarize dropped). */
+  strategy?: "keep-recent" | "keep-summarized";
+  /** Preserve at least this many recent messages regardless of token count (default: 10). */
+  minRecentMessages?: number;
 };

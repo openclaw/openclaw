@@ -102,6 +102,15 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        startupPruning: z
+          .object({
+            enabled: z.boolean().optional(),
+            targetTokens: z.number().int().positive().optional(),
+            strategy: z.union([z.literal("keep-recent"), z.literal("keep-summarized")]).optional(),
+            minRecentMessages: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

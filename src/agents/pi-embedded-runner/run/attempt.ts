@@ -56,6 +56,7 @@ import {
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { applyStartupPruning } from "../../startup-pruning.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
@@ -437,6 +438,25 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
       });
+
+      // Apply startup pruning if enabled (prevents bloated sessions from hitting context limits)
+      const pruningConfig = params.config?.agents?.defaults?.compaction?.startupPruning;
+      if (pruningConfig?.enabled) {
+        try {
+          const wasPruned = await applyStartupPruning({
+            sessionManager,
+            config: pruningConfig,
+            provider: params.provider,
+            modelId: params.modelId,
+          });
+          if (wasPruned) {
+            console.log("[startup-pruning] Session pruned on load");
+          }
+        } catch (error) {
+          console.error("[startup-pruning] Error during startup pruning:", error);
+          // Continue anyway - don't block session from loading
+        }
+      }
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
       ensurePiCompactionReserveTokens({
