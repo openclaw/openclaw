@@ -127,13 +127,29 @@ if (text.includes("```")) {
   );
 }
 
+// Helpful breakdown: question marks inside URL query strings still count towards the
+// 1-'?' guardrail, and they're a common accidental violation.
+const urls = [...text.matchAll(/https?:\/\/\S+/g)].map((m) => m[0]);
+const urlsWithQuery = [...text.matchAll(/https?:\/\/\S+\?\S+/g)].map((m) => m[0]);
+const qInUrls = urls.reduce((acc, url) => acc + countMatches(url, /\?/g), 0);
+
 const qCount = countMatches(text, /\?/g);
 if (qCount > 1) {
+  const qOutsideUrls = Math.max(0, qCount - qInUrls);
+  const urlList =
+    urlsWithQuery.length > 0
+      ? ` URL(s) with '?': ${urlsWithQuery.slice(0, 3).join(" ")}${
+          urlsWithQuery.length > 3 ? " ..." : ""
+        }`
+      : "";
+
   add(
     "error",
     "too-many-questions",
-    `Found ${qCount} question marks ('?'). External replies should contain at most one. ` +
-      "Strip URL query params and bundle clarifications into a single question.",
+    `Found ${qCount} question marks ('?') total. ` +
+      `Breakdown: ${qOutsideUrls} outside URLs, ${qInUrls} inside URLs.` +
+      urlList +
+      " External replies should contain at most one. Strip URL query params and bundle clarifications into a single question.",
   );
 }
 
@@ -166,8 +182,7 @@ if (firstLine && !/^(Outcome|Done):\s*/.test(firstLine.trim())) {
   );
 }
 
-const queryUrls = [...text.matchAll(/https?:\/\/\S+\?\S+/g)].map((m) => m[0]);
-if (queryUrls.length > 0) {
+if (urlsWithQuery.length > 0) {
   add(
     "warn",
     "url-query",
