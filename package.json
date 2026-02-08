@@ -1,7 +1,7 @@
 {
   "name": "openclaw",
   "version": "2026.2.6-3",
-  "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
+  "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "license": "MIT",
   "author": "",
@@ -41,6 +41,7 @@
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
+    "docs:check-links": "node scripts/docs-link-audit.mjs",
     "docs:dev": "cd docs && mint dev",
     "docs:list": "node scripts/docs-list.js",
     "format": "oxfmt --check",
@@ -114,10 +115,10 @@
     "@larksuiteoapi/node-sdk": "^1.58.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.52.7",
-    "@mariozechner/pi-ai": "0.52.7",
-    "@mariozechner/pi-coding-agent": "0.52.7",
-    "@mariozechner/pi-tui": "0.52.7",
+    "@mariozechner/pi-agent-core": "0.52.8",
+    "@mariozechner/pi-ai": "0.52.8",
+    "@mariozechner/pi-coding-agent": "0.52.8",
+    "@mariozechner/pi-tui": "0.52.8",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
@@ -184,9 +185,6 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
   },
-  "overrides": {
-    "tar": "7.5.7"
-  },
   "engines": {
     "node": ">=22.12.0"
   },
@@ -213,38 +211,6 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
-  },
-  "vitest": {
-    "coverage": {
-      "provider": "v8",
-      "reporter": [
-        "text",
-        "lcov"
-      ],
-      "thresholds": {
-        "lines": 70,
-        "functions": 70,
-        "branches": 70,
-        "statements": 70
-      },
-      "include": [
-        "src/**/*.ts"
-      ],
-      "exclude": [
-        "src/**/*.test.ts"
-      ]
-    },
-    "include": [
-      "src/**/*.test.ts"
-    ],
-    "exclude": [
-      "dist/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/vendor/**",
-      "apps/macos/.build/**",
-      "dist/OpenClaw.app/**"
     ]
   }
 }

@@ -39,7 +39,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
 - Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
   stores more state on disk.
-- Group behavior varies by channel; see [Groups](/concepts/groups).
+- Group behavior varies by channel; see [Groups](/channels/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Telegram internals: [grammY notes](/channels/grammy).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).

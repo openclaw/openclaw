@@ -9,7 +9,9 @@ struct ScreenTab: View {
             ScreenWebView(controller: self.appModel.screen)
                 .ignoresSafeArea()
                 .overlay(alignment: .top) {
-                    if let errorText = self.appModel.screen.errorText {
+                    if let errorText = self.appModel.screen.errorText,
+                       self.appModel.gatewayServerName == nil
+                    {
                         Text(errorText)
                             .font(.footnote)
                             .padding(10)

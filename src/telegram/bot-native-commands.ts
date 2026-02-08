@@ -367,13 +367,32 @@ export const registerTelegramNativeCommands = ({
     ...customCommands,
   ];
 
-  if (allCommands.length > 0) {
+  // Clear stale commands before registering new ones to prevent
+  // leftover commands from deleted skills persisting across restarts (#5717).
+  // Chain delete → set so a late-resolving delete cannot wipe newly registered commands.
+  const registerCommands = () => {
+    if (allCommands.length > 0) {
+      withTelegramApiErrorLogging({
+        operation: "setMyCommands",
+        runtime,
+        fn: () => bot.api.setMyCommands(allCommands),
+      }).catch(() => {});
+    }
+  };
+  if (typeof bot.api.deleteMyCommands === "function") {
     withTelegramApiErrorLogging({
-      operation: "setMyCommands",
+      operation: "deleteMyCommands",
       runtime,
-      fn: () => bot.api.setMyCommands(allCommands),
-    }).catch(() => {});
+      fn: () => bot.api.deleteMyCommands(),
+    })
+      .catch(() => {})
+      .then(registerCommands)
+      .catch(() => {});
+  } else {
+    registerCommands();
+  }
 
+  if (allCommands.length > 0) {
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
@@ -656,6 +675,10 @@ export const registerTelegramNativeCommands = ({
             isForum,
             messageThreadId,
           });
+          const from = isGroup
+            ? buildTelegramGroupFrom(chatId, threadSpec.id)
+            : `telegram:${chatId}`;
+          const to = `telegram:${chatId}`;
 
           const result = await executePluginCommand({
             command: match.command,
@@ -665,6 +688,10 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             commandBody,
             config: cfg,
+            from,
+            to,
+            accountId,
+            messageThreadId: threadSpec.id,
           });
           const tableMode = resolveMarkdownTableMode({
             cfg,
