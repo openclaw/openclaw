@@ -420,6 +420,87 @@ describe("monitorSignalProvider tool results", () => {
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
+  it("routes group reactions to group session using dataMessage.groupInfo", async () => {
+    // Save original config to restore after test (avoid leaking state)
+    const originalConfig = config;
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          reactionNotifications: "all",
+        },
+      },
+    };
+    const abortController = new AbortController();
+    const groupId = "test-group-id-abc123";
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      // signal-cli sends group reactions with groupInfo in dataMessage, NOT in the reaction object
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          dataMessage: {
+            timestamp: 1,
+            groupInfo: {
+              groupId,
+              groupName: "Test Group",
+            },
+            reaction: {
+              emoji: "🎉",
+              targetAuthor: "+15550002222",
+              targetSentTimestamp: 2,
+            },
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    // Reaction should be routed to the GROUP session, not the DM session
+    const groupRoute = resolveAgentRoute({
+      cfg: config as OpenClawConfig,
+      channel: "signal",
+      accountId: "default",
+      peer: { kind: "group", id: groupId },
+    });
+    const groupEvents = peekSystemEvents(groupRoute.sessionKey);
+    expect(groupEvents.some((text) => text.includes("Signal reaction added"))).toBe(true);
+    expect(groupEvents.some((text) => text.includes("Test Group"))).toBe(true);
+
+    // Should NOT appear in the DM session
+    const dmRoute = resolveAgentRoute({
+      cfg: config as OpenClawConfig,
+      channel: "signal",
+      accountId: "default",
+      peer: { kind: "dm", id: normalizeE164("+15550001111") },
+    });
+    const dmEvents = peekSystemEvents(dmRoute.sessionKey);
+    expect(dmEvents.some((text) => text.includes("Signal reaction added"))).toBe(false);
+
+    // Restore original config to avoid leaking state to other tests
+    config = originalConfig;
+  });
+
   it("notifies on own reactions when target includes uuid + phone", async () => {
     config = {
       ...config,

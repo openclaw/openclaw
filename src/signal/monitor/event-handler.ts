@@ -24,6 +24,7 @@ import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -361,8 +362,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
 
-      const groupId = reaction.groupInfo?.groupId ?? undefined;
-      const groupName = reaction.groupInfo?.groupName ?? undefined;
+      // Group context may be in reaction.groupInfo OR dataMessage.groupInfo (signal-cli uses the latter)
+      const groupId = reaction.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
+      const groupName =
+        reaction.groupInfo?.groupName ?? dataMessage?.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
       const senderPeerId = resolveSignalPeerId(sender);
       const route = resolveAgentRoute({
@@ -398,6 +401,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .filter(Boolean)
         .join(":");
       enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+
+      // Check if we should wake the session for this reaction
+      const reactionWake = deps.reactionWake;
+      const shouldWake =
+        reactionWake === true || (Array.isArray(reactionWake) && reactionWake.includes(emojiLabel));
+      if (shouldWake) {
+        requestHeartbeatNow({ reason: `signal:reaction:${emojiLabel}` });
+      }
       return;
     }
     if (!dataMessage) {

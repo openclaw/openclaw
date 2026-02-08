@@ -74,6 +74,7 @@ export type SignalEventHandlerDeps = {
   groupPolicy: GroupPolicy;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
+  reactionWake: boolean | string[];
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;

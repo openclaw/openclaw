@@ -69,6 +69,13 @@ export type SignalAccountConfig = {
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
+  /**
+   * Controls whether reactions trigger a session wake:
+   * - false: No wake on reactions (default)
+   * - true: Wake on any reaction notification
+   * - string[]: Wake only on specific emoji reactions
+   */
+  reactionWake?: boolean | string[];
   /** Action toggles for message tool capabilities. */
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
