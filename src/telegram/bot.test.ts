@@ -409,6 +409,7 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
           quote: {
             text: "summarize this",
+
           },
         },
       },

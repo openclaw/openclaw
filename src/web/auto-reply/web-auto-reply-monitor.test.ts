@@ -263,6 +263,7 @@ describe("applyGroupGating", () => {
       channels: {
         whatsapp: {
           allowFrom: ["*"],
+          groupPolicy: "allowlist",
           groups: {
             "999@g.us": { requireMention: false },
           },
