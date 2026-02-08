@@ -1,0 +1,65 @@
+---
+summary: "Резервный вариант Firecrawl для web_fetch (обход антиботов + кэшированное извлечение)"
+read_when:
+  - Вам нужно извлечение веб‑контента с поддержкой Firecrawl
+  - Вам нужен ключ API Firecrawl
+  - Вам требуется извлечение для web_fetch с обходом антиботов
+title: "Firecrawl"
+x-i18n:
+  source_path: tools/firecrawl.md
+  source_hash: 08a7ad45b41af412
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:56:00Z
+---
+
+# Firecrawl
+
+OpenClaw может использовать **Firecrawl** в качестве резервного извлекателя для `web_fetch`. Это размещённый сервис извлечения контента, который поддерживает обход ботов и кэширование, что помогает при работе с сайтами, насыщенными JavaScript, или страницами, блокирующими обычные HTTP‑запросы.
+
+## Получение ключа API
+
+1. Создайте учётную запись Firecrawl и сгенерируйте ключ API.
+2. Сохраните его в конфиге или задайте `FIRECRAWL_API_KEY` в переменных окружения Gateway (шлюза).
+
+## Настройка Firecrawl
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        firecrawl: {
+          apiKey: "FIRECRAWL_API_KEY_HERE",
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: true,
+          maxAgeMs: 172800000,
+          timeoutSeconds: 60,
+        },
+      },
+    },
+  },
+}
+```
+
+Примечания:
+
+- `firecrawl.enabled` по умолчанию равно true при наличии ключа API.
+- `maxAgeMs` управляет тем, насколько «старыми» могут быть кэшированные результаты (мс). Значение по умолчанию — 2 дня.
+
+## Скрытность / обход ботов
+
+Firecrawl предоставляет параметр **proxy mode** для обхода ботов (`basic`, `stealth` или `auto`).
+OpenClaw всегда использует `proxy: "auto"` вместе с `storeInCache: true` для запросов Firecrawl.
+Если прокси не указан, Firecrawl по умолчанию использует `auto`. `auto` выполняет повторы с «стелс»-прокси, если базовая попытка не удалась, что может расходовать больше кредитов, чем сбор только в базовом режиме.
+
+## Как `web_fetch` использует Firecrawl
+
+Порядок извлечения `web_fetch`:
+
+1. Readability (локально)
+2. Firecrawl (если настроен)
+3. Базовая очистка HTML (последний резервный вариант)
+
+Полную настройку веб‑инструментов см. в разделе [Web tools](/tools/web).

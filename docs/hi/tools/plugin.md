@@ -1,0 +1,669 @@
+---
+summary: "OpenClaw प्लगइन्स/एक्सटेंशन्स: डिस्कवरी, विन्यास, और सुरक्षा"
+read_when:
+  - प्लगइन्स/एक्सटेंशन्स जोड़ते या संशोधित करते समय
+  - प्लगइन इंस्टॉल या लोड नियमों का दस्तावेज़ीकरण करते समय
+title: "प्लगइन्स"
+x-i18n:
+  source_path: tools/plugin.md
+  source_hash: b36ca6b90ca03eaa
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:50:33Z
+---
+
+# प्लगइन्स (एक्सटेंशन्स)
+
+## त्वरित प्रारंभ (प्लगइन्स में नए हैं?)
+
+एक प्लगइन बस एक **छोटा कोड मॉड्यूल** होता है जो OpenClaw को अतिरिक्त
+विशेषताओं (कमांड्स, टूल्स, और Gateway RPC) के साथ विस्तारित करता है।
+
+अधिकांश समय, आप प्लगइन्स का उपयोग तब करेंगे जब आपको ऐसी सुविधा चाहिए
+जो अभी core OpenClaw में अंतर्निहित नहीं है (या आप वैकल्पिक सुविधाओं को
+अपने मुख्य इंस्टॉल से बाहर रखना चाहते हैं)।
+
+त्वरित मार्ग:
+
+1. देखें कि क्या पहले से लोड है:
+
+```bash
+openclaw plugins list
+```
+
+2. एक आधिकारिक प्लगइन इंस्टॉल करें (उदाहरण: Voice Call):
+
+```bash
+openclaw plugins install @openclaw/voice-call
+```
+
+3. Gateway को पुनः प्रारंभ करें, फिर `plugins.entries.<id>.config` के अंतर्गत विन्यास करें।
+
+एक ठोस उदाहरण प्लगइन के लिए [Voice Call](/plugins/voice-call) देखें।
+
+## उपलब्ध प्लगइन्स (आधिकारिक)
+
+- Microsoft Teams 2026.1.15 से केवल प्लगइन के रूप में उपलब्ध है; यदि आप Teams का उपयोग करते हैं तो `@openclaw/msteams` इंस्टॉल करें।
+- Memory (Core) — बंडल किया गया मेमोरी सर्च प्लगइन (डिफ़ॉल्ट रूप से सक्षम via `plugins.slots.memory`)
+- Memory (LanceDB) — बंडल किया गया दीर्घकालिक मेमोरी प्लगइन (ऑटो-रिकॉल/कैप्चर; `plugins.slots.memory = "memory-lancedb"` सेट करें)
+- [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
+- [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
+- [Matrix](/channels/matrix) — `@openclaw/matrix`
+- [Nostr](/channels/nostr) — `@openclaw/nostr`
+- [Zalo](/channels/zalo) — `@openclaw/zalo`
+- [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
+- Google Antigravity OAuth (प्रदाता प्रमाणीकरण) — `google-antigravity-auth` के रूप में बंडल (डिफ़ॉल्ट रूप से अक्षम)
+- Gemini CLI OAuth (प्रदाता प्रमाणीकरण) — `google-gemini-cli-auth` के रूप में बंडल (डिफ़ॉल्ट रूप से अक्षम)
+- Qwen OAuth (प्रदाता प्रमाणीकरण) — `qwen-portal-auth` के रूप में बंडल (डिफ़ॉल्ट रूप से अक्षम)
+- Copilot Proxy (प्रदाता प्रमाणीकरण) — स्थानीय VS Code Copilot Proxy ब्रिज; अंतर्निहित `github-copilot` डिवाइस लॉगिन से अलग (बंडल, डिफ़ॉल्ट रूप से अक्षम)
+
+OpenClaw प्लगइन्स **TypeScript मॉड्यूल्स** होते हैं जो jiti के माध्यम से रनटाइम पर लोड होते हैं। **विन्यास सत्यापन प्लगइन कोड निष्पादित नहीं करता**; इसके बजाय यह प्लगइन मैनिफ़ेस्ट और JSON Schema का उपयोग करता है। देखें [Plugin manifest](/plugins/manifest)।
+
+प्लगइन्स पंजीकृत कर सकते हैं:
+
+- Gateway RPC विधियाँ
+- Gateway HTTP हैंडलर्स
+- एजेंट टूल्स
+- CLI कमांड्स
+- पृष्ठभूमि सेवाएँ
+- वैकल्पिक विन्यास सत्यापन
+- **Skills** (प्लगइन मैनिफ़ेस्ट में `skills` डायरेक्टरी सूचीबद्ध करके)
+- **ऑटो-रिप्लाई कमांड्स** (AI एजेंट को बुलाए बिना निष्पादित)
+
+प्लगइन्स Gateway के साथ **इन‑प्रोसेस** चलते हैं, इसलिए उन्हें विश्वसनीय कोड मानें।
+टूल लेखन गाइड: [Plugin agent tools](/plugins/agent-tools)।
+
+## रनटाइम हेल्पर्स
+
+प्लगइन्स चयनित core हेल्पर्स तक `api.runtime` के माध्यम से पहुँच सकते हैं। टेलीफ़ोनी TTS के लिए:
+
+```ts
+const result = await api.runtime.tts.textToSpeechTelephony({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+```
+
+टिप्पणियाँ:
+
+- core `messages.tts` विन्यास (OpenAI या ElevenLabs) का उपयोग करता है।
+- PCM ऑडियो बफ़र + सैंपल रेट लौटाता है। प्रदाताओं के लिए प्लगइन्स को री-सैंपल/एन्कोड करना होगा।
+- Edge TTS टेलीफ़ोनी के लिए समर्थित नहीं है।
+
+## डिस्कवरी और प्रीसिडेंस
+
+OpenClaw निम्न क्रम में स्कैन करता है:
+
+1. Config पाथ्स
+
+- `plugins.load.paths` (फ़ाइल या डायरेक्टरी)
+
+2. वर्कस्पेस एक्सटेंशन्स
+
+- `<workspace>/.openclaw/extensions/*.ts`
+- `<workspace>/.openclaw/extensions/*/index.ts`
+
+3. ग्लोबल एक्सटेंशन्स
+
+- `~/.openclaw/extensions/*.ts`
+- `~/.openclaw/extensions/*/index.ts`
+
+4. बंडल्ड एक्सटेंशन्स (OpenClaw के साथ शिप किए गए, **डिफ़ॉल्ट रूप से अक्षम**)
+
+- `<openclaw>/extensions/*`
+
+बंडल्ड प्लगइन्स को `plugins.entries.<id>.enabled`
+या `openclaw plugins enable <id>` के माध्यम से स्पष्ट रूप से सक्षम करना होगा। इंस्टॉल किए गए प्लगइन्स डिफ़ॉल्ट रूप से सक्षम होते हैं,
+लेकिन उसी तरीके से अक्षम भी किए जा सकते हैं।
+
+प्रत्येक प्लगइन में उसकी रूट में एक `openclaw.plugin.json` फ़ाइल शामिल होनी चाहिए। यदि कोई पाथ
+किसी फ़ाइल की ओर इशारा करता है, तो प्लगइन रूट उस फ़ाइल की डायरेक्टरी होती है और उसमें
+मैनिफ़ेस्ट होना आवश्यक है।
+
+यदि कई प्लगइन्स एक ही id पर रिज़ॉल्व होते हैं, तो ऊपर दिए गए क्रम में पहला मैच जीतता है
+और कम प्रीसिडेंस वाली प्रतियाँ अनदेखी कर दी जाती हैं।
+
+### पैकेज पैक्स
+
+एक प्लगइन डायरेक्टरी में `package.json` शामिल हो सकता है जिसमें `openclaw.extensions` हों:
+
+```json
+{
+  "name": "my-pack",
+  "openclaw": {
+    "extensions": ["./src/safety.ts", "./src/tools.ts"]
+  }
+}
+```
+
+प्रत्येक एंट्री एक प्लगइन बन जाती है। यदि पैक में कई एक्सटेंशन्स सूचीबद्ध हैं, तो प्लगइन id
+`name/<fileBase>` बन जाता है।
+
+यदि आपका प्लगइन npm निर्भरताएँ इम्पोर्ट करता है, तो उन्हें उसी डायरेक्टरी में इंस्टॉल करें ताकि
+`node_modules` उपलब्ध हो (`npm install` / `pnpm install`)।
+
+### चैनल कैटलॉग मेटाडेटा
+
+चैनल प्लगइन्स `openclaw.channel` के माध्यम से ऑनबोर्डिंग मेटाडेटा और
+`openclaw.install` के माध्यम से इंस्टॉल संकेत विज्ञापित कर सकते हैं। इससे core कैटलॉग डेटा‑मुक्त रहता है।
+
+उदाहरण:
+
+```json
+{
+  "name": "@openclaw/nextcloud-talk",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "nextcloud-talk",
+      "label": "Nextcloud Talk",
+      "selectionLabel": "Nextcloud Talk (self-hosted)",
+      "docsPath": "/channels/nextcloud-talk",
+      "docsLabel": "nextcloud-talk",
+      "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
+      "order": 65,
+      "aliases": ["nc-talk", "nc"]
+    },
+    "install": {
+      "npmSpec": "@openclaw/nextcloud-talk",
+      "localPath": "extensions/nextcloud-talk",
+      "defaultChoice": "npm"
+    }
+  }
+}
+```
+
+OpenClaw **बाहरी चैनल कैटलॉग्स** भी मर्ज कर सकता है (उदाहरण के लिए, MPM
+रजिस्ट्री एक्सपोर्ट)। निम्न में से किसी एक स्थान पर JSON फ़ाइल रखें:
+
+- `~/.openclaw/mpm/plugins.json`
+- `~/.openclaw/mpm/catalog.json`
+- `~/.openclaw/plugins/catalog.json`
+
+या `OPENCLAW_PLUGIN_CATALOG_PATHS` (या `OPENCLAW_MPM_CATALOG_PATHS`) को
+एक या अधिक JSON फ़ाइलों की ओर इंगित करें (कॉमा/सेमीकोलन/`PATH`-डिलिमिटेड)। प्रत्येक फ़ाइल में
+`{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }` होना चाहिए।
+
+## प्लगइन IDs
+
+डिफ़ॉल्ट प्लगइन ids:
+
+- पैकेज पैक्स: `package.json` `name`
+- स्टैंडअलोन फ़ाइल: फ़ाइल बेस नाम (`~/.../voice-call.ts` → `voice-call`)
+
+यदि कोई प्लगइन `id` एक्सपोर्ट करता है, तो OpenClaw इसका उपयोग करता है, लेकिन
+जब यह कॉन्फ़िगर किए गए id से मेल नहीं खाता तो चेतावनी देता है।
+
+## विन्यास
+
+```json5
+{
+  plugins: {
+    enabled: true,
+    allow: ["voice-call"],
+    deny: ["untrusted-plugin"],
+    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    entries: {
+      "voice-call": { enabled: true, config: { provider: "twilio" } },
+    },
+  },
+}
+```
+
+फ़ील्ड्स:
+
+- `enabled`: मास्टर टॉगल (डिफ़ॉल्ट: true)
+- `allow`: allowlist (वैकल्पिक)
+- `deny`: denylist (वैकल्पिक; deny की प्राथमिकता)
+- `load.paths`: अतिरिक्त प्लगइन फ़ाइलें/डायरेक्टरीज़
+- `entries.<id>`: प्रति‑प्लगइन टॉगल्स + विन्यास
+
+विन्यास परिवर्तन **Gateway पुनः प्रारंभ** की आवश्यकता रखते हैं।
+
+सत्यापन नियम (सख्त):
+
+- `entries`, `allow`, `deny`, या `slots` में अज्ञात प्लगइन ids **त्रुटियाँ** हैं।
+- अज्ञात `channels.<id>` कुंजियाँ **त्रुटियाँ** हैं जब तक कि प्लगइन मैनिफ़ेस्ट
+  चैनल id घोषित न करे।
+- प्लगइन विन्यास को `openclaw.plugin.json` में एम्बेडेड JSON Schema का उपयोग करके सत्यापित किया जाता है
+  (`configSchema`)।
+- यदि कोई प्लगइन अक्षम है, तो उसका विन्यास सुरक्षित रहता है और एक **चेतावनी** जारी की जाती है।
+
+## प्लगइन स्लॉट्स (एक्सक्लूसिव श्रेणियाँ)
+
+कुछ प्लगइन श्रेणियाँ **एक्सक्लूसिव** होती हैं (एक समय में केवल एक सक्रिय)। स्लॉट का स्वामी कौन सा प्लगइन होगा, यह चुनने के लिए
+`plugins.slots` का उपयोग करें:
+
+```json5
+{
+  plugins: {
+    slots: {
+      memory: "memory-core", // or "none" to disable memory plugins
+    },
+  },
+}
+```
+
+यदि कई प्लगइन्स `kind: "memory"` घोषित करते हैं, तो केवल चयनित वाला लोड होता है। अन्य
+डायग्नोस्टिक्स के साथ अक्षम कर दिए जाते हैं।
+
+## कंट्रोल UI (स्कीमा + लेबल्स)
+
+कंट्रोल UI बेहतर फ़ॉर्म्स रेंडर करने के लिए `config.schema` (JSON Schema + `uiHints`) का उपयोग करता है।
+
+OpenClaw खोजे गए प्लगइन्स के आधार पर रनटाइम पर `uiHints` को बढ़ाता है:
+
+- `plugins.entries.<id>` / `.enabled` / `.config` के लिए प्रति‑प्लगइन लेबल्स जोड़ता है
+- वैकल्पिक प्लगइन‑प्रदत्त कॉन्फ़िग फ़ील्ड संकेतों को निम्न के अंतर्गत मर्ज करता है:
+  `plugins.entries.<id>.config.<field>`
+
+यदि आप चाहते हैं कि आपके प्लगइन कॉन्फ़िग फ़ील्ड्स अच्छे लेबल/प्लेसहोल्डर दिखाएँ (और सीक्रेट्स को संवेदनशील के रूप में चिह्नित करें),
+तो प्लगइन मैनिफ़ेस्ट में अपने JSON Schema के साथ `uiHints` प्रदान करें।
+
+उदाहरण:
+
+```json
+{
+  "id": "my-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string" },
+      "region": { "type": "string" }
+    }
+  },
+  "uiHints": {
+    "apiKey": { "label": "API Key", "sensitive": true },
+    "region": { "label": "Region", "placeholder": "us-east-1" }
+  }
+}
+```
+
+## CLI
+
+```bash
+openclaw plugins list
+openclaw plugins info <id>
+openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
+openclaw plugins install ./extensions/voice-call # relative path ok
+openclaw plugins install ./plugin.tgz           # install from a local tarball
+openclaw plugins install ./plugin.zip           # install from a local zip
+openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
+openclaw plugins install @openclaw/voice-call # install from npm
+openclaw plugins update <id>
+openclaw plugins update --all
+openclaw plugins enable <id>
+openclaw plugins disable <id>
+openclaw plugins doctor
+```
+
+`plugins update` केवल `plugins.installs` के अंतर्गत ट्रैक किए गए npm इंस्टॉल्स के लिए काम करता है।
+
+प्लगइन्स अपने स्वयं के टॉप‑लेवल कमांड्स भी पंजीकृत कर सकते हैं (उदाहरण: `openclaw voicecall`)।
+
+## प्लगइन API (अवलोकन)
+
+प्लगइन्स निम्न में से एक एक्सपोर्ट करते हैं:
+
+- एक फ़ंक्शन: `(api) => { ... }`
+- एक ऑब्जेक्ट: `{ id, name, configSchema, register(api) { ... } }`
+
+## प्लगइन हुक्स
+
+प्लगइन्स हुक्स के साथ शिप हो सकते हैं और उन्हें रनटाइम पर पंजीकृत कर सकते हैं। इससे किसी अलग हुक पैक इंस्टॉल के बिना
+इवेंट‑ड्रिवन ऑटोमेशन बंडल करना संभव होता है।
+
+### उदाहरण
+
+```
+import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
+
+export default function register(api) {
+  registerPluginHooksFromDir(api, "./hooks");
+}
+```
+
+टिप्पणियाँ:
+
+- हुक डायरेक्टरीज़ सामान्य हुक संरचना का पालन करती हैं (`HOOK.md` + `handler.ts`)।
+- हुक पात्रता नियम अब भी लागू होते हैं (OS/bins/env/config आवश्यकताएँ)।
+- प्लगइन‑प्रबंधित हुक्स `openclaw hooks list` में `plugin:<id>` के साथ दिखाई देते हैं।
+- आप `openclaw hooks` के माध्यम से प्लगइन‑प्रबंधित हुक्स को सक्षम/अक्षम नहीं कर सकते; इसके बजाय प्लगइन को सक्षम/अक्षम करें।
+
+## प्रदाता प्लगइन्स (मॉडल प्रमाणीकरण)
+
+प्लगइन्स **मॉडल प्रदाता प्रमाणीकरण** फ़्लोज़ पंजीकृत कर सकते हैं ताकि उपयोगकर्ता OpenClaw के भीतर ही OAuth या
+API‑key सेटअप चला सकें (किसी बाहरी स्क्रिप्ट की आवश्यकता नहीं)।
+
+किसी प्रदाता को `api.registerProvider(...)` के माध्यम से पंजीकृत करें। प्रत्येक प्रदाता एक
+या अधिक प्रमाणीकरण विधियाँ (OAuth, API key, डिवाइस कोड, आदि) प्रदान करता है। ये विधियाँ निम्न को सक्षम करती हैं:
+
+- `openclaw models auth login --provider <id> [--method <id>]`
+
+उदाहरण:
+
+```ts
+api.registerProvider({
+  id: "acme",
+  label: "AcmeAI",
+  auth: [
+    {
+      id: "oauth",
+      label: "OAuth",
+      kind: "oauth",
+      run: async (ctx) => {
+        // Run OAuth flow and return auth profiles.
+        return {
+          profiles: [
+            {
+              profileId: "acme:default",
+              credential: {
+                type: "oauth",
+                provider: "acme",
+                access: "...",
+                refresh: "...",
+                expires: Date.now() + 3600 * 1000,
+              },
+            },
+          ],
+          defaultModel: "acme/opus-1",
+        };
+      },
+    },
+  ],
+});
+```
+
+टिप्पणियाँ:
+
+- `run` को एक `ProviderAuthContext` मिलता है जिसमें `prompter`, `runtime`,
+  `openUrl`, और `oauth.createVpsAwareHandlers` हेल्पर्स होते हैं।
+- जब आपको डिफ़ॉल्ट मॉडल या प्रदाता विन्यास जोड़ने की आवश्यकता हो, तो `configPatch` लौटाएँ।
+- `defaultModel` लौटाएँ ताकि `--set-default` एजेंट डिफ़ॉल्ट्स अपडेट कर सके।
+
+### मैसेजिंग चैनल पंजीकृत करें
+
+प्लगइन्स **चैनल प्लगइन्स** पंजीकृत कर सकते हैं जो अंतर्निहित चैनलों
+(WhatsApp, Telegram, आदि) की तरह व्यवहार करते हैं। चैनल विन्यास `channels.<id>` के अंतर्गत रहता है और
+आपके चैनल प्लगइन कोड द्वारा सत्यापित किया जाता है।
+
+```ts
+const myChannel = {
+  id: "acmechat",
+  meta: {
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "demo channel plugin.",
+    aliases: ["acme"],
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    resolveAccount: (cfg, accountId) =>
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
+        accountId,
+      },
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async () => ({ ok: true }),
+  },
+};
+
+export default function (api) {
+  api.registerChannel({ plugin: myChannel });
+}
+```
+
+टिप्पणियाँ:
+
+- विन्यास को `channels.<id>` के अंतर्गत रखें (ना कि `plugins.entries`)।
+- `meta.label` का उपयोग CLI/UI सूचियों में लेबल्स के लिए किया जाता है।
+- `meta.aliases` नॉर्मलाइज़ेशन और CLI इनपुट्स के लिए वैकल्पिक ids जोड़ता है।
+- `meta.preferOver` उन चैनल ids की सूची देता है जिन्हें दोनों कॉन्फ़िगर होने पर ऑटो‑एनेबल से छोड़ना है।
+- `meta.detailLabel` और `meta.systemImage` UIs को समृद्ध चैनल लेबल्स/आइकन्स दिखाने देते हैं।
+
+### नया मैसेजिंग चैनल लिखें (स्टेप‑बाय‑स्टेप)
+
+इसे तब उपयोग करें जब आपको **नया चैट सरफेस** (एक “मैसेजिंग चैनल”) चाहिए, न कि मॉडल प्रदाता।
+मॉडल प्रदाता दस्तावेज़ `/providers/*` के अंतर्गत उपलब्ध हैं।
+
+1. एक id + कॉन्फ़िग संरचना चुनें
+
+- सभी चैनल कॉन्फ़िग `channels.<id>` के अंतर्गत रहता है।
+- मल्टी‑अकाउंट सेटअप्स के लिए `channels.<id>.accounts.<accountId>` को प्राथमिकता दें।
+
+2. चैनल मेटाडेटा परिभाषित करें
+
+- `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` CLI/UI सूचियों को नियंत्रित करते हैं।
+- `meta.docsPath` को `/channels/<id>` जैसी डॉक्स पेज की ओर इशारा करना चाहिए।
+- `meta.preferOver` किसी प्लगइन को दूसरे चैनल को प्रतिस्थापित करने देता है (ऑटो‑एनेबल इसे प्राथमिकता देता है)।
+- `meta.detailLabel` और `meta.systemImage` UIs द्वारा विवरण टेक्स्ट/आइकन्स के लिए उपयोग किए जाते हैं।
+
+3. आवश्यक एडेप्टर्स लागू करें
+
+- `config.listAccountIds` + `config.resolveAccount`
+- `capabilities` (चैट प्रकार, मीडिया, थ्रेड्स, आदि)
+- `outbound.deliveryMode` + `outbound.sendText` (मूलभूत सेंड के लिए)
+
+4. आवश्यकता अनुसार वैकल्पिक एडेप्टर्स जोड़ें
+
+- `setup` (विज़ार्ड), `security` (DM नीति), `status` (हेल्थ/डायग्नोस्टिक्स)
+- `gateway` (स्टार्ट/स्टॉप/लॉगिन), `mentions`, `threading`, `streaming`
+- `actions` (मैसेज एक्शन्स), `commands` (नेटिव कमांड व्यवहार)
+
+5. अपने प्लगइन में चैनल पंजीकृत करें
+
+- `api.registerChannel({ plugin })`
+
+न्यूनतम कॉन्फ़िग उदाहरण:
+
+```json5
+{
+  channels: {
+    acmechat: {
+      accounts: {
+        default: { token: "ACME_TOKEN", enabled: true },
+      },
+    },
+  },
+}
+```
+
+न्यूनतम चैनल प्लगइन (केवल आउटबाउंड):
+
+```ts
+const plugin = {
+  id: "acmechat",
+  meta: {
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "AcmeChat messaging channel.",
+    aliases: ["acme"],
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    resolveAccount: (cfg, accountId) =>
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
+        accountId,
+      },
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async ({ text }) => {
+      // deliver `text` to your channel here
+      return { ok: true };
+    },
+  },
+};
+
+export default function (api) {
+  api.registerChannel({ plugin });
+}
+```
+
+प्लगइन लोड करें (extensions डायरेक्टरी या `plugins.load.paths`), Gateway को पुनः प्रारंभ करें,
+फिर अपने कॉन्फ़िग में `channels.<id>` सेट करें।
+
+### एजेंट टूल्स
+
+समर्पित गाइड देखें: [Plugin agent tools](/plugins/agent-tools)।
+
+### Gateway RPC विधि पंजीकृत करें
+
+```ts
+export default function (api) {
+  api.registerGatewayMethod("myplugin.status", ({ respond }) => {
+    respond(true, { ok: true });
+  });
+}
+```
+
+### CLI कमांड्स पंजीकृत करें
+
+```ts
+export default function (api) {
+  api.registerCli(
+    ({ program }) => {
+      program.command("mycmd").action(() => {
+        console.log("Hello");
+      });
+    },
+    { commands: ["mycmd"] },
+  );
+}
+```
+
+### ऑटो‑रिप्लाई कमांड्स पंजीकृत करें
+
+प्लगइन्स कस्टम स्लैश कमांड्स पंजीकृत कर सकते हैं जो **AI एजेंट को बुलाए बिना**
+निष्पादित होते हैं। यह टॉगल कमांड्स, स्टेटस जाँच, या त्वरित कार्रवाइयों के लिए उपयोगी है
+जिन्हें LLM प्रोसेसिंग की आवश्यकता नहीं होती।
+
+```ts
+export default function (api) {
+  api.registerCommand({
+    name: "mystatus",
+    description: "Show plugin status",
+    handler: (ctx) => ({
+      text: `Plugin is running! Channel: ${ctx.channel}`,
+    }),
+  });
+}
+```
+
+कमांड हैंडलर संदर्भ:
+
+- `senderId`: प्रेषक का ID (यदि उपलब्ध)
+- `channel`: वह चैनल जहाँ कमांड भेजा गया
+- `isAuthorizedSender`: क्या प्रेषक अधिकृत उपयोगकर्ता है
+- `args`: कमांड के बाद दिए गए आर्ग्युमेंट्स (यदि `acceptsArgs: true`)
+- `commandBody`: पूर्ण कमांड टेक्स्ट
+- `config`: वर्तमान OpenClaw कॉन्फ़िग
+
+कमांड विकल्प:
+
+- `name`: कमांड नाम (लीडिंग `/` के बिना)
+- `description`: कमांड सूचियों में दिखाया जाने वाला सहायता टेक्स्ट
+- `acceptsArgs`: क्या कमांड आर्ग्युमेंट्स स्वीकार करता है (डिफ़ॉल्ट: false)। यदि false है और आर्ग्युमेंट्स दिए जाते हैं, तो कमांड मैच नहीं करेगा और संदेश अन्य हैंडलर्स को पास हो जाएगा
+- `requireAuth`: क्या अधिकृत प्रेषक की आवश्यकता है (डिफ़ॉल्ट: true)
+- `handler`: वह फ़ंक्शन जो `{ text: string }` लौटाता है (async हो सकता है)
+
+प्रमाणीकरण और आर्ग्युमेंट्स के साथ उदाहरण:
+
+```ts
+api.registerCommand({
+  name: "setmode",
+  description: "Set plugin mode",
+  acceptsArgs: true,
+  requireAuth: true,
+  handler: async (ctx) => {
+    const mode = ctx.args?.trim() || "default";
+    await saveMode(mode);
+    return { text: `Mode set to: ${mode}` };
+  },
+});
+```
+
+टिप्पणियाँ:
+
+- प्लगइन कमांड्स अंतर्निहित कमांड्स और AI एजेंट से **पहले** प्रोसेस होते हैं
+- कमांड्स वैश्विक रूप से पंजीकृत होते हैं और सभी चैनलों में काम करते हैं
+- कमांड नाम केस‑इन्सेंसिटिव होते हैं (`/MyStatus` `/mystatus` से मेल खाता है)
+- कमांड नाम किसी अक्षर से शुरू होने चाहिए और केवल अक्षर, अंक, हाइफ़न, और अंडरस्कोर शामिल कर सकते हैं
+- आरक्षित कमांड नाम (जैसे `help`, `status`, `reset`, आदि) प्लगइन्स द्वारा ओवरराइड नहीं किए जा सकते
+- प्लगइन्स के बीच डुप्लिकेट कमांड पंजीकरण डायग्नोस्टिक त्रुटि के साथ विफल होगा
+
+### पृष्ठभूमि सेवाएँ पंजीकृत करें
+
+```ts
+export default function (api) {
+  api.registerService({
+    id: "my-service",
+    start: () => api.logger.info("ready"),
+    stop: () => api.logger.info("bye"),
+  });
+}
+```
+
+## नामकरण परंपराएँ
+
+- Gateway विधियाँ: `pluginId.action` (उदाहरण: `voicecall.status`)
+- टूल्स: `snake_case` (उदाहरण: `voice_call`)
+- CLI कमांड्स: kebab या camel, लेकिन core कमांड्स से टकराव से बचें
+
+## Skills
+
+प्लगइन्स रिपॉज़िटरी में एक skill शिप कर सकते हैं (`skills/<name>/SKILL.md`)।
+इसे `plugins.entries.<id>.enabled` (या अन्य कॉन्फ़िग गेट्स) के साथ सक्षम करें और सुनिश्चित करें कि
+यह आपके वर्कस्पेस/मैनेज्ड skills लोकेशन्स में मौजूद है।
+
+## वितरण (npm)
+
+अनुशंसित पैकेजिंग:
+
+- मुख्य पैकेज: `openclaw` (यह रिपॉज़िटरी)
+- प्लगइन्स: `@openclaw/*` के अंतर्गत अलग‑अलग npm पैकेज (उदाहरण: `@openclaw/voice-call`)
+
+पब्लिशिंग अनुबंध:
+
+- प्लगइन `package.json` में एक या अधिक एंट्री फ़ाइलों के साथ `openclaw.extensions` शामिल होना चाहिए।
+- एंट्री फ़ाइलें `.js` या `.ts` हो सकती हैं (jiti रनटाइम पर TS लोड करता है)।
+- `openclaw plugins install <npm-spec>` `npm pack` का उपयोग करता है, `~/.openclaw/extensions/<id>/` में एक्सट्रैक्ट करता है, और कॉन्फ़िग में सक्षम करता है।
+- कॉन्फ़िग कुंजी स्थिरता: scoped पैकेजेस को `plugins.entries.*` के लिए **unscoped** id में नॉर्मलाइज़ किया जाता है।
+
+## उदाहरण प्लगइन: Voice Call
+
+इस रिपॉज़िटरी में एक voice‑call प्लगइन शामिल है (Twilio या लॉग फ़ॉलबैक):
+
+- स्रोत: `extensions/voice-call`
+- Skill: `skills/voice-call`
+- CLI: `openclaw voicecall start|status`
+- टूल: `voice_call`
+- RPC: `voicecall.start`, `voicecall.status`
+- कॉन्फ़िग (twilio): `provider: "twilio"` + `twilio.accountSid/authToken/from` (वैकल्पिक `statusCallbackUrl`, `twimlUrl`)
+- कॉन्फ़िग (dev): `provider: "log"` (कोई नेटवर्क नहीं)
+
+सेटअप और उपयोग के लिए [Voice Call](/plugins/voice-call) और `extensions/voice-call/README.md` देखें।
+
+## सुरक्षा नोट्स
+
+प्लगइन्स Gateway के साथ इन‑प्रोसेस चलते हैं। उन्हें विश्वसनीय कोड मानें:
+
+- केवल वही प्लगइन्स इंस्टॉल करें जिन पर आप भरोसा करते हैं।
+- `plugins.allow` allowlists को प्राथमिकता दें।
+- परिवर्तनों के बाद Gateway को पुनः प्रारंभ करें।
+
+## प्लगइन्स का परीक्षण
+
+प्लगइन्स परीक्षण शिप कर सकते हैं (और करना चाहिए):
+
+- इन‑रिपॉज़िटरी प्लगइन्स Vitest परीक्षणों को `src/**` के अंतर्गत रख सकते हैं (उदाहरण: `src/plugins/voice-call.plugin.test.ts`)।
+- अलग से प्रकाशित प्लगइन्स को अपना CI (lint/build/test) चलाना चाहिए और यह सत्यापित करना चाहिए कि `openclaw.extensions` बिल्ट एंट्रीपॉइंट (`dist/index.js`) की ओर इशारा करता है।

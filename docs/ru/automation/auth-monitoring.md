@@ -1,0 +1,51 @@
+---
+summary: "Мониторинг истечения срока действия OAuth для провайдеров моделей"
+read_when:
+  - Настройка мониторинга или оповещений об истечении срока действия аутентификации
+  - Автоматизация проверок обновления OAuth для Claude Code / Codex
+title: "Мониторинг аутентификации"
+x-i18n:
+  source_path: automation/auth-monitoring.md
+  source_hash: eef179af9545ed7a
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:01Z
+---
+
+# Мониторинг аутентификации
+
+OpenClaw предоставляет состояние истечения срока действия OAuth через `openclaw models status`. Используйте это для
+автоматизации и оповещений; скрипты являются необязательным дополнением для телефонных сценариев.
+
+## Рекомендуется: проверка через CLI (портативно)
+
+```bash
+openclaw models status --check
+```
+
+Коды завершения:
+
+- `0`: OK
+- `1`: учётные данные истекли или отсутствуют
+- `2`: скоро истекают (в течение 24 ч)
+
+Работает в cron/systemd и не требует дополнительных скриптов.
+
+## Необязательные скрипты (ops / телефонные сценарии)
+
+Они находятся в `scripts/` и являются **необязательными**. Предполагают SSH‑доступ к
+хосту шлюза Gateway и настроены для systemd + Termux.
+
+- `scripts/claude-auth-status.sh` теперь использует `openclaw models status --json` в качестве
+  источника истины (с откатом к прямому чтению файлов, если CLI недоступен),
+  поэтому держите `openclaw` на `PATH` для таймеров.
+- `scripts/auth-monitor.sh`: цель таймера cron/systemd; отправляет оповещения (ntfy или на телефон).
+- `scripts/systemd/openclaw-auth-monitor.{service,timer}`: пользовательский таймер systemd.
+- `scripts/claude-auth-status.sh`: проверка аутентификации Claude Code + OpenClaw (полный/json/простой).
+- `scripts/mobile-reauth.sh`: пошаговый поток повторной аутентификации по SSH.
+- `scripts/termux-quick-auth.sh`: статус виджета «в одно касание» + открытие URL аутентификации.
+- `scripts/termux-auth-widget.sh`: полный пошаговый поток виджета.
+- `scripts/termux-sync-widget.sh`: синхронизация учётных данных Claude Code → OpenClaw.
+
+Если вам не нужна автоматизация на телефоне или таймеры systemd, пропустите эти скрипты.

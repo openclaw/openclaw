@@ -1,0 +1,41 @@
+---
+summary: "Справочник CLI для `openclaw voicecall` (поверхность команд плагина voice-call)"
+read_when:
+  - "Вы используете плагин voice-call и хотите точки входа CLI"
+  - "Вам нужны быстрые примеры для `voicecall call|continue|status|tail|expose`"
+title: "voicecall"
+x-i18n:
+  source_path: cli/voicecall.md
+  source_hash: d93aaee6f6f5c9ac
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:19Z
+---
+
+# `openclaw voicecall`
+
+`voicecall` — это команда, предоставляемая плагином. Она появляется только если плагин voice-call установлен и включён.
+
+Основная документация:
+
+- Плагин voice-call: [Voice Call](/plugins/voice-call)
+
+## Часто используемые команды
+
+```bash
+openclaw voicecall status --call-id <id>
+openclaw voicecall call --to "+15555550123" --message "Hello" --mode notify
+openclaw voicecall continue --call-id <id> --message "Any questions?"
+openclaw voicecall end --call-id <id>
+```
+
+## Публикация вебхуков (Tailscale)
+
+```bash
+openclaw voicecall expose --mode serve
+openclaw voicecall expose --mode funnel
+openclaw voicecall unexpose
+```
+
+Примечание по безопасности: публикуйте конечную точку вебхука только в сетях, которым вы доверяете. По возможности предпочитайте Tailscale Serve вместо Funnel.

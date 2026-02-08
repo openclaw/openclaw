@@ -1,0 +1,47 @@
+---
+summary: "ऑनबोर्डिंग विज़ार्ड और कॉन्फ़िग स्कीमा के लिए RPC प्रोटोकॉल नोट्स"
+read_when: "ऑनबोर्डिंग विज़ार्ड के चरणों या कॉन्फ़िग स्कीमा एंडपॉइंट्स में परिवर्तन करते समय"
+title: "ऑनबोर्डिंग और कॉन्फ़िग प्रोटोकॉल"
+x-i18n:
+  source_path: experiments/onboarding-config-protocol.md
+  source_hash: 55163b3ee029c024
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:09Z
+---
+
+# ऑनबोर्डिंग + कॉन्फ़िग प्रोटोकॉल
+
+उद्देश्य: CLI, macOS ऐप, और वेब UI में साझा ऑनबोर्डिंग + कॉन्फ़िग सतहें।
+
+## घटक
+
+- विज़ार्ड इंजन (साझा सत्र + प्रॉम्प्ट्स + ऑनबोर्डिंग स्थिति)।
+- CLI ऑनबोर्डिंग UI क्लाइंट्स के समान विज़ार्ड फ़्लो का उपयोग करता है।
+- Gateway RPC विज़ार्ड + कॉन्फ़िग स्कीमा एंडपॉइंट्स उजागर करता है।
+- macOS ऑनबोर्डिंग विज़ार्ड स्टेप मॉडल का उपयोग करता है।
+- वेब UI JSON Schema + UI संकेतों से कॉन्फ़िग फ़ॉर्म रेंडर करता है।
+
+## Gateway RPC
+
+- `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
+- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
+- `wizard.cancel` params: `{ sessionId }`
+- `wizard.status` params: `{ sessionId }`
+- `config.schema` params: `{}`
+
+प्रतिक्रियाएँ (आकृति)
+
+- विज़ार्ड: `{ sessionId, done, step?, status?, error? }`
+- कॉन्फ़िग स्कीमा: `{ schema, uiHints, version, generatedAt }`
+
+## UI संकेत
+
+- `uiHints` पाथ द्वारा कीड; वैकल्पिक मेटाडेटा (label/help/group/order/advanced/sensitive/placeholder)।
+- संवेदनशील फ़ील्ड पासवर्ड इनपुट के रूप में रेंडर होते हैं; कोई रिडैक्शन लेयर नहीं।
+- असमर्थित स्कीमा नोड्स कच्चे JSON एडिटर पर फ़ॉलबैक करते हैं।
+
+## टिप्पणियाँ
+
+- यह दस्तावेज़ ऑनबोर्डिंग/कॉन्फ़िग के लिए प्रोटोकॉल रिफ़ैक्टर को ट्रैक करने का एकमात्र स्थान है।

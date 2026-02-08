@@ -1,0 +1,63 @@
+---
+summary: "Parsowanie lokalizacji kanału przychodzącego (Telegram + WhatsApp) oraz pola kontekstu"
+read_when:
+  - Dodawanie lub modyfikowanie parsowania lokalizacji kanałów
+  - Używanie pól kontekstu lokalizacji w promptach lub narzędziach agentów
+title: "Parsowanie lokalizacji kanału"
+x-i18n:
+  source_path: channels/location.md
+  source_hash: 5602ef105c3da7e4
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:50:47Z
+---
+
+# Parsowanie lokalizacji kanału
+
+OpenClaw normalizuje udostępnione lokalizacje z kanałów czatu do postaci:
+
+- czytelnego dla człowieka tekstu dołączanego do treści przychodzącej oraz
+- ustrukturyzowanych pól w ładunku kontekstu automatycznej odpowiedzi.
+
+Obecnie obsługiwane:
+
+- **Telegram** (pinezki lokalizacji + miejsca/venue + lokalizacje na żywo)
+- **WhatsApp** (locationMessage + liveLocationMessage)
+- **Matrix** (`m.location` z `geo_uri`)
+
+## Formatowanie tekstu
+
+Lokalizacje są renderowane jako przyjazne linie bez nawiasów:
+
+- Pinezka:
+  - `📍 48.858844, 2.294351 ±12m`
+- Nazwane miejsce:
+  - `📍 Eiffel Tower — Champ de Mars, Paris (48.858844, 2.294351 ±12m)`
+- Udostępnianie na żywo:
+  - `🛰 Live location: 48.858844, 2.294351 ±12m`
+
+Jeśli kanał zawiera podpis/komentarz, jest on dołączany w następnej linii:
+
+```
+📍 48.858844, 2.294351 ±12m
+Meet here
+```
+
+## Pola kontekstu
+
+Gdy obecna jest lokalizacja, do `ctx` dodawane są następujące pola:
+
+- `LocationLat` (liczba)
+- `LocationLon` (liczba)
+- `LocationAccuracy` (liczba, metry; opcjonalne)
+- `LocationName` (ciąg znaków; opcjonalne)
+- `LocationAddress` (ciąg znaków; opcjonalne)
+- `LocationSource` (`pin | place | live`)
+- `LocationIsLive` (boolean)
+
+## Uwagi dotyczące kanałów
+
+- **Telegram**: miejsca (venues) mapowane są do `LocationName/LocationAddress`; lokalizacje na żywo używają `live_period`.
+- **WhatsApp**: `locationMessage.comment` oraz `liveLocationMessage.caption` są dołączane jako linia podpisu.
+- **Matrix**: `geo_uri` jest parsowane jako lokalizacja pinezki; wysokość (altitude) jest ignorowana, a `LocationIsLive` jest zawsze false.

@@ -1,0 +1,30 @@
+---
+summary: "`openclaw tui` के लिए CLI संदर्भ (Gateway से जुड़ा टर्मिनल UI)"
+read_when:
+  - आप Gateway के लिए एक टर्मिनल UI चाहते हैं (दूरस्थ-उपयोग के अनुकूल)
+  - आप स्क्रिप्ट्स से url/token/session पास करना चाहते हैं
+title: "tui"
+x-i18n:
+  source_path: cli/tui.md
+  source_hash: aa6f37b960926997
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:03Z
+---
+
+# `openclaw tui`
+
+Gateway से जुड़े टर्मिनल UI को खोलें।
+
+संबंधित:
+
+- TUI मार्गदर्शिका: [TUI](/web/tui)
+
+## उदाहरण
+
+```bash
+openclaw tui
+openclaw tui --url ws://127.0.0.1:18789 --token <token>
+openclaw tui --session main --deliver
+```

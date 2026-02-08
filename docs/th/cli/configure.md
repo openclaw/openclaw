@@ -1,0 +1,40 @@
+---
+summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw configure` (พรอมต์การกำหนดค่าแบบโต้ตอบ)"
+read_when:
+  - คุณต้องการปรับแต่งข้อมูลรับรอง อุปกรณ์ หรือค่าเริ่มต้นของเอเจนต์แบบโต้ตอบ
+title: "configure"
+x-i18n:
+  source_path: cli/configure.md
+  source_hash: 9cb2bb5237b02b3a
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:51:50Z
+---
+
+# `openclaw configure`
+
+พรอมต์แบบโต้ตอบสำหรับตั้งค่าข้อมูลรับรอง อุปกรณ์ และค่าเริ่มต้นของเอเจนต์
+
+หมายเหตุ: ส่วน **Model** ตอนนี้มีการเลือกได้หลายรายการสำหรับ allowlist ของ
+`agents.defaults.models` (สิ่งที่แสดงใน `/model` และตัวเลือกโมเดล)
+
+เคล็ดลับ: เรียกใช้ `openclaw config` โดยไม่ระบุคำสั่งย่อยจะเปิดวิซาร์ดเดียวกัน ใช้
+`openclaw config get|set|unset` สำหรับการแก้ไขแบบไม่โต้ตอบ
+
+เกี่ยวข้อง:
+
+- เอกสารอ้างอิงการกำหนดค่าGateway: [Configuration](/gateway/configuration)
+- Config CLI: [Config](/cli/config)
+
+หมายเหตุ:
+
+- การเลือกตำแหน่งที่Gatewayทำงานจะอัปเดต `gateway.mode` เสมอ คุณสามารถเลือก "Continue" โดยไม่ต้องตั้งค่าส่วนอื่นได้ หากต้องการเพียงเท่านี้
+- บริการที่ยึดตามช่องทาง (Slack/Discord/Matrix/Microsoft Teams) จะถาม allowlist ของช่องทาง/ห้องระหว่างการตั้งค่า คุณสามารถป้อนชื่อหรือ ID ได้ วิซาร์ดจะทำการแปลงชื่อเป็น ID เมื่อเป็นไปได้
+
+## ตัวอย่าง
+
+```bash
+openclaw configure
+openclaw configure --section models --section channels
+```

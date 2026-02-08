@@ -1,0 +1,57 @@
+---
+summary: "ใช้เครื่องมือ apply_patch เพื่อปรับใช้แพตช์หลายไฟล์"
+read_when:
+  - คุณต้องการแก้ไขไฟล์แบบมีโครงสร้างข้ามหลายไฟล์
+  - คุณต้องการจัดทำเอกสารหรือดีบักการแก้ไขที่อิงแพตช์
+title: "เครื่องมือ apply_patch"
+x-i18n:
+  source_path: tools/apply-patch.md
+  source_hash: 8cec2b4ee3afa910
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:52:41Z
+---
+
+# เครื่องมือ apply_patch
+
+ปรับใช้การเปลี่ยนแปลงไฟล์โดยใช้รูปแบบแพตช์ที่มีโครงสร้าง เหมาะอย่างยิ่งสำหรับการแก้ไขหลายไฟล์
+หรือหลายฮังก์(hunk)ที่การเรียก `edit` เพียงครั้งเดียวอาจเปราะบางเกินไป
+
+เครื่องมือนี้รับสตริง `input` เพียงรายการเดียวซึ่งครอบไฟล์ออปเพอเรชันตั้งแต่หนึ่งรายการขึ้นไป:
+
+```
+*** Begin Patch
+*** Add File: path/to/file.txt
++line 1
++line 2
+*** Update File: src/app.ts
+@@
+-old line
++new line
+*** Delete File: obsolete.txt
+*** End Patch
+```
+
+## พารามิเตอร์
+
+- `input` (จำเป็น): เนื้อหาแพตช์ทั้งหมด รวมถึง `*** Begin Patch` และ `*** End Patch`.
+
+## หมายเหตุ
+
+- เส้นทางจะถูกแก้ไขแบบอ้างอิงจากรากของเวิร์กสเปซ
+- ใช้ `*** Move to:` ภายในฮังก์ `*** Update File:` เพื่อเปลี่ยนชื่อไฟล์
+- `*** End of File` ใช้ระบุการแทรกที่เป็นเฉพาะ EOF เมื่อจำเป็น
+- อยู่ในสถานะทดลองและปิดใช้งานเป็นค่าเริ่มต้น เปิดใช้งานด้วย `tools.exec.applyPatch.enabled`.
+- ใช้ได้เฉพาะ OpenAI เท่านั้น(รวมถึง OpenAI Codex) และสามารถกำหนดเงื่อนไขตามโมเดลได้ผ่าน
+  `tools.exec.applyPatch.allowModels`.
+- คอนฟิกอยู่ภายใต้ `tools.exec` เท่านั้น
+
+## ตัวอย่าง
+
+```json
+{
+  "tool": "apply_patch",
+  "input": "*** Begin Patch\n*** Update File: src/index.ts\n@@\n-const foo = 1\n+const foo = 2\n*** End Patch"
+}
+```

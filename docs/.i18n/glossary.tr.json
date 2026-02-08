@@ -1,0 +1,322 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (Ağ Geçidi)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (ağ geçidi)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway ana makinesi"
+  },
+  {
+    "source": "gateway host",
+    "target": "gateway ana makinesi"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC (uzaktan yordam çağrısı)"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH tüneli"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "SSH üzerinden uzaktan bağlantı"
+  },
+  {
+    "source": "agent",
+    "target": "ajan"
+  },
+  {
+    "source": "Agent",
+    "target": "Ajan"
+  },
+  {
+    "source": "channel",
+    "target": "kanal"
+  },
+  {
+    "source": "Channel",
+    "target": "Kanal"
+  },
+  {
+    "source": "session",
+    "target": "oturum"
+  },
+  {
+    "source": "Session",
+    "target": "Oturum"
+  },
+  {
+    "source": "provider",
+    "target": "sağlayıcı"
+  },
+  {
+    "source": "Provider",
+    "target": "Sağlayıcı"
+  },
+  {
+    "source": "model",
+    "target": "model"
+  },
+  {
+    "source": "tool",
+    "target": "araç"
+  },
+  {
+    "source": "Discovery",
+    "target": "Keşif"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Yardımcı uygulamalar"
+  },
+  {
+    "source": "expected keys",
+    "target": "beklenen anahtarlar"
+  },
+  {
+    "source": "block streaming",
+    "target": "blok halinde akış"
+  },
+  {
+    "source": "Transport",
+    "target": "Taşıma"
+  },
+  {
+    "source": "Authentication",
+    "target": "Kimlik doğrulama"
+  },
+  {
+    "source": "API key",
+    "target": "API anahtarı"
+  },
+  {
+    "source": "Access control",
+    "target": "Erişim denetimi"
+  },
+  {
+    "source": "allowlist",
+    "target": "izin listesi"
+  },
+  {
+    "source": "authorized senders",
+    "target": "yetkili gönderenler"
+  },
+  {
+    "source": "Bot",
+    "target": "Bot"
+  },
+  {
+    "source": "Bot Token",
+    "target": "Bot belirteci"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "Message Content Intent (Mesaj İçeriği Intent'i)"
+  },
+  {
+    "source": "Permissions",
+    "target": "İzinler"
+  },
+  {
+    "source": "DMs",
+    "target": "DM'ler (doğrudan mesajlar)"
+  },
+  {
+    "source": "Groups",
+    "target": "Gruplar"
+  },
+  {
+    "source": "Workspace",
+    "target": "Çalışma alanı"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "Çalıştırma onayları"
+  },
+  {
+    "source": "Safety",
+    "target": "Güvenli kullanım"
+  },
+  {
+    "source": "Security",
+    "target": "Güvenlik"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Başlarken"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Hızlı Başlangıç"
+  },
+  {
+    "source": "Quick start",
+    "target": "Hızlı başlangıç"
+  },
+  {
+    "source": "Overview",
+    "target": "Genel bakış"
+  },
+  {
+    "source": "Requirements",
+    "target": "Gereksinimler"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Ön koşullar"
+  },
+  {
+    "source": "Setup",
+    "target": "Kurulum"
+  },
+  {
+    "source": "Configuration",
+    "target": "Yapılandırma"
+  },
+  {
+    "source": "Config",
+    "target": "Yapılandırma"
+  },
+  {
+    "source": "environment variables",
+    "target": "ortam değişkenleri"
+  },
+  {
+    "source": "Install",
+    "target": "Yükleme"
+  },
+  {
+    "source": "Commands",
+    "target": "Komutlar"
+  },
+  {
+    "source": "Usage",
+    "target": "Kullanım"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Sorun Giderme"
+  },
+  {
+    "source": "FAQ",
+    "target": "SSS"
+  },
+  {
+    "source": "Notes",
+    "target": "Notlar"
+  },
+  {
+    "source": "Note:",
+    "target": "Not:"
+  },
+  {
+    "source": "Notes:",
+    "target": "Notlar:"
+  },
+  {
+    "source": "Tip:",
+    "target": "İpucu:"
+  },
+  {
+    "source": "Important:",
+    "target": "Önemli:"
+  },
+  {
+    "source": "Examples",
+    "target": "Örnekler"
+  },
+  {
+    "source": "Example",
+    "target": "Örnek"
+  },
+  {
+    "source": "Next steps",
+    "target": "Sonraki adımlar"
+  },
+  {
+    "source": "errors",
+    "target": "hatalar"
+  },
+  {
+    "source": "Reset",
+    "target": "Sıfırla"
+  },
+  {
+    "source": "Defaults",
+    "target": "Varsayılanlar"
+  },
+  {
+    "source": "optional",
+    "target": "isteğe bağlı"
+  },
+  {
+    "source": "JSON output",
+    "target": "JSON çıktısı"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "How it works",
+    "target": "Nasıl çalışır"
+  },
+  {
+    "source": "How It Works",
+    "target": "Nasıl Çalışır"
+  }
+]

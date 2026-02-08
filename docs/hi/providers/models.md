@@ -1,0 +1,59 @@
+---
+summary: "OpenClaw द्वारा समर्थित मॉडल प्रदाता (LLMs)"
+read_when:
+  - आप किसी मॉडल प्रदाता का चयन करना चाहते हैं
+  - आप LLM प्रमाणीकरण + मॉडल चयन के लिए त्वरित सेटअप उदाहरण चाहते हैं
+title: "मॉडल प्रदाता त्वरित प्रारंभ"
+x-i18n:
+  source_path: providers/models.md
+  source_hash: 691d2c97ef6b01cc
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:32Z
+---
+
+# मॉडल प्रदाता
+
+OpenClaw कई LLM प्रदाताओं का उपयोग कर सकता है। एक चुनें, प्रमाणीकरण करें, फिर डिफ़ॉल्ट
+मॉडल को `provider/model` के रूप में सेट करें।
+
+## हाइलाइट: Venice (Venice AI)
+
+Venice हमारी अनुशंसित Venice AI सेटअप है, जो गोपनीयता-प्रथम इनफ़ेरेंस के लिए है और सबसे कठिन कार्यों के लिए Opus का उपयोग करने का विकल्प देती है।
+
+- डिफ़ॉल्ट: `venice/llama-3.3-70b`
+- सर्वोत्तम समग्र: `venice/claude-opus-45` (Opus सबसे शक्तिशाली बना रहता है)
+
+देखें [Venice AI](/providers/venice)।
+
+## त्वरित प्रारंभ (दो चरण)
+
+1. प्रदाता के साथ प्रमाणीकरण करें (आमतौर पर `openclaw onboard` के माध्यम से)।
+2. डिफ़ॉल्ट मॉडल सेट करें:
+
+```json5
+{
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+}
+```
+
+## समर्थित प्रदाता (स्टार्टर सेट)
+
+- [OpenAI (API + Codex)](/providers/openai)
+- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [OpenRouter](/providers/openrouter)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [Synthetic](/providers/synthetic)
+- [OpenCode Zen](/providers/opencode)
+- [Z.AI](/providers/zai)
+- [GLM models](/providers/glm)
+- [MiniMax](/providers/minimax)
+- [Venice (Venice AI)](/providers/venice)
+- [Amazon Bedrock](/providers/bedrock)
+- [Qianfan](/providers/qianfan)
+
+पूर्ण प्रदाता कैटलॉग (xAI, Groq, Mistral, आदि) और उन्नत विन्यास के लिए,
+देखें [Model providers](/concepts/model-providers)।

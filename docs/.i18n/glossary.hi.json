@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (गेटवे)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (गेटवे)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway होस्ट"
+  },
+  {
+    "source": "gateway host",
+    "target": "Gateway होस्ट"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "Getting Started",
+    "target": "आरंभ करें"
+  },
+  {
+    "source": "Quick Start",
+    "target": "त्वरित प्रारंभ"
+  },
+  {
+    "source": "Quick start",
+    "target": "त्वरित प्रारंभ"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "त्वरित सेटअप (शुरुआती)"
+  },
+  {
+    "source": "Features",
+    "target": "विशेषताएँ"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ (अक्सर पूछे जाने वाले प्रश्न)"
+  },
+  {
+    "source": "Overview",
+    "target": "अवलोकन"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "समस्या-निवारण"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "समस्या-निवारण"
+  },
+  {
+    "source": "Note:",
+    "target": "टिप्पणी:"
+  },
+  {
+    "source": "Tip:",
+    "target": "सुझाव:"
+  },
+  {
+    "source": "Important:",
+    "target": "महत्वपूर्ण:"
+  },
+  {
+    "source": "Examples",
+    "target": "उदाहरण"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "पूर्वापेक्षाएँ"
+  },
+  {
+    "source": "Setup",
+    "target": "सेटअप"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "सेटअप (त्वरित मार्ग)"
+  },
+  {
+    "source": "Configuration",
+    "target": "विन्यास"
+  },
+  {
+    "source": "Config",
+    "target": "विन्यास"
+  },
+  {
+    "source": "environment variables",
+    "target": "पर्यावरण चर"
+  },
+  {
+    "source": "Authentication",
+    "target": "प्रमाणीकरण"
+  },
+  {
+    "source": "API key",
+    "target": "एपीआई कुंजी"
+  },
+  {
+    "source": "Security",
+    "target": "सुरक्षा"
+  },
+  {
+    "source": "Access control",
+    "target": "प्रवेश नियंत्रण"
+  },
+  {
+    "source": "authorized senders",
+    "target": "अधिकृत प्रेषक"
+  },
+  {
+    "source": "errors",
+    "target": "त्रुटियाँ"
+  },
+  {
+    "source": "agent",
+    "target": "एजेंट"
+  },
+  {
+    "source": "channel",
+    "target": "चैनल"
+  },
+  {
+    "source": "session",
+    "target": "सत्र"
+  },
+  {
+    "source": "provider",
+    "target": "प्रदाता"
+  },
+  {
+    "source": "model",
+    "target": "मॉडल"
+  },
+  {
+    "source": "tool",
+    "target": "टूल"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "सैंडबॉक्स में"
+  },
+  {
+    "source": "block streaming",
+    "target": "ब्लॉक स्ट्रीमिंग"
+  },
+  {
+    "source": "Discovery",
+    "target": "डिस्कवरी"
+  },
+  {
+    "source": "Companion apps",
+    "target": "सहचर ऐप्स"
+  },
+  {
+    "source": "expected keys",
+    "target": "अपेक्षित कुंजियाँ"
+  },
+  {
+    "source": "setup-token",
+    "target": "सेटअप-टोकन"
+  },
+  {
+    "source": "WebSocket",
+    "target": "वेब-सॉकेट"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "SSH के माध्यम से दूरस्थ"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH टनल"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  }
+]

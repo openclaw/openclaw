@@ -1,0 +1,119 @@
+---
+summary: "प्रति चैनल रूटिंग नियम (WhatsApp, Telegram, Discord, Slack) और साझा संदर्भ"
+read_when:
+  - चैनल रूटिंग या इनबॉक्स व्यवहार बदलते समय
+title: "चैनल रूटिंग"
+x-i18n:
+  source_path: channels/channel-routing.md
+  source_hash: cfc2cade2984225d
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:55Z
+---
+
+# चैनल और रूटिंग
+
+OpenClaw उत्तरों को **उसी चैनल पर वापस भेजता है जहाँ से संदेश आया था**।  
+मॉडल चैनल नहीं चुनता; रूटिंग निर्धारक होती है और होस्ट विन्यास द्वारा नियंत्रित की जाती है।
+
+## प्रमुख शब्द
+
+- **Channel**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`।
+- **AccountId**: प्रति‑चैनल खाता इंस्टेंस (जहाँ समर्थित हो)।
+- **AgentId**: एक पृथक कार्यक्षेत्र + सत्र भंडार (“ब्रेन”)।
+- **SessionKey**: संदर्भ संग्रहीत करने और समवर्ती नियंत्रण के लिए प्रयुक्त बकेट कुंजी।
+
+## सत्र कुंजी के रूप (उदाहरण)
+
+प्रत्यक्ष संदेश एजेंट के **मुख्य** सत्र में समाहित हो जाते हैं:
+
+- `agent:<agentId>:<mainKey>` (डिफ़ॉल्ट: `agent:main:main`)
+
+समूह और चैनल प्रति चैनल पृथक रहते हैं:
+
+- समूह: `agent:<agentId>:<channel>:group:<id>`
+- चैनल/रूम: `agent:<agentId>:<channel>:channel:<id>`
+
+थ्रेड्स:
+
+- Slack/Discord थ्रेड्स आधार कुंजी में `:thread:<threadId>` जोड़ते हैं।
+- Telegram फ़ोरम विषय समूह कुंजी में `:topic:<topicId>` एम्बेड करते हैं।
+
+उदाहरण:
+
+- `agent:main:telegram:group:-1001234567890:topic:42`
+- `agent:main:discord:channel:123456:thread:987654`
+
+## रूटिंग नियम (एजेंट कैसे चुना जाता है)
+
+रूटिंग प्रत्येक इनबाउंड संदेश के लिए **एक एजेंट** चुनती है:
+
+1. **सटीक पीयर मिलान** (`bindings` के साथ `peer.kind` + `peer.id`)।
+2. **Guild मिलान** (Discord) `guildId` के माध्यम से।
+3. **Team मिलान** (Slack) `teamId` के माध्यम से।
+4. **Account मिलान** (चैनल पर `accountId`)।
+5. **Channel मिलान** (उस चैनल पर कोई भी खाता)।
+6. **डिफ़ॉल्ट एजेंट** (`agents.list[].default`, अन्यथा सूची की पहली प्रविष्टि, फ़ॉलबैक `main`)।
+
+मिलान किया गया एजेंट निर्धारित करता है कि कौन‑सा कार्यक्षेत्र और सत्र भंडार उपयोग होगा।
+
+## ब्रॉडकास्ट समूह (एकाधिक एजेंट चलाएँ)
+
+ब्रॉडकास्ट समूह आपको उसी पीयर के लिए **एकाधिक एजेंट** चलाने देते हैं **जब OpenClaw सामान्यतः उत्तर देता** (उदाहरण: WhatsApp समूहों में, उल्लेख/सक्रियण गेटिंग के बाद)।
+
+विन्यास:
+
+```json5
+{
+  broadcast: {
+    strategy: "parallel",
+    "120363403215116621@g.us": ["alfred", "baerbel"],
+    "+15555550123": ["support", "logger"],
+  },
+}
+```
+
+देखें: [Broadcast Groups](/channels/broadcast-groups)।
+
+## विन्यास अवलोकन
+
+- `agents.list`: नामित एजेंट परिभाषाएँ (कार्यक्षेत्र, मॉडल, आदि)।
+- `bindings`: इनबाउंड चैनल/खाते/पीयर को एजेंटों से मैप करें।
+
+उदाहरण:
+
+```json5
+{
+  agents: {
+    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+  },
+  bindings: [
+    { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
+    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+  ],
+}
+```
+
+## सत्र भंडारण
+
+सत्र भंडार state निर्देशिका के अंतर्गत रहते हैं (डिफ़ॉल्ट `~/.openclaw`):
+
+- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- JSONL ट्रांस्क्रिप्ट्स भंडार के साथ‑साथ रहती हैं
+
+आप `session.store` और `{agentId}` टेम्पलेटिंग के माध्यम से भंडार पथ को ओवरराइड कर सकते हैं।
+
+## WebChat व्यवहार
+
+WebChat **चयनित एजेंट** से जुड़ता है और डिफ़ॉल्ट रूप से एजेंट के मुख्य सत्र का उपयोग करता है।  
+इसी कारण, WebChat आपको उस एजेंट के लिए क्रॉस‑चैनल संदर्भ एक ही स्थान पर देखने देता है।
+
+## उत्तर संदर्भ
+
+इनबाउंड उत्तरों में शामिल होते हैं:
+
+- उपलब्ध होने पर `ReplyToId`, `ReplyToBody`, और `ReplyToSender`।
+- उद्धृत संदर्भ `Body` में `[Replying to ...]` ब्लॉक के रूप में जोड़ा जाता है।
+
+यह सभी चैनलों में सुसंगत है।

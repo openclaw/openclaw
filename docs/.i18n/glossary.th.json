@@ -1,0 +1,666 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway（เกตเวย์）"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway（เกตเวย์）"
+  },
+  {
+    "source": "OpenClaw Gateway",
+    "target": "OpenClaw Gateway（เกตเวย์）"
+  },
+  {
+    "source": "Gateway host",
+    "target": "โฮสต์Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "โฮสต์Gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "GatewayRPC"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "อุโมงค์SSH"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "รีโมตผ่านSSH"
+  },
+  {
+    "source": "Node",
+    "target": "โหนด"
+  },
+  {
+    "source": "node",
+    "target": "โหนด"
+  },
+  {
+    "source": "Nodes",
+    "target": "โหนด"
+  },
+  {
+    "source": "nodes",
+    "target": "โหนด"
+  },
+  {
+    "source": "node host",
+    "target": "โฮสต์โหนด"
+  },
+  {
+    "source": "host",
+    "target": "โฮสต์"
+  },
+  {
+    "source": "agent",
+    "target": "เอเจนต์"
+  },
+  {
+    "source": "per-agent",
+    "target": "ต่อเอเจนต์"
+  },
+  {
+    "source": "channel",
+    "target": "ช่องทาง"
+  },
+  {
+    "source": "session",
+    "target": "เซสชัน"
+  },
+  {
+    "source": "provider",
+    "target": "ผู้ให้บริการ"
+  },
+  {
+    "source": "model",
+    "target": "โมเดล"
+  },
+  {
+    "source": "tool",
+    "target": "เครื่องมือ"
+  },
+  {
+    "source": "block streaming",
+    "target": "สตรีมแบบบล็อก"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery(การค้นหาอัตโนมัติ)"
+  },
+  {
+    "source": "Companion apps",
+    "target": "แอปคู่หู"
+  },
+  {
+    "source": "macOS app",
+    "target": "แอปmacOS"
+  },
+  {
+    "source": "Getting Started",
+    "target": "เริ่มต้นใช้งาน"
+  },
+  {
+    "source": "Quick Start",
+    "target": "เริ่มต้นอย่างรวดเร็ว"
+  },
+  {
+    "source": "Quick start",
+    "target": "เริ่มต้นอย่างรวดเร็ว"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "ตั้งค่าอย่างรวดเร็ว(ผู้เริ่มต้น)"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "การตั้งค่า(ทางลัด)"
+  },
+  {
+    "source": "Setup",
+    "target": "การตั้งค่า"
+  },
+  {
+    "source": "CLI setup",
+    "target": "การตั้งค่าCLI"
+  },
+  {
+    "source": "Configuration",
+    "target": "การกำหนดค่า"
+  },
+  {
+    "source": "Config",
+    "target": "คอนฟิก"
+  },
+  {
+    "source": "Config snippet",
+    "target": "ตัวอย่างคอนฟิก"
+  },
+  {
+    "source": "Config writes",
+    "target": "การเขียนคอนฟิก"
+  },
+  {
+    "source": "environment variables",
+    "target": "ตัวแปรสภาพแวดล้อม"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "ข้อกำหนดก่อนเริ่มต้น"
+  },
+  {
+    "source": "Prereqs",
+    "target": "ข้อกำหนดก่อนเริ่มต้น"
+  },
+  {
+    "source": "Requirements",
+    "target": "ข้อกำหนด"
+  },
+  {
+    "source": "Install",
+    "target": "ติดตั้ง"
+  },
+  {
+    "source": "Usage",
+    "target": "การใช้งาน"
+  },
+  {
+    "source": "Commands",
+    "target": "คำสั่ง"
+  },
+  {
+    "source": "Common commands",
+    "target": "คำสั่งที่ใช้บ่อย"
+  },
+  {
+    "source": "Steps",
+    "target": "ขั้นตอน"
+  },
+  {
+    "source": "Next steps",
+    "target": "ขั้นตอนถัดไป"
+  },
+  {
+    "source": "Overview",
+    "target": "ภาพรวม"
+  },
+  {
+    "source": "Summary",
+    "target": "สรุป"
+  },
+  {
+    "source": "Examples",
+    "target": "ตัวอย่าง"
+  },
+  {
+    "source": "Example",
+    "target": "ตัวอย่าง"
+  },
+  {
+    "source": "Notes",
+    "target": "หมายเหตุ"
+  },
+  {
+    "source": "Notes:",
+    "target": "หมายเหตุ:"
+  },
+  {
+    "source": "Note:",
+    "target": "หมายเหตุ:"
+  },
+  {
+    "source": "Important:",
+    "target": "สำคัญ:"
+  },
+  {
+    "source": "Tip:",
+    "target": "เคล็ดลับ:"
+  },
+  {
+    "source": "Recommended:",
+    "target": "แนะนำ:"
+  },
+  {
+    "source": "Related docs",
+    "target": "เอกสารที่เกี่ยวข้อง"
+  },
+  {
+    "source": "Related",
+    "target": "เกี่ยวข้อง"
+  },
+  {
+    "source": "See Also",
+    "target": "ดูเพิ่มเติม"
+  },
+  {
+    "source": "See:",
+    "target": "ดู:"
+  },
+  {
+    "source": "References",
+    "target": "อ้างอิง"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "การแก้ไขปัญหา"
+  },
+  {
+    "source": "errors",
+    "target": "ข้อผิดพลาด"
+  },
+  {
+    "source": "Fix:",
+    "target": "วิธีแก้ไข:"
+  },
+  {
+    "source": "Tests",
+    "target": "การทดสอบ"
+  },
+  {
+    "source": "Testing",
+    "target": "การทดสอบ"
+  },
+  {
+    "source": "Manual Testing",
+    "target": "การทดสอบด้วยตนเอง"
+  },
+  {
+    "source": "Evidence",
+    "target": "หลักฐาน"
+  },
+  {
+    "source": "How it works",
+    "target": "ทำงานอย่างไร"
+  },
+  {
+    "source": "How It Works",
+    "target": "ทำงานอย่างไร"
+  },
+  {
+    "source": "How it works (behavior)",
+    "target": "ทำงานอย่างไร(พฤติกรรม)"
+  },
+  {
+    "source": "What it is",
+    "target": "คืออะไร"
+  },
+  {
+    "source": "What it does",
+    "target": "ทำอะไรได้บ้าง"
+  },
+  {
+    "source": "Why",
+    "target": "ทำไม"
+  },
+  {
+    "source": "Goals",
+    "target": "เป้าหมาย"
+  },
+  {
+    "source": "Goal",
+    "target": "เป้าหมาย"
+  },
+  {
+    "source": "Non-goals",
+    "target": "สิ่งที่ไม่อยู่ในขอบเขต"
+  },
+  {
+    "source": "Enable",
+    "target": "เปิดใช้งาน"
+  },
+  {
+    "source": "disabled",
+    "target": "ปิดใช้งาน"
+  },
+  {
+    "source": "disabled by default",
+    "target": "ปิดใช้งานเป็นค่าเริ่มต้น"
+  },
+  {
+    "source": "off",
+    "target": "ปิด"
+  },
+  {
+    "source": "off by default",
+    "target": "ปิดเป็นค่าเริ่มต้น"
+  },
+  {
+    "source": "unset",
+    "target": "ยกเลิกการตั้งค่า"
+  },
+  {
+    "source": "Defaults",
+    "target": "ค่าเริ่มต้น"
+  },
+  {
+    "source": "Options",
+    "target": "ตัวเลือก"
+  },
+  {
+    "source": "Options:",
+    "target": "ตัวเลือก:"
+  },
+  {
+    "source": "optional",
+    "target": "ไม่บังคับ"
+  },
+  {
+    "source": "Limits",
+    "target": "ข้อจำกัด"
+  },
+  {
+    "source": "Security",
+    "target": "ความปลอดภัย"
+  },
+  {
+    "source": "Security notes",
+    "target": "หมายเหตุด้านความปลอดภัย"
+  },
+  {
+    "source": "Safety",
+    "target": "ความปลอดภัย"
+  },
+  {
+    "source": "Authentication",
+    "target": "การยืนยันตัวตน"
+  },
+  {
+    "source": "API key",
+    "target": "คีย์API"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "allowlist",
+    "target": "รายการอนุญาต"
+  },
+  {
+    "source": "Access control",
+    "target": "การควบคุมการเข้าถึง"
+  },
+  {
+    "source": "Access control (DMs)",
+    "target": "การควบคุมการเข้าถึง(DMs)"
+  },
+  {
+    "source": "Access control (DMs + groups)",
+    "target": "การควบคุมการเข้าถึง(DMs+กลุ่ม)"
+  },
+  {
+    "source": "authorized senders",
+    "target": "ผู้ส่งที่ได้รับอนุญาต"
+  },
+  {
+    "source": "Workspace",
+    "target": "เวิร์กสเปซ"
+  },
+  {
+    "source": "Groups",
+    "target": "กลุ่ม"
+  },
+  {
+    "source": "DMs",
+    "target": "ข้อความส่วนตัว(DMs)"
+  },
+  {
+    "source": "DM access",
+    "target": "การเข้าถึงDM"
+  },
+  {
+    "source": "Bot",
+    "target": "บอต"
+  },
+  {
+    "source": "Bot Token",
+    "target": "โทเคนบอต"
+  },
+  {
+    "source": "Permissions",
+    "target": "สิทธิ์"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "Intentของเนื้อหาข้อความ"
+  },
+  {
+    "source": "Events",
+    "target": "อีเวนต์"
+  },
+  {
+    "source": "Context",
+    "target": "บริบท"
+  },
+  {
+    "source": "Modes",
+    "target": "โหมด"
+  },
+  {
+    "source": "Output",
+    "target": "เอาต์พุต"
+  },
+  {
+    "source": "Output:",
+    "target": "เอาต์พุต:"
+  },
+  {
+    "source": "JSON output",
+    "target": "เอาต์พุตJSON"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "การอนุมัติการรันคำสั่ง"
+  },
+  {
+    "source": "Command ladder",
+    "target": "ลำดับขั้นคำสั่ง"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "ตัวบ่งชี้การพิมพ์"
+  },
+  {
+    "source": "Heartbeats",
+    "target": "ฮาร์ตบีต"
+  },
+  {
+    "source": "pairing",
+    "target": "การจับคู่"
+  },
+  {
+    "source": "Transport",
+    "target": "ทรานสปอร์ต"
+  },
+  {
+    "source": "Delivery targets (CLI/cron)",
+    "target": "เป้าหมายการส่งมอบ(CLI/cron)"
+  },
+  {
+    "source": "Reset",
+    "target": "รีเซ็ต"
+  },
+  {
+    "source": "Impact",
+    "target": "ผลกระทบ"
+  },
+  {
+    "source": "Community",
+    "target": "ชุมชน"
+  },
+  {
+    "source": "Best for:",
+    "target": "เหมาะสำหรับ:"
+  },
+  {
+    "source": "Claim:",
+    "target": "ข้อกล่าวอ้าง:"
+  },
+  {
+    "source": "Plugin required",
+    "target": "ต้องใช้ปลั๊กอิน"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "โดยตรง(ws/wss)"
+  },
+  {
+    "source": "private",
+    "target": "ส่วนตัว"
+  },
+  {
+    "source": "global",
+    "target": "ส่วนกลาง"
+  },
+  {
+    "source": "Local",
+    "target": "ภายในเครื่อง"
+  },
+  {
+    "source": "remote",
+    "target": "ระยะไกล"
+  },
+  {
+    "source": "before",
+    "target": "ก่อน"
+  },
+  {
+    "source": "first",
+    "target": "ครั้งแรก"
+  },
+  {
+    "source": "main",
+    "target": "หลัก"
+  },
+  {
+    "source": "both",
+    "target": "ทั้งคู่"
+  },
+  {
+    "source": "only",
+    "target": "เท่านั้น"
+  },
+  {
+    "source": "must",
+    "target": "ต้อง"
+  },
+  {
+    "source": "not recommended",
+    "target": "ไม่แนะนำ"
+  },
+  {
+    "source": "not",
+    "target": "ไม่"
+  },
+  {
+    "source": "and",
+    "target": "และ"
+  },
+  {
+    "source": "or",
+    "target": "หรือ"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "MiniMax M2.1",
+    "target": "MiniMax M2.1"
+  },
+  {
+    "source": "Kimi Coding",
+    "target": "Kimi Coding"
+  },
+  {
+    "source": "Gemini CLI",
+    "target": "Gemini CLI"
+  },
+  {
+    "source": "expected keys",
+    "target": "คีย์ที่คาดหวัง"
+  }
+]

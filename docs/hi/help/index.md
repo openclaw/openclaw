@@ -1,0 +1,28 @@
+---
+summary: "सहायता हब: सामान्य समाधान, इंस्टॉल जाँच, और जब कुछ टूट जाए तो कहाँ देखें"
+read_when:
+  - "आप नए हैं और “मुझे क्या क्लिक/चलाना है” वाला मार्गदर्शक चाहते हैं"
+  - "कुछ टूट गया है और आप सबसे तेज़ समाधान का रास्ता चाहते हैं"
+title: "सहायता"
+x-i18n:
+  source_path: help/index.md
+  source_hash: 9356d1929df3e81a
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:13Z
+---
+
+# सहायता
+
+यदि आप जल्दी “अटकने से बाहर निकलने” का प्रवाह चाहते हैं, तो यहाँ से शुरू करें:
+
+- **समस्या-निवारण:** [यहाँ से शुरू करें](/help/troubleshooting)
+- **इंस्टॉल जाँच (Node/npm/PATH):** [इंस्टॉल](/install#nodejs--npm-path-sanity)
+- **Gateway समस्याएँ:** [Gateway समस्या-निवारण](/gateway/troubleshooting)
+- **लॉग्स:** [लॉगिंग](/logging) और [Gateway लॉगिंग](/gateway/logging)
+- **मरम्मत:** [Doctor](/gateway/doctor)
+
+यदि आप वैचारिक प्रश्न ढूँढ रहे हैं (ना कि “कुछ टूट गया”):
+
+- [FAQ (अवधारणाएँ)](/help/faq)

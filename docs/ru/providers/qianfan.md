@@ -1,0 +1,45 @@
+---
+summary: "Используйте единый API Qianfan для доступа ко многим моделям в OpenClaw"
+read_when:
+  - "Вам нужен один ключ API для многих LLM"
+  - "Вам требуется руководство по настройке Baidu Qianfan"
+title: "Qianfan"
+x-i18n:
+  source_path: providers/qianfan.md
+  source_hash: 2ca710b422f190b6
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:50Z
+---
+
+# Руководство по провайдеру Qianfan
+
+Qianfan — это MaaS‑платформа Baidu, которая предоставляет **единый API**, направляющий запросы к множеству моделей через один
+endpoint и один ключ API. Она совместима с OpenAI, поэтому большинство SDK OpenAI работают при смене базового URL.
+
+## Предварительные требования
+
+1. Учётная запись Baidu Cloud с доступом к API Qianfan
+2. Ключ API из консоли Qianfan
+3. Установленный на вашей системе OpenClaw
+
+## Получение ключа API
+
+1. Перейдите в [консоль Qianfan](https://console.bce.baidu.com/qianfan/ais/console/apiKey)
+2. Создайте новое приложение или выберите существующее
+3. Сгенерируйте ключ API (формат: `bce-v3/ALTAK-...`)
+4. Скопируйте ключ API для использования с OpenClaw
+
+## настройка CLI
+
+```bash
+openclaw onboard --auth-choice qianfan-api-key
+```
+
+## Связанная документация
+
+- [Конфигурация OpenClaw](/gateway/configuration)
+- [Провайдеры моделей](/concepts/model-providers)
+- [Настройка агента](/concepts/agent)
+- [Документация по API Qianfan](https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb)

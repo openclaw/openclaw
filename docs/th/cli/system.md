@@ -1,0 +1,67 @@
+---
+summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw system` (อีเวนต์ของระบบ, ฮาร์ตบีต, presence)"
+read_when:
+  - คุณต้องการจัดคิวอีเวนต์ของระบบโดยไม่ต้องสร้างงานcron
+  - คุณต้องการเปิดหรือปิดฮาร์ตบีต
+  - คุณต้องการตรวจสอบรายการpresenceของระบบ
+title: "ระบบ"
+x-i18n:
+  source_path: cli/system.md
+  source_hash: 36ae5dbdec327f5a
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:52:02Z
+---
+
+# `openclaw system`
+
+ตัวช่วยระดับระบบสำหรับGateway（เกตเวย์）: จัดคิวอีเวนต์ของระบบ ควบคุมฮาร์ตบีต
+และดูpresence
+
+## คำสั่งที่ใช้บ่อย
+
+```bash
+openclaw system event --text "Check for urgent follow-ups" --mode now
+openclaw system heartbeat enable
+openclaw system heartbeat last
+openclaw system presence
+```
+
+## `system event`
+
+จัดคิวอีเวนต์ของระบบบนเซสชัน**หลัก** ฮาร์ตบีตถัดไปจะฉีดอีเวนต์
+เป็นบรรทัด`System:`ในพรอมป์ต์ ใช้`--mode now`เพื่อทริกเกอร์ฮาร์ตบีต
+ทันที; `next-heartbeat`จะรอรอบถัดไปตามตาราง
+
+แฟล็ก:
+
+- `--text <text>`: ข้อความอีเวนต์ของระบบ (จำเป็น)
+- `--mode <mode>`: `now`หรือ`next-heartbeat` (ค่าเริ่มต้น)
+- `--json`: เอาต์พุตที่อ่านได้โดยเครื่อง
+
+## `system heartbeat last|enable|disable`
+
+การควบคุมฮาร์ตบีต:
+
+- `last`: แสดงอีเวนต์ฮาร์ตบีตล่าสุด
+- `enable`: เปิดฮาร์ตบีตกลับมา (ใช้เมื่อถูกปิดใช้งาน)
+- `disable`: หยุดฮาร์ตบีตชั่วคราว
+
+แฟล็ก:
+
+- `--json`: เอาต์พุตที่อ่านได้โดยเครื่อง
+
+## `system presence`
+
+แสดงรายการpresenceของระบบปัจจุบันที่Gateway（เกตเวย์）รับรู้ (โหนด,
+อินสแตนซ์ และบรรทัดสถานะที่คล้ายกัน)
+
+แฟล็ก:
+
+- `--json`: เอาต์พุตที่อ่านได้โดยเครื่อง
+
+## หมายเหตุ
+
+- ต้องมีGateway（เกตเวย์）ที่กำลังทำงานและเข้าถึงได้ตามคอนฟิกปัจจุบันของคุณ (ภายในเครื่องหรือระยะไกล)
+- อีเวนต์ของระบบเป็นแบบชั่วคราวและจะไม่ถูกเก็บถาวรข้ามการรีสตาร์ต

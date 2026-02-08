@@ -1,0 +1,57 @@
+---
+summary: "Применение многофайловых патчей с помощью инструмента apply_patch"
+read_when:
+  - Вам нужны структурированные правки файлов в нескольких файлах
+  - Вы хотите документировать или отлаживать правки на основе патчей
+title: "Инструмент apply_patch"
+x-i18n:
+  source_path: tools/apply-patch.md
+  source_hash: 8cec2b4ee3afa910
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:59Z
+---
+
+# инструмент apply_patch
+
+Применяйте изменения файлов, используя структурированный формат патча. Это идеально подходит для многофайловых
+или многосекционных правок, где один вызов `edit` был бы хрупким.
+
+Инструмент принимает одну строку `input`, которая оборачивает одну или несколько операций с файлами:
+
+```
+*** Begin Patch
+*** Add File: path/to/file.txt
++line 1
++line 2
+*** Update File: src/app.ts
+@@
+-old line
++new line
+*** Delete File: obsolete.txt
+*** End Patch
+```
+
+## Параметры
+
+- `input` (обязательно): Полное содержимое патча, включая `*** Begin Patch` и `*** End Patch`.
+
+## Примечания
+
+- Пути разрешаются относительно корня рабочего пространства.
+- Используйте `*** Move to:` внутри секции `*** Update File:` для переименования файлов.
+- `*** End of File` обозначает вставку только в EOF, когда это необходимо.
+- Экспериментально и по умолчанию отключено. Включите с помощью `tools.exec.applyPatch.enabled`.
+- Только для OpenAI (включая OpenAI Codex). При необходимости можно ограничить по модели через
+  `tools.exec.applyPatch.allowModels`.
+- Конфигурация доступна только в `tools.exec`.
+
+## Пример
+
+```json
+{
+  "tool": "apply_patch",
+  "input": "*** Begin Patch\n*** Update File: src/index.ts\n@@\n-const foo = 1\n+const foo = 2\n*** End Patch"
+}
+```

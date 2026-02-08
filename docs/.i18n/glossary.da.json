@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (gateway)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway"
+  },
+  {
+    "source": "Gateway host",
+    "target": "gateway-vært"
+  },
+  {
+    "source": "gateway host",
+    "target": "gateway-vært"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI setup",
+    "target": "CLI-opsætning"
+  },
+  {
+    "source": "Config",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Setup",
+    "target": "Opsætning"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Kom godt i gang"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Hurtig start"
+  },
+  {
+    "source": "Features",
+    "target": "Funktioner"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Fejlfinding"
+  },
+  {
+    "source": "onboarding",
+    "target": "introduktion"
+  },
+  {
+    "source": "wizard",
+    "target": "opsætningsguide"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Forudsætninger"
+  },
+  {
+    "source": "Overview",
+    "target": "Overblik"
+  },
+  {
+    "source": "How it works",
+    "target": "Sådan virker det"
+  },
+  {
+    "source": "Examples",
+    "target": "Eksempler"
+  },
+  {
+    "source": "Notes",
+    "target": "Noter"
+  },
+  {
+    "source": "Next steps",
+    "target": "Næste trin"
+  },
+  {
+    "source": "Install",
+    "target": "Installér"
+  },
+  {
+    "source": "Environment variables",
+    "target": "miljøvariabler"
+  },
+  {
+    "source": "Authentication",
+    "target": "Autentificering"
+  },
+  {
+    "source": "API key",
+    "target": "API-nøgle"
+  },
+  {
+    "source": "Security",
+    "target": "Sikkerhed"
+  },
+  {
+    "source": "Access control",
+    "target": "Adgangskontrol"
+  },
+  {
+    "source": "allowlist",
+    "target": "tilladelsesliste"
+  },
+  {
+    "source": "authorized senders",
+    "target": "autoriserede afsendere"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH-tunnel"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "channel",
+    "target": "kanal"
+  },
+  {
+    "source": "session",
+    "target": "session"
+  },
+  {
+    "source": "provider",
+    "target": "udbyder"
+  },
+  {
+    "source": "model",
+    "target": "model"
+  },
+  {
+    "source": "tool",
+    "target": "værktøj"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "block streaming",
+    "target": "blokstreaming"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Companion-apps"
+  },
+  {
+    "source": "expected keys",
+    "target": "forventede nøgler"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  }
+]

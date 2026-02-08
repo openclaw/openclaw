@@ -1,0 +1,50 @@
+---
+summary: "बाहरी CLI (signal-cli, legacy imsg) के लिए RPC एडेप्टर और Gateway पैटर्न"
+read_when:
+  - बाहरी CLI एकीकरण जोड़ते या बदलते समय
+  - RPC एडेप्टर (signal-cli, imsg) का डिबग करते समय
+title: "RPC एडेप्टर"
+x-i18n:
+  source_path: reference/rpc.md
+  source_hash: 06dc6b97184cc704
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:37Z
+---
+
+# RPC एडेप्टर
+
+OpenClaw JSON-RPC के माध्यम से बाहरी CLI को एकीकृत करता है। वर्तमान में दो पैटर्न उपयोग में हैं।
+
+## पैटर्न A: HTTP डेमन (signal-cli)
+
+- `signal-cli` JSON-RPC के साथ HTTP पर एक डेमन के रूप में चलता है।
+- इवेंट स्ट्रीम SSE है (`/api/v1/events`)।
+- हेल्थ प्रोब: `/api/v1/check`।
+- जब `channels.signal.autoStart=true` हो, तब OpenClaw लाइफसाइकल का स्वामित्व रखता है।
+
+सेटअप और एंडपॉइंट्स के लिए [Signal](/channels/signal) देखें।
+
+## पैटर्न B: stdio चाइल्ड प्रोसेस (legacy: imsg)
+
+> **टिप्पणी:** नए iMessage सेटअप के लिए, इसके बजाय [BlueBubbles](/channels/bluebubbles) का उपयोग करें।
+
+- OpenClaw `imsg rpc` को एक चाइल्ड प्रोसेस के रूप में स्पॉन करता है (legacy iMessage एकीकरण)।
+- JSON-RPC stdin/stdout पर लाइन-डिलिमिटेड होता है (प्रति पंक्ति एक JSON ऑब्जेक्ट)।
+- कोई TCP पोर्ट नहीं, डेमन की आवश्यकता नहीं।
+
+उपयोग की जाने वाली मुख्य विधियाँ:
+
+- `watch.subscribe` → नोटिफ़िकेशन (`method: "message"`)
+- `watch.unsubscribe`
+- `send`
+- `chats.list` (प्रोब/डायग्नॉस्टिक्स)
+
+legacy सेटअप और एड्रेसिंग के लिए [iMessage](/channels/imessage) देखें (`chat_id` को प्राथमिकता दी जाती है)।
+
+## एडेप्टर दिशानिर्देश
+
+- Gateway प्रोसेस का स्वामित्व रखता है (स्टार्ट/स्टॉप प्रदाता के लाइफसाइकल से जुड़ा होता है)।
+- RPC क्लाइंट्स को लचीला रखें: टाइमआउट, एग्ज़िट पर रीस्टार्ट।
+- डिस्प्ले स्ट्रिंग्स के बजाय स्थिर IDs (उदा., `chat_id`) को प्राथमिकता दें।

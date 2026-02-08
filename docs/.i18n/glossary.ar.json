@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (البوابة)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (البوابة)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "مضيف Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "مضيف Gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "استدعاء RPC لـ Gateway"
+  },
+  {
+    "source": "agent",
+    "target": "وكيل"
+  },
+  {
+    "source": "channel",
+    "target": "قناة"
+  },
+  {
+    "source": "session",
+    "target": "جلسة"
+  },
+  {
+    "source": "provider",
+    "target": "موفّر"
+  },
+  {
+    "source": "model",
+    "target": "نموذج"
+  },
+  {
+    "source": "tool",
+    "target": "أداة"
+  },
+  {
+    "source": "Transport",
+    "target": "النقل"
+  },
+  {
+    "source": "Node",
+    "target": "عُقدة"
+  },
+  {
+    "source": "node",
+    "target": "عُقدة"
+  },
+  {
+    "source": "block streaming",
+    "target": "بثّ الكتل"
+  },
+  {
+    "source": "Discovery",
+    "target": "الاكتشاف"
+  },
+  {
+    "source": "Companion apps",
+    "target": "التطبيقات المُرافِقة"
+  },
+  {
+    "source": "expected keys",
+    "target": "المفاتيح المتوقعة"
+  },
+  {
+    "source": "Getting Started",
+    "target": "بدء الاستخدام"
+  },
+  {
+    "source": "Quick Start",
+    "target": "البدء السريع"
+  },
+  {
+    "source": "Quick start",
+    "target": "البدء السريع"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "إعداد سريع (للمبتدئين)"
+  },
+  {
+    "source": "Setup",
+    "target": "الإعداد"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "الإعداد (المسار السريع)"
+  },
+  {
+    "source": "Configuration",
+    "target": "التهيئة"
+  },
+  {
+    "source": "Config",
+    "target": "التهيئة"
+  },
+  {
+    "source": "config",
+    "target": "التهيئة"
+  },
+  {
+    "source": "Config snippet",
+    "target": "مقتطف تهيئة"
+  },
+  {
+    "source": "environment variables",
+    "target": "متغيرات البيئة"
+  },
+  {
+    "source": "Onboarding",
+    "target": "التهيئة الأولية"
+  },
+  {
+    "source": "wizard",
+    "target": "معالج الإعداد"
+  },
+  {
+    "source": "Features",
+    "target": "الميزات"
+  },
+  {
+    "source": "Overview",
+    "target": "نظرة عامة"
+  },
+  {
+    "source": "FAQ",
+    "target": "الأسئلة الشائعة"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "استكشاف الأخطاء وإصلاحها"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "استكشاف الأخطاء وإصلاحها"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "المتطلبات المسبقة"
+  },
+  {
+    "source": "Requirements",
+    "target": "المتطلبات"
+  },
+  {
+    "source": "Notes",
+    "target": "ملاحظات"
+  },
+  {
+    "source": "Note:",
+    "target": "ملاحظة:"
+  },
+  {
+    "source": "Examples",
+    "target": "أمثلة"
+  },
+  {
+    "source": "See Also",
+    "target": "انظر أيضًا"
+  },
+  {
+    "source": "Steps",
+    "target": "الخطوات"
+  },
+  {
+    "source": "Next steps",
+    "target": "الخطوات التالية"
+  }
+]

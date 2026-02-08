@@ -1,0 +1,24 @@
+---
+summary: "`openclaw uninstall` के लिए CLI संदर्भ (Gateway सेवा + स्थानीय डेटा हटाएँ)"
+read_when:
+  - आप Gateway सेवा और/या स्थानीय स्थिति हटाना चाहते हैं
+  - आप पहले एक ड्राई-रन करना चाहते हैं
+title: "अनइंस्टॉल"
+x-i18n:
+  source_path: cli/uninstall.md
+  source_hash: 8d6c3890923f18f9
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:01Z
+---
+
+# `openclaw uninstall`
+
+Gateway सेवा और स्थानीय डेटा को अनइंस्टॉल करें (CLI बना रहता है)।
+
+```bash
+openclaw uninstall
+openclaw uninstall --all --yes
+openclaw uninstall --dry-run
+```

@@ -1,0 +1,41 @@
+---
+summary: "حارس تفريد Gateway باستخدام ربط مستمع WebSocket"
+read_when:
+  - "تشغيل عملية Gateway أو تصحيح أخطائها"
+  - "التحقيق في فرض التشغيل بنسخة واحدة"
+title: "قفل Gateway"
+x-i18n:
+  source_path: gateway/gateway-lock.md
+  source_hash: 15fdfa066d1925da
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:10Z
+---
+
+# قفل Gateway
+
+آخر تحديث: 2025-12-11
+
+## لماذا
+
+- ضمان تشغيل نسخة واحدة فقط من Gateway لكل منفذ أساسي على المضيف نفسه؛ ويجب على أي Gateways إضافية استخدام ملفات تعريف معزولة ومنافذ فريدة.
+- الصمود أمام الأعطال أو SIGKILL دون ترك ملفات قفل قديمة.
+- الفشل السريع مع خطأ واضح عندما يكون منفذ التحكم مشغولًا بالفعل.
+
+## الآلية
+
+- يقوم Gateway بربط مستمع WebSocket (الافتراضي `ws://127.0.0.1:18789`) فور بدء التشغيل باستخدام مستمع TCP حصري.
+- إذا فشل الربط مع `EADDRINUSE`، يفشل بدء التشغيل مع `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
+- يقوم نظام التشغيل بتحرير المستمع تلقائيًا عند أي خروج للعملية، بما في ذلك الأعطال وSIGKILL—ولا حاجة إلى ملف قفل منفصل أو خطوة تنظيف.
+- عند الإيقاف، يغلق Gateway خادم WebSocket وخادم HTTP الأساسي لتحرير المنفذ بسرعة.
+
+## سطح الأخطاء
+
+- إذا كانت عملية أخرى تحتفظ بالمنفذ، يفشل بدء التشغيل مع `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
+- تظهر إخفاقات الربط الأخرى كـ `GatewayLockError("failed to bind gateway socket on ws://127.0.0.1:<port>: …")`.
+
+## ملاحظات تشغيلية
+
+- إذا كان المنفذ مشغولًا بواسطة عملية _أخرى_، يكون الخطأ هو نفسه؛ حرّر المنفذ أو اختر منفذًا آخر باستخدام `openclaw gateway --port <port>`.
+- لا يزال تطبيق macOS يحتفظ بحارس PID خفيف خاص به قبل تشغيل Gateway؛ ويُفرض قفل وقت التشغيل عبر ربط WebSocket.

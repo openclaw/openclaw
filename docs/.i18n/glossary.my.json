@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway（ဂိတ်ဝေး）"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway（ဂိတ်ဝေး）"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway ဟို့စ်"
+  },
+  {
+    "source": "gateway host",
+    "target": "Gateway ဟို့စ်"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "host",
+    "target": "ဟို့စ်"
+  },
+  {
+    "source": "node",
+    "target": "နိုဒ်"
+  },
+  {
+    "source": "agent",
+    "target": "အေးဂျင့်"
+  },
+  {
+    "source": "per-agent",
+    "target": "အေးဂျင့်တစ်ခုချင်းစီအလိုက်"
+  },
+  {
+    "source": "channel",
+    "target": "ချန်နယ်"
+  },
+  {
+    "source": "session",
+    "target": "ဆက်ရှင်"
+  },
+  {
+    "source": "provider",
+    "target": "ပံ့ပိုးသူ"
+  },
+  {
+    "source": "model",
+    "target": "မော်ဒယ်"
+  },
+  {
+    "source": "tool",
+    "target": "ကိရိယာ"
+  },
+  {
+    "source": "Transport",
+    "target": "ပို့ဆောင်ရေးအလွှာ"
+  },
+  {
+    "source": "Events",
+    "target": "ဖြစ်ရပ်များ"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "တိုက်ရိုက် (ws/wss)"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH တန်နယ်"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "SSH ဖြင့် အဝေးမှချိတ်ဆက်ခြင်း"
+  },
+  {
+    "source": "allowlist",
+    "target": "ခွင့်ပြုစာရင်း"
+  },
+  {
+    "source": "authorized senders",
+    "target": "ခွင့်ပြုထားသော ပို့သူများ"
+  },
+  {
+    "source": "Access control",
+    "target": "ဝင်ရောက်ခွင့်ထိန်းချုပ်မှု"
+  },
+  {
+    "source": "DMs",
+    "target": "DM မက်ဆေ့ချ်များ"
+  },
+  {
+    "source": "Groups",
+    "target": "အုပ်စုများ"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "အကောင်အထည်ဖော်ရန် အတည်ပြုချက်များ"
+  },
+  {
+    "source": "Discovery",
+    "target": "ရှာဖွေတွေ့ရှိမှု"
+  },
+  {
+    "source": "Companion apps",
+    "target": "အတူတကွ အသုံးပြုသော အက်ပ်များ"
+  },
+  {
+    "source": "expected keys",
+    "target": "မျှော်မှန်းထားသော ကီးများ"
+  },
+  {
+    "source": "block streaming",
+    "target": "ဘလောက်အလိုက် စီးဆင်းပို့ဆောင်မှု"
+  },
+  {
+    "source": "Getting Started",
+    "target": "စတင်အသုံးပြုရန်"
+  },
+  {
+    "source": "Quick Start",
+    "target": "အမြန်စတင်ရန်"
+  },
+  {
+    "source": "Features",
+    "target": "အင်္ဂါရပ်များ"
+  },
+  {
+    "source": "FAQ",
+    "target": "မေးလေ့ရှိသော မေးခွန်းများ"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "ပြဿနာဖြေရှင်းခြင်း"
+  },
+  {
+    "source": "onboarding",
+    "target": "စတင်မိတ်ဆက်ခြင်း"
+  },
+  {
+    "source": "wizard",
+    "target": "လမ်းညွှန်ကိရိယာ (wizard)"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "ကြိုတင်လိုအပ်ချက်များ"
+  },
+  {
+    "source": "Configuration",
+    "target": "ဖွဲ့စည်းပြင်ဆင်ခြင်း"
+  },
+  {
+    "source": "environment variables",
+    "target": "ပတ်ဝန်းကျင်ကိန်းရှင်များ"
+  },
+  {
+    "source": "Setup",
+    "target": "တပ်ဆင်ခြင်း"
+  },
+  {
+    "source": "Install",
+    "target": "ထည့်သွင်းတပ်ဆင်ခြင်း"
+  },
+  {
+    "source": "Usage",
+    "target": "အသုံးပြုနည်း"
+  },
+  {
+    "source": "Commands",
+    "target": "အမိန့်များ"
+  },
+  {
+    "source": "Notes",
+    "target": "မှတ်ချက်များ"
+  },
+  {
+    "source": "How it works",
+    "target": "အလုပ်လုပ်ပုံ"
+  }
+]

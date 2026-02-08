@@ -1,0 +1,92 @@
+---
+summary: "Вызов одного инструмента напрямую через HTTP‑эндпоинт Gateway"
+read_when:
+  - Вызов инструментов без запуска полного хода агента
+  - Построение автоматизаций, которым требуется применение политик инструментов
+title: "API вызова инструментов"
+x-i18n:
+  source_path: gateway/tools-invoke-http-api.md
+  source_hash: 17ccfbe0b0d9bb61
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:35Z
+---
+
+# Вызов инструментов (HTTP)
+
+Gateway (шлюз) OpenClaw предоставляет простой HTTP‑эндпоинт для прямого вызова одного инструмента. Он всегда включён, но доступ к нему ограничен аутентификацией Gateway и политиками инструментов.
+
+- `POST /tools/invoke`
+- Тот же порт, что и у Gateway (мультиплексирование WS + HTTP): `http://<gateway-host>:<port>/tools/invoke`
+
+Максимальный размер полезной нагрузки по умолчанию — 2 МБ.
+
+## Аутентификация
+
+Используется конфигурация аутентификации Gateway. Отправьте bearer‑токен:
+
+- `Authorization: Bearer <token>`
+
+Примечания:
+
+- Когда `gateway.auth.mode="token"`, используйте `gateway.auth.token` (или `OPENCLAW_GATEWAY_TOKEN`).
+- Когда `gateway.auth.mode="password"`, используйте `gateway.auth.password` (или `OPENCLAW_GATEWAY_PASSWORD`).
+
+## Тело запроса
+
+```json
+{
+  "tool": "sessions_list",
+  "action": "json",
+  "args": {},
+  "sessionKey": "main",
+  "dryRun": false
+}
+```
+
+Поля:
+
+- `tool` (string, обязательно): имя инструмента для вызова.
+- `action` (string, необязательно): сопоставляется с args, если схема инструмента поддерживает `action` и полезная нагрузка args его не содержит.
+- `args` (object, необязательно): аргументы, специфичные для инструмента.
+- `sessionKey` (string, необязательно): целевой ключ сеанса. Если опущен или `"main"`, Gateway использует настроенный основной ключ сеанса (с учётом `session.mainKey` и агента по умолчанию либо `global` в глобальной области).
+- `dryRun` (boolean, необязательно): зарезервировано для будущего использования; в настоящее время игнорируется.
+
+## Политики и поведение маршрутизации
+
+Доступность инструментов фильтруется той же цепочкой политик, что используется агентами Gateway:
+
+- `tools.profile` / `tools.byProvider.profile`
+- `tools.allow` / `tools.byProvider.allow`
+- `agents.<id>.tools.allow` / `agents.<id>.tools.byProvider.allow`
+- групповые политики (если ключ сеанса сопоставляется с группой или каналом)
+- политика субагента (при вызове с ключом сеанса субагента)
+
+Если инструмент запрещён политикой, эндпоинт возвращает **404**.
+
+Чтобы помочь групповым политикам определить контекст, при необходимости можно указать:
+
+- `x-openclaw-message-channel: <channel>` (пример: `slack`, `telegram`)
+- `x-openclaw-account-id: <accountId>` (когда существует несколько учётных записей)
+
+## Ответы
+
+- `200` → `{ ok: true, result }`
+- `400` → `{ ok: false, error: { type, message } }` (некорректный запрос или ошибка инструмента)
+- `401` → не авторизован
+- `404` → инструмент недоступен (не найден или не в списке разрешённых)
+- `405` → метод не разрешён
+
+## Пример
+
+```bash
+curl -sS http://127.0.0.1:18789/tools/invoke \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tool": "sessions_list",
+    "action": "json",
+    "args": {}
+  }'
+```

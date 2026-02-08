@@ -1,0 +1,642 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (brama)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (brama)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "host Gateway (host bramy)"
+  },
+  {
+    "source": "gateway host",
+    "target": "host gateway (host bramy)"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC Gateway (RPC bramy)"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Rozwiązywanie problemów"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Pierwsze kroki"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Szybki start"
+  },
+  {
+    "source": "Quick start",
+    "target": "Szybki start"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Szybka konfiguracja (dla początkujących)"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "Konfiguracja (szybka ścieżka)"
+  },
+  {
+    "source": "Overview",
+    "target": "Przegląd"
+  },
+  {
+    "source": "Summary",
+    "target": "Podsumowanie"
+  },
+  {
+    "source": "Features",
+    "target": "Funkcje"
+  },
+  {
+    "source": "Requirements",
+    "target": "Wymagania"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Wymagania wstępne"
+  },
+  {
+    "source": "Prereqs",
+    "target": "Wymagania wstępne"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konfiguracja"
+  },
+  {
+    "source": "Config",
+    "target": "Konfiguracja"
+  },
+  {
+    "source": "Config snippet",
+    "target": "Fragment konfiguracji"
+  },
+  {
+    "source": "Config writes",
+    "target": "Zapisy konfiguracji"
+  },
+  {
+    "source": "Environment",
+    "target": "Środowisko"
+  },
+  {
+    "source": "environment variables",
+    "target": "zmienne środowiskowe"
+  },
+  {
+    "source": "Examples",
+    "target": "Przykłady"
+  },
+  {
+    "source": "Example",
+    "target": "Przykład"
+  },
+  {
+    "source": "Notes",
+    "target": "Uwagi"
+  },
+  {
+    "source": "Notes:",
+    "target": "Uwagi:"
+  },
+  {
+    "source": "Note:",
+    "target": "Uwaga:"
+  },
+  {
+    "source": "Tip:",
+    "target": "Wskazówka:"
+  },
+  {
+    "source": "Important:",
+    "target": "Ważne:"
+  },
+  {
+    "source": "Recommended:",
+    "target": "Zalecane:"
+  },
+  {
+    "source": "Fix:",
+    "target": "Naprawa:"
+  },
+  {
+    "source": "See Also",
+    "target": "Zobacz także"
+  },
+  {
+    "source": "See:",
+    "target": "Zobacz:"
+  },
+  {
+    "source": "Related docs",
+    "target": "Powiązana dokumentacja"
+  },
+  {
+    "source": "Related",
+    "target": "Powiązane"
+  },
+  {
+    "source": "References",
+    "target": "Odniesienia"
+  },
+  {
+    "source": "Next steps",
+    "target": "Następne kroki"
+  },
+  {
+    "source": "Goals",
+    "target": "Cele"
+  },
+  {
+    "source": "Goal",
+    "target": "Cel"
+  },
+  {
+    "source": "Non-goals",
+    "target": "Poza zakresem"
+  },
+  {
+    "source": "How it works",
+    "target": "Jak to działa"
+  },
+  {
+    "source": "How It Works",
+    "target": "Jak to działa"
+  },
+  {
+    "source": "How it works (behavior)",
+    "target": "Jak to działa (zachowanie)"
+  },
+  {
+    "source": "What it is",
+    "target": "Czym to jest"
+  },
+  {
+    "source": "What it does",
+    "target": "Co to robi"
+  },
+  {
+    "source": "Why",
+    "target": "Dlaczego"
+  },
+  {
+    "source": "Setup",
+    "target": "Konfiguracja"
+  },
+  {
+    "source": "Install",
+    "target": "Instalacja"
+  },
+  {
+    "source": "Steps",
+    "target": "Kroki"
+  },
+  {
+    "source": "Usage",
+    "target": "Użycie"
+  },
+  {
+    "source": "Commands",
+    "target": "Polecenia"
+  },
+  {
+    "source": "Common commands",
+    "target": "Typowe polecenia"
+  },
+  {
+    "source": "Output",
+    "target": "Wyjście"
+  },
+  {
+    "source": "Output:",
+    "target": "Wyjście:"
+  },
+  {
+    "source": "JSON output",
+    "target": "Wyjście JSON"
+  },
+  {
+    "source": "Tests",
+    "target": "Testy"
+  },
+  {
+    "source": "Testing",
+    "target": "Testowanie"
+  },
+  {
+    "source": "Enable",
+    "target": "Włącz"
+  },
+  {
+    "source": "disabled",
+    "target": "wyłączone"
+  },
+  {
+    "source": "off",
+    "target": "wyłączone"
+  },
+  {
+    "source": "off by default",
+    "target": "domyślnie wyłączone"
+  },
+  {
+    "source": "disabled by default",
+    "target": "domyślnie wyłączone"
+  },
+  {
+    "source": "optional",
+    "target": "opcjonalne"
+  },
+  {
+    "source": "only",
+    "target": "tylko"
+  },
+  {
+    "source": "both",
+    "target": "oba"
+  },
+  {
+    "source": "must",
+    "target": "musi"
+  },
+  {
+    "source": "not recommended",
+    "target": "niezalecane"
+  },
+  {
+    "source": "unset",
+    "target": "wyczyścić ustawienie"
+  },
+  {
+    "source": "Reset",
+    "target": "Resetowanie"
+  },
+  {
+    "source": "errors",
+    "target": "błędy"
+  },
+  {
+    "source": "Impact",
+    "target": "Wpływ"
+  },
+  {
+    "source": "Security",
+    "target": "Bezpieczeństwo"
+  },
+  {
+    "source": "Safety",
+    "target": "Bezpieczeństwo"
+  },
+  {
+    "source": "Security notes",
+    "target": "Uwagi dotyczące bezpieczeństwa"
+  },
+  {
+    "source": "Authentication",
+    "target": "Uwierzytelnianie"
+  },
+  {
+    "source": "API key",
+    "target": "klucz API"
+  },
+  {
+    "source": "allowlist",
+    "target": "lista dozwolonych"
+  },
+  {
+    "source": "authorized senders",
+    "target": "autoryzowani nadawcy"
+  },
+  {
+    "source": "Access control",
+    "target": "Kontrola dostępu"
+  },
+  {
+    "source": "Access control (DMs)",
+    "target": "Kontrola dostępu (DM-y)"
+  },
+  {
+    "source": "Access control (DMs + groups)",
+    "target": "Kontrola dostępu (DM-y + grupy)"
+  },
+  {
+    "source": "DMs",
+    "target": "DM-y"
+  },
+  {
+    "source": "DM access",
+    "target": "dostęp do DM-ów"
+  },
+  {
+    "source": "Groups",
+    "target": "Grupy"
+  },
+  {
+    "source": "Workspace",
+    "target": "Obszar roboczy"
+  },
+  {
+    "source": "Events",
+    "target": "Zdarzenia"
+  },
+  {
+    "source": "Context",
+    "target": "Kontekst"
+  },
+  {
+    "source": "Modes",
+    "target": "Tryby"
+  },
+  {
+    "source": "Limits",
+    "target": "Limity"
+  },
+  {
+    "source": "Options",
+    "target": "Opcje"
+  },
+  {
+    "source": "Options:",
+    "target": "Opcje:"
+  },
+  {
+    "source": "Transport",
+    "target": "Transport"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "Bezpośrednio (ws/wss)"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "Zdalnie przez SSH"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "tunel SSH"
+  },
+  {
+    "source": "pairing",
+    "target": "parowanie"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "wskaźniki pisania"
+  },
+  {
+    "source": "Heartbeats",
+    "target": "sygnały heartbeat"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "zatwierdzanie wykonania (exec)"
+  },
+  {
+    "source": "Command ladder",
+    "target": "drabina poleceń"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "per-agent",
+    "target": "na agenta"
+  },
+  {
+    "source": "channel",
+    "target": "kanał"
+  },
+  {
+    "source": "session",
+    "target": "sesja"
+  },
+  {
+    "source": "provider",
+    "target": "dostawca"
+  },
+  {
+    "source": "model",
+    "target": "model"
+  },
+  {
+    "source": "tool",
+    "target": "narzędzie"
+  },
+  {
+    "source": "block streaming",
+    "target": "strumieniowanie blokowe"
+  },
+  {
+    "source": "Discovery",
+    "target": "Wykrywanie"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Aplikacje towarzyszące"
+  },
+  {
+    "source": "expected keys",
+    "target": "oczekiwane klucze"
+  },
+  {
+    "source": "node",
+    "target": "węzeł"
+  },
+  {
+    "source": "Node",
+    "target": "Węzeł"
+  },
+  {
+    "source": "nodes",
+    "target": "węzły"
+  },
+  {
+    "source": "Nodes",
+    "target": "Węzły"
+  },
+  {
+    "source": "node host",
+    "target": "host węzła"
+  },
+  {
+    "source": "host",
+    "target": "host"
+  },
+  {
+    "source": "Local",
+    "target": "Lokalne"
+  },
+  {
+    "source": "remote",
+    "target": "zdalne"
+  },
+  {
+    "source": "private",
+    "target": "prywatne"
+  },
+  {
+    "source": "global",
+    "target": "globalne"
+  },
+  {
+    "source": "Defaults",
+    "target": "Ustawienia domyślne"
+  },
+  {
+    "source": "bundled",
+    "target": "dołączone"
+  },
+  {
+    "source": "beta",
+    "target": "beta"
+  },
+  {
+    "source": "Plugin required",
+    "target": "Wymagana wtyczka"
+  },
+  {
+    "source": "Permissions",
+    "target": "Uprawnienia"
+  },
+  {
+    "source": "Bot",
+    "target": "bot"
+  },
+  {
+    "source": "Bot Token",
+    "target": "token bota"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "uprawnienie „Message Content Intent”"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "CLI setup",
+    "target": "konfiguracja CLI"
+  },
+  {
+    "source": "CLI:",
+    "target": "CLI:"
+  },
+  {
+    "source": "Community",
+    "target": "Społeczność"
+  },
+  {
+    "source": "macOS app",
+    "target": "aplikacja na macOS"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "MiniMax M2.1",
+    "target": "MiniMax M2.1"
+  },
+  {
+    "source": "Kimi Coding",
+    "target": "Kimi Coding"
+  },
+  {
+    "source": "Gemini CLI",
+    "target": "Gemini CLI"
+  },
+  {
+    "source": "Anthropic token (paste setup-token)",
+    "target": "token Anthropic (wklej setup-token)"
+  }
+]

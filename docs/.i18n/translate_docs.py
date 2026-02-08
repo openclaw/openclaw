@@ -77,6 +77,17 @@ LOCALES = {
     "de": "German",
     "vi": "Vietnamese",
     "sv": "Swedish",
+    "fil": "Filipino",
+    "nl": "Dutch",
+    "ur": "Urdu",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "da": "Danish",
+    "pl": "Polish",
+    "th": "Thai",
+    "tr": "Turkish",
+    "my": "Burmese",
+    "ru": "Russian",
 }
 
 LANG_RULES = {
@@ -142,6 +153,80 @@ LANG_RULES = {
 - For the OpenClaw Gateway, use "Gateway".
 - Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
 - Use Swedish quotation marks for Swedish prose; keep ASCII quotes inside code spans/blocks.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "fil": """- Use fluent, idiomatic Filipino (Tagalog-based); follow standard Filipino technical writing conventions.
+- Use neutral documentation tone.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Use Taglish naturally where technical terms have no established Filipino equivalent.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "nl": """- Use fluent, idiomatic Dutch; follow standard technical Dutch conventions.
+- Use neutral documentation tone; prefer "je/u" form as appropriate for technical documentation.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "ur": """- Use fluent, idiomatic Urdu; follow standard Urdu technical writing conventions.
+- Use neutral documentation tone; prefer formal register.
+- Write in Urdu script (Nastaliq); do not use Roman Urdu.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "ar": """- Use fluent, idiomatic Modern Standard Arabic (MSA); avoid regional dialects.
+- Use neutral documentation tone; prefer formal register.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Use Arabic quotation marks for Arabic prose; keep ASCII quotes inside code spans/blocks.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "hi": """- Use fluent, idiomatic Hindi; follow standard Hindi technical writing conventions.
+- Use neutral documentation tone; prefer formal register.
+- Write in Devanagari script.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "da": """- Use fluent, idiomatic Danish; follow standard technical Danish conventions.
+- Use neutral documentation tone; prefer "du" form (informal address, standard in Danish technical writing).
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "pl": """- Use fluent, idiomatic Polish; follow standard technical Polish conventions.
+- Use neutral documentation tone; prefer formal register.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Use Polish quotation marks for Polish prose; keep ASCII quotes inside code spans/blocks.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "th": """- Use fluent, idiomatic Thai; follow standard Thai technical writing conventions.
+- Use neutral documentation tone; prefer polite register.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Do not add spaces between Thai words (follow standard Thai spacing conventions).
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "tr": """- Use fluent, idiomatic Turkish; follow standard technical Turkish conventions.
+- Use neutral documentation tone; prefer formal register.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "my": """- Use fluent, idiomatic Burmese (Myanmar); follow standard Burmese technical writing conventions.
+- Use neutral documentation tone.
+- Write in Myanmar script.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Never output an empty response; if unsure, return the source text unchanged.""",
+    "ru": """- Use fluent, idiomatic Russian; follow standard technical Russian conventions.
+- Use neutral documentation tone; prefer formal register.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use "Gateway (шлюз)".
+- Keep these terms in English: Skills, local loopback, Tailscale, CLI, sandbox, sandboxing.
+- Use Russian quotation marks (guillemets) for Russian prose; keep ASCII quotes inside code spans/blocks.
 - Never output an empty response; if unsure, return the source text unchanged.""",
 }
 

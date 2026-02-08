@@ -1,0 +1,41 @@
+---
+summary: "WebSocket listener bind کے ذریعے Gateway سنگلٹن گارڈ"
+read_when:
+  - Gateway عمل کو چلاتے یا ڈیبگ کرتے وقت
+  - واحد انسٹینس کے نفاذ کی تفتیش کے دوران
+title: "Gateway لاک"
+x-i18n:
+  source_path: gateway/gateway-lock.md
+  source_hash: 15fdfa066d1925da
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:47:12Z
+---
+
+# Gateway لاک
+
+آخری تازہ کاری: 2025-12-11
+
+## کیوں
+
+- ایک ہی ہوسٹ پر ہر بنیادی پورٹ کے لیے صرف ایک Gateway انسٹینس کے چلنے کو یقینی بنانا؛ اضافی Gateway انسٹینسز کے لیے الگ تھلگ پروفائلز اور منفرد پورٹس لازمی ہیں۔
+- کریشز/SIGKILL کے بعد بھی بغیر باسی لاک فائلیں چھوڑے بقا۔
+- جب کنٹرول پورٹ پہلے سے زیرِ استعمال ہو تو واضح غلطی کے ساتھ فوراً ناکامی۔
+
+## طریقۂ کار
+
+- Gateway اسٹارٹ اپ کے فوراً بعد WebSocket listener (بطورِ طے شدہ `ws://127.0.0.1:18789`) کو ایک خصوصی TCP listener کے ساتھ بائنڈ کرتا ہے۔
+- اگر بائنڈ `EADDRINUSE` کے ساتھ ناکام ہو تو اسٹارٹ اپ `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")` پھینکتا ہے۔
+- OS کسی بھی عمل کے اختتام پر—بشمول کریشز اور SIGKILL—listener کو خودکار طور پر ریلیز کر دیتا ہے؛ کسی علیحدہ لاک فائل یا صفائی کے مرحلے کی ضرورت نہیں۔
+- شٹ ڈاؤن پر Gateway پورٹ کو فوری طور پر خالی کرنے کے لیے WebSocket سرور اور زیریں HTTP سرور بند کر دیتا ہے۔
+
+## غلطی کی سطح
+
+- اگر کوئی اور عمل پورٹ پر قابض ہو تو اسٹارٹ اپ `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")` پھینکتا ہے۔
+- دیگر بائنڈ ناکامیاں `GatewayLockError("failed to bind gateway socket on ws://127.0.0.1:<port>: …")` کے طور پر ظاہر ہوتی ہیں۔
+
+## عملی نوٹس
+
+- اگر پورٹ _کسی اور_ عمل کے زیرِ استعمال ہو تو بھی یہی غلطی آئے گی؛ پورٹ خالی کریں یا `openclaw gateway --port <port>` کے ساتھ کوئی اور منتخب کریں۔
+- macOS ایپ Gateway کو اسپان کرنے سے پہلے اپنی ہلکی پھلکی PID گارڈ برقرار رکھتی ہے؛ تاہم رن ٹائم لاک WebSocket بائنڈ کے ذریعے نافذ ہوتا ہے۔

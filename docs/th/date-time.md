@@ -1,0 +1,135 @@
+---
+summary: "การจัดการวันที่และเวลาใน envelope, prompt, เครื่องมือ และคอนเนกเตอร์"
+read_when:
+  - คุณกำลังเปลี่ยนวิธีแสดงเวลาให้กับโมเดลหรือผู้ใช้
+  - คุณกำลังแก้ไขปัญหารูปแบบเวลาในข้อความหรือเอาต์พุตของ system prompt
+title: "วันที่และเวลา"
+x-i18n:
+  source_path: date-time.md
+  source_hash: 753af5946a006215
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:52:09Z
+---
+
+# วันที่และเวลา
+
+OpenClaw ใช้ค่าเริ่มต้นเป็น **เวลาในเครื่องของโฮสต์สำหรับ timestamp ของทรานสปอร์ต** และใช้ **เขตเวลาของผู้ใช้เฉพาะใน system prompt** เท่านั้น
+timestamp จากผู้ให้บริการจะถูกเก็บรักษาไว้ เพื่อให้เครื่องมือคงความหมายดั้งเดิมของตน (เวลาปัจจุบันสามารถเรียกใช้ได้ผ่าน `session_status`)
+
+## Message envelopes (ค่าเริ่มต้นเป็นเวลาท้องถิ่น)
+
+ข้อความขาเข้าจะถูกห่อหุ้มด้วย timestamp (ความละเอียดระดับนาที):
+
+```
+[Provider ... 2026-01-05 16:26 PST] message text
+```
+
+timestamp ของ envelope นี้เป็น **เวลาในเครื่องของโฮสต์ตามค่าเริ่มต้น** โดยไม่ขึ้นกับเขตเวลาของผู้ให้บริการ
+
+คุณสามารถ override พฤติกรรมนี้ได้:
+
+```json5
+{
+  agents: {
+    defaults: {
+      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimestamp: "on", // "on" | "off"
+      envelopeElapsed: "on", // "on" | "off"
+    },
+  },
+}
+```
+
+- `envelopeTimezone: "utc"` ใช้ UTC
+- `envelopeTimezone: "local"` ใช้เขตเวลาของโฮสต์
+- `envelopeTimezone: "user"` ใช้ `agents.defaults.userTimezone` (หากไม่พบจะย้อนกลับไปใช้เขตเวลาของโฮสต์)
+- ใช้เขตเวลา IANA แบบระบุชัดเจน (เช่น `"America/Chicago"`) สำหรับโซนคงที่
+- `envelopeTimestamp: "off"` ลบ timestamp แบบสัมบูรณ์ออกจากส่วนหัวของ envelope
+- `envelopeElapsed: "off"` ลบส่วนต่อท้ายเวลาที่ผ่านไป (รูปแบบ `+2m`)
+
+### ตัวอย่าง
+
+**ท้องถิ่น (ค่าเริ่มต้น):**
+
+```
+[WhatsApp +1555 2026-01-18 00:19 PST] hello
+```
+
+**เขตเวลาของผู้ใช้:**
+
+```
+[WhatsApp +1555 2026-01-18 00:19 CST] hello
+```
+
+**เปิดใช้เวลาที่ผ่านไป:**
+
+```
+[WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
+```
+
+## System prompt: วันที่และเวลาปัจจุบัน
+
+หากทราบเขตเวลาของผู้ใช้ system prompt จะมีส่วน **Current Date & Time** โดยเฉพาะ
+ซึ่งระบุเฉพาะ **เขตเวลาเท่านั้น** (ไม่มีนาฬิกาหรือรูปแบบเวลา)
+เพื่อให้การแคช prompt มีความเสถียร:
+
+```
+Time zone: America/Chicago
+```
+
+เมื่อเอเจนต์ต้องการเวลาปัจจุบัน ให้ใช้เครื่องมือ `session_status`; การ์ดสถานะ
+จะมีบรรทัด timestamp รวมอยู่ด้วย
+
+## System event lines (ค่าเริ่มต้นเป็นเวลาท้องถิ่น)
+
+อีเวนต์ของระบบที่ถูกจัดคิวและแทรกเข้าไปในบริบทของเอเจนต์ จะถูกนำหน้าด้วย timestamp โดยใช้
+การเลือกเขตเวลาเดียวกับ message envelopes (ค่าเริ่มต้น: เวลาในเครื่องของโฮสต์)
+
+```
+System: [2026-01-12 12:19:17 PST] Model switched.
+```
+
+### การกำหนดค่าเขตเวลาของผู้ใช้ + รูปแบบเวลา
+
+```json5
+{
+  agents: {
+    defaults: {
+      userTimezone: "America/Chicago",
+      timeFormat: "auto", // auto | 12 | 24
+    },
+  },
+}
+```
+
+- `userTimezone` ตั้งค่า **เขตเวลาท้องถิ่นของผู้ใช้** สำหรับบริบทของ prompt
+- `timeFormat` ควบคุมการแสดงผลแบบ **12 ชม./24 ชม.** ใน prompt โดย `auto` จะอิงตามการตั้งค่าของ OS
+
+## การตรวจจับรูปแบบเวลา (อัตโนมัติ)
+
+เมื่อ `timeFormat: "auto"` OpenClaw จะตรวจสอบค่ากำหนดของ OS (macOS/Windows)
+และย้อนกลับไปใช้การจัดรูปแบบตาม locale ค่าที่ตรวจจับได้จะถูก **แคชต่อหนึ่งโปรเซส**
+เพื่อหลีกเลี่ยงการเรียกระบบซ้ำๆ
+
+## Tool payloads + connectors (เวลาแบบดิบจากผู้ให้บริการ + ฟิลด์ที่ทำให้เป็นมาตรฐาน)
+
+เครื่องมือในช่องทางจะส่งคืน **timestamp แบบดั้งเดิมของผู้ให้บริการ** และเพิ่มฟิลด์ที่ทำให้เป็นมาตรฐานเพื่อความสอดคล้อง:
+
+- `timestampMs`: epoch มิลลิวินาที (UTC)
+- `timestampUtc`: สตริง ISO 8601 แบบ UTC
+
+ฟิลด์ดิบจากผู้ให้บริการจะถูกเก็บไว้ทั้งหมด เพื่อไม่ให้ข้อมูลสูญหาย
+
+- Slack: สตริงลักษณะ epoch จาก API
+- Discord: timestamp แบบ UTC ISO
+- Telegram/WhatsApp: timestamp ตัวเลขหรือ ISO เฉพาะของผู้ให้บริการ
+
+หากต้องการเวลาในท้องถิ่น ให้แปลงค่าต่อในขั้นถัดไปโดยใช้เขตเวลาที่ทราบ
+
+## เอกสารที่เกี่ยวข้อง
+
+- [System Prompt](/concepts/system-prompt)
+- [Timezones](/concepts/timezone)
+- [Messages](/concepts/messages)
