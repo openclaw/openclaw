@@ -95,6 +95,30 @@ function stripContextSafeContent(command: string): [stripped: string, wasStrippe
     return [stripped, wasStripped];
   }
 
+  // Heredoc content is data, not commands - strip the entire command
+  // Matches: cat/tee ... << 'DELIM' ... DELIM  or  << DELIM ... DELIM
+  // When a heredoc is used, the command is a data write operation:
+  //   cat >> file << EOF   (writes heredoc body to file)
+  //   tee file << EOF      (writes heredoc body to file)
+  // The heredoc body can contain anything (config keywords, file paths, etc.)
+  // but none of it is executed as shell commands. The redirect target is also
+  // just a data destination, not a command being run against that file.
+  const heredocMatch = command.match(/<<-?\s*['"]?(\w+)['"]?/);
+  if (heredocMatch) {
+    // Check for piped execution: cat << EOF | bash  or  cat << EOF | sh
+    // These are dangerous - the heredoc body IS executed
+    const firstLine = command.split("\n")[0];
+    if (/\|\s*(sh|bash|zsh|dash|python|ruby|perl|node)\b/.test(firstLine)) {
+      // Don't strip - let normal detection handle the piped execution
+      return [command, false];
+    }
+    // Safe heredoc write - strip the entire command
+    // The redirect target and heredoc body are data operations
+    stripped = "[HEREDOC_WRITE]";
+    wasStripped = true;
+    return [stripped, wasStripped];
+  }
+
   return [command, false];
 }
 
