@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { createProxyAgent } from "../../infra/net/ssrf.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -31,6 +32,9 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+
+// Cache a single ProxyAgent instance per process to avoid resource leaks
+let cachedProxyAgent: ReturnType<typeof createProxyAgent> | undefined;
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -317,6 +321,9 @@ async function runPerplexitySearch(params: {
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  if (!cachedProxyAgent) {
+    cachedProxyAgent = createProxyAgent();
+  }
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -336,6 +343,8 @@ async function runPerplexitySearch(params: {
       ],
     }),
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    // @ts-expect-error - undici ProxyAgent dispatcher is not in standard fetch types
+    dispatcher: cachedProxyAgent,
   });
 
   if (!res.ok) {
@@ -417,6 +426,9 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", params.freshness);
   }
 
+  if (!cachedProxyAgent) {
+    cachedProxyAgent = createProxyAgent();
+  }
   const res = await fetch(url.toString(), {
     method: "GET",
     headers: {
@@ -424,6 +436,8 @@ async function runWebSearch(params: {
       "X-Subscription-Token": params.apiKey,
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    // @ts-expect-error - undici ProxyAgent dispatcher is not in standard fetch types
+    dispatcher: cachedProxyAgent,
   });
 
   if (!res.ok) {

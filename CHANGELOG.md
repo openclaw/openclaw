@@ -84,6 +84,10 @@ Docs: https://docs.openclaw.ai
 - Cron: suppress messaging tools during announce delivery so summaries post consistently.
 - Cron: avoid duplicate deliveries when isolated runs send messages directly.
 
+### Changes
+
+- Tools: add HTTP/HTTPS proxy support for web_search and web_fetch via environment variables (HTTP_PROXY/HTTPS_PROXY).
+
 ### Fixes
 
 - Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.

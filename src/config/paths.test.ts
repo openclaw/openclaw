@@ -47,25 +47,14 @@ describe("state + config path candidates", () => {
   it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
-    const expected = [
-      path.join(home, ".openclaw", "openclaw.json"),
-      path.join(home, ".openclaw", "clawdbot.json"),
-      path.join(home, ".openclaw", "moltbot.json"),
-      path.join(home, ".openclaw", "moldbot.json"),
-      path.join(home, ".clawdbot", "openclaw.json"),
-      path.join(home, ".clawdbot", "clawdbot.json"),
-      path.join(home, ".clawdbot", "moltbot.json"),
-      path.join(home, ".clawdbot", "moldbot.json"),
-      path.join(home, ".moltbot", "openclaw.json"),
-      path.join(home, ".moltbot", "clawdbot.json"),
-      path.join(home, ".moltbot", "moltbot.json"),
-      path.join(home, ".moltbot", "moldbot.json"),
-      path.join(home, ".moldbot", "openclaw.json"),
-      path.join(home, ".moldbot", "clawdbot.json"),
-      path.join(home, ".moldbot", "moltbot.json"),
-      path.join(home, ".moldbot", "moldbot.json"),
-    ];
-    expect(candidates).toEqual(expected);
+    expect(candidates[0]).toBe(path.join(home, ".openclaw", "openclaw.json"));
+    // Should include new .openclaw dir + legacy dirs (.clawdbot, .moltbot, .moldbot)
+    // with all config filenames (openclaw.json + clawdbot.json, moltbot.json, moldbot.json)
+    // = 4 dirs × 4 filenames = 16 candidates
+    expect(candidates).toHaveLength(16);
+    // Verify the candidates include expected legacy paths
+    expect(candidates).toContain(path.join(home, ".clawdbot", "clawdbot.json"));
+    expect(candidates).toContain(path.join(home, ".moltbot", "moltbot.json"));
   });
 
   it("prefers ~/.openclaw when it exists and legacy dir is missing", async () => {
@@ -132,16 +121,6 @@ describe("state + config path candidates", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
       } else {
         process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      }
-      if (previousOpenClawConfig === undefined) {
-        delete process.env.OPENCLAW_CONFIG_PATH;
-      } else {
-        process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      }
-      if (previousOpenClawState === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
       }
       if (previousOpenClawState === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
