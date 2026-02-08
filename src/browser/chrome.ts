@@ -7,7 +7,7 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { appendCdpPath } from "./cdp.helpers.js";
+import { appendCdpPath, withCdpSocket } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -65,6 +65,22 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
 
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
+}
+
+function resolveDownloadPath(): string {
+  const homedir = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(homedir, "Downloads");
+  } else if (process.platform === "win32") {
+    return path.join(homedir, "Downloads");
+  } else {
+    // Linux - try XDG first, fall back to ~/Downloads
+    const xdgDownload = process.env.XDG_DOWNLOAD_DIR;
+    if (xdgDownload) {
+      return xdgDownload;
+    }
+    return path.join(homedir, "Downloads");
+  }
 }
 
 export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
@@ -295,6 +311,24 @@ export async function launchOpenClawChrome(
     throw new Error(
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
     );
+  }
+
+  // Enable downloads via CDP
+  try {
+    const wsUrl = await getChromeWebSocketUrl(profile.cdpUrl, 500);
+    if (wsUrl) {
+      const downloadPath = resolveDownloadPath();
+      await withCdpSocket(wsUrl, async (send) => {
+        await send("Browser.setDownloadBehavior", {
+          behavior: "allow",
+          downloadPath,
+          eventsEnabled: true,
+        });
+      });
+      log.info(`🦞 browser downloads enabled: ${downloadPath}`);
+    }
+  } catch (err) {
+    log.warn(`Failed to enable downloads via CDP: ${String(err)}`);
   }
 
   const pid = proc.pid ?? -1;
