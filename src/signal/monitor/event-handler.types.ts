@@ -16,9 +16,18 @@ export type SignalEnvelope = {
   reactionMessage?: SignalReactionMessage | null;
 };
 
+export type SignalMention = {
+  name?: string | null;
+  number?: string | null;
+  uuid?: string | null;
+  start?: number;
+  length?: number;
+};
+
 export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
+  mentions?: SignalMention[] | null;
   attachments?: Array<SignalAttachment>;
   groupInfo?: {
     groupId?: string | null;

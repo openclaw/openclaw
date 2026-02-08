@@ -1,4 +1,8 @@
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import type {
+  SignalEventHandlerDeps,
+  SignalMention,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -33,6 +37,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
+import { signalRpcRequest } from "../client.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -43,6 +48,114 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+
+// ---------------------------------------------------------------------------
+// Signal mention resolution
+// ---------------------------------------------------------------------------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(s: string | null | undefined): boolean {
+  return UUID_RE.test(s?.trim() ?? "");
+}
+
+/**
+ * Cache of Signal UUID → display name.
+ *
+ * Seeded once from signal-cli `listContacts` (profile names) and then
+ * continuously updated from `envelope.sourceName` on every inbound SSE event.
+ * Used to resolve mentions whose `name` field is just the UUID (signal-cli
+ * does this for users not in the local address book).
+ */
+const signalNameCache = new Map<string, string>();
+let seedPromise: Promise<void> | null = null;
+
+function nameCachePut(uuid: string | null | undefined, name: string | null | undefined): void {
+  if (!uuid || !name || isUuid(name)) {
+    return;
+  }
+  signalNameCache.set(uuid.toLowerCase(), name);
+}
+
+function nameCacheGet(uuid: string | null | undefined): string | undefined {
+  return uuid ? signalNameCache.get(uuid.toLowerCase()) : undefined;
+}
+
+async function seedSignalNameCache(baseUrl: string, account: string | undefined): Promise<void> {
+  if (seedPromise) {
+    return seedPromise;
+  }
+  seedPromise = (async () => {
+    try {
+      type Contact = {
+        uuid?: string;
+        profile?: { givenName?: string; familyName?: string };
+      };
+      const contacts = await signalRpcRequest<Contact[]>(
+        "listContacts",
+        { account },
+        { baseUrl, timeoutMs: 5000 },
+      );
+      if (Array.isArray(contacts)) {
+        for (const c of contacts) {
+          const displayName = [c.profile?.givenName, c.profile?.familyName]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          if (c.uuid && displayName) {
+            nameCachePut(c.uuid, displayName);
+          }
+        }
+      }
+    } catch {
+      // Non-fatal — allow retry on next event by clearing the promise.
+      seedPromise = null;
+    }
+  })();
+  return seedPromise;
+}
+
+/**
+ * Replace U+FFFC (Object Replacement Character) placeholders with `@name`
+ * using the mention metadata array from signal-cli.
+ *
+ * signal-cli represents Signal mentions as:
+ *   - `dataMessage.message` contains U+FFFC at the mention position
+ *   - `dataMessage.mentions[]` contains `{name, number, uuid, start, length}`
+ *
+ * The `name` field is sometimes set to the UUID rather than the display name
+ * (especially for users not in the local address book), so we fall back to
+ * the name cache, then number, then UUID.
+ */
+function resolveSignalMentions(text: string, mentions: SignalMention[] | null | undefined): string {
+  if (!mentions || mentions.length === 0) {
+    return text;
+  }
+
+  // Process from end to start so replacements don't shift earlier indices.
+  const sorted = [...mentions].toSorted((a, b) => (b.start ?? 0) - (a.start ?? 0));
+  let result = text;
+  for (const mention of sorted) {
+    const start = Math.max(0, Math.min(mention.start ?? 0, result.length));
+    const length = Math.max(0, mention.length ?? 1);
+
+    // Skip mentions that extend beyond the text or don't point at a U+FFFC placeholder.
+    if (start + length > result.length) {
+      continue;
+    }
+    if (result.charAt(start) !== "\uFFFC") {
+      continue;
+    }
+
+    let label = mention.name?.trim();
+    if (!label || isUuid(label)) {
+      label =
+        nameCacheGet(mention.uuid) || mention.number?.trim() || mention.uuid?.trim() || "someone";
+    }
+
+    result = result.slice(0, start) + `@${label}` + result.slice(start + length);
+  }
+  return result;
+}
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -298,6 +411,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   });
 
   return async (event: { event?: string; data?: string }) => {
+    // Seed the mention name cache from contacts on first event.
+    void seedSignalNameCache(deps.baseUrl, deps.account);
+
     if (event.event !== "receive" || !event.data) {
       return;
     }
@@ -324,6 +440,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!sender) {
       return;
     }
+
+    // Populate mention name cache from every inbound envelope.
+    const senderUuid = envelope.sourceUuid ?? (sender.kind === "uuid" ? sender.raw : undefined);
+    if (senderUuid && envelope.sourceName) {
+      nameCachePut(senderUuid, envelope.sourceName);
+    }
+
     if (deps.account && sender.kind === "phone") {
       if (sender.e164 === normalizeE164(deps.account)) {
         return;
@@ -336,7 +459,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
-    const messageText = (dataMessage?.message ?? "").trim();
+    const messageText = resolveSignalMentions(
+      dataMessage?.message ?? "",
+      dataMessage?.mentions,
+    ).trim();
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
