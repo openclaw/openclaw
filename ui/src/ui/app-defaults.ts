@@ -1,5 +1,6 @@
 import type { LogLevel } from "./types.ts";
 import type { CronFormState } from "./ui-types.ts";
+import type { MissionControlFormState } from "./views/mission-control.ts";
 
 export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   trace: true,
@@ -29,4 +30,11 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   deliveryChannel: "last",
   deliveryTo: "",
   timeoutSeconds: "",
+};
+
+export const DEFAULT_MC_FORM: MissionControlFormState = {
+  title: "",
+  description: "",
+  priority: "0",
+  tags: "",
 };

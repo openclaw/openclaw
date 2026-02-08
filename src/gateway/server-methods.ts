@@ -12,6 +12,7 @@ import { deviceHandlers } from "./server-methods/devices.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
+import { missionControlHandlers } from "./server-methods/mission-control.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { sendHandlers } from "./server-methods/send.js";
@@ -67,6 +68,7 @@ const READ_METHODS = new Set([
   "cron.list",
   "cron.status",
   "cron.runs",
+  "missionControl.list",
   "system-presence",
   "last-heartbeat",
   "node.list",
@@ -152,7 +154,8 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     method === "sessions.patch" ||
     method === "sessions.reset" ||
     method === "sessions.delete" ||
-    method === "sessions.compact"
+    method === "sessions.compact" ||
+    method.startsWith("missionControl.")
   ) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
   }
@@ -185,6 +188,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
+  ...missionControlHandlers,
 };
 
 export async function handleGatewayRequest(

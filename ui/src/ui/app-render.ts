@@ -62,6 +62,13 @@ const debouncedLoadUsage = (state: UsageState) => {
   }
   usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
 };
+import {
+  loadMissionControlTasks,
+  createMissionControlTask,
+  updateMissionControlTaskStatus,
+  deleteMissionControlTask,
+  spawnAgentForTask,
+} from "./controllers/mission-control.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -72,6 +79,7 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
+import { renderMissionControl } from "./views/mission-control.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
@@ -602,6 +610,41 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "mission-control"
+            ? renderMissionControl({
+                loading: state.missionControlLoading,
+                error: state.missionControlError,
+                tasks: state.missionControlTasks,
+                form: state.missionControlForm,
+                deleteConfirmId: state.missionControlDeleteConfirmId,
+                agentSpawnBusy: state.missionControlAgentSpawnBusy,
+                onRefresh: () => state.loadMissionControlTasks(),
+                onFormChange: (patch) =>
+                  (state.missionControlForm = { ...state.missionControlForm, ...patch }),
+                onCreate: () => state.createMissionControlTask(),
+                onUpdateStatus: (taskId, status) =>
+                  updateMissionControlTaskStatus(
+                    {
+                      client: state.client,
+                      connected: state.connected,
+                      mcLoading: state.missionControlLoading,
+                      mcTasks: state.missionControlTasks,
+                      mcError: state.missionControlError,
+                      mcForm: state.missionControlForm,
+                      mcDeleteConfirmId: state.missionControlDeleteConfirmId,
+                      mcAgentSpawnBusy: state.missionControlAgentSpawnBusy,
+                    },
+                    taskId,
+                    status,
+                  ),
+                onDelete: (taskId) => state.deleteMissionControlTask(taskId),
+                onDeleteConfirm: (taskId) => (state.missionControlDeleteConfirmId = taskId),
+                onSpawnAgent: (taskId, agentId) => state.spawnAgentForTask(taskId, agentId),
               })
             : nothing
         }
