@@ -44,9 +44,15 @@ function atomicWriteFileSync(targetPath, data) {
   try {
     fs.writeFileSync(tmpPath, data, { encoding: "utf8", mode: 0o600 });
     fs.renameSync(tmpPath, targetPath);
-    try { fs.chmodSync(targetPath, 0o600); } catch {}
+    try {
+      fs.chmodSync(targetPath, 0o600);
+    } catch {}
   } catch (err) {
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+    try {
+      if (fs.existsSync(tmpPath)) {
+        fs.unlinkSync(tmpPath);
+      }
+    } catch {}
     throw err;
   }
 }
