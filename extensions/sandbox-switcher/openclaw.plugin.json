@@ -1,0 +1,10 @@
+{
+  "id": "sandbox-switcher",
+  "name": "Sandbox Mode Switcher",
+  "description": "Quick switching between sandboxed/unsandboxed agent configurations via /agent command",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
