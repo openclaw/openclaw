@@ -1127,6 +1127,11 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // Input history (terminal-style)
+                inputHistory: state.chatInputHistory,
+                inputHistoryIndex: state.chatInputHistoryIndex,
+                onHistoryNavigate: (direction: "up" | "down") =>
+                  state.handleInputHistoryNavigate(direction),
               })
             : nothing
         }
