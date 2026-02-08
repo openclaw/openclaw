@@ -105,6 +105,10 @@ dependencies {
   implementation("androidx.exifinterface:exifinterface:1.4.2")
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
 
+  // BouncyCastle — Ed25519 fallback for API 31-32 where the platform
+  // Conscrypt provider does not yet include EdDSA algorithms.
+  implementation("org.bouncycastle:bcprov-jdk18on:1.80")
+
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")
   implementation("androidx.camera:camera-camera2:1.5.2")

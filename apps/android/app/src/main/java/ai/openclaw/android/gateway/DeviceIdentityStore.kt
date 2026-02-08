@@ -2,14 +2,18 @@ package ai.openclaw.android.gateway
 
 import android.content.Context
 import android.util.Base64
+import android.util.Log
 import java.io.File
+import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.Security
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 @Serializable
 data class DeviceIdentity(
@@ -22,6 +26,10 @@ data class DeviceIdentity(
 class DeviceIdentityStore(context: Context) {
   private val json = Json { ignoreUnknownKeys = true }
   private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
+
+  init {
+    ensureEd25519Provider()
+  }
 
   @Synchronized
   fun loadOrCreate(): DeviceIdentity {
@@ -44,13 +52,16 @@ class DeviceIdentityStore(context: Context) {
     return try {
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
       val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
-      val keyFactory = KeyFactory.getInstance("Ed25519")
+      // Must use a software provider — AndroidKeyStore only handles hardware-backed keys.
+      val provider = softwareEd25519Provider()
+      val keyFactory = KeyFactory.getInstance("Ed25519", provider)
       val privateKey = keyFactory.generatePrivate(keySpec)
-      val signature = Signature.getInstance("Ed25519")
+      val signature = Signature.getInstance("Ed25519", provider)
       signature.initSign(privateKey)
       signature.update(payload.toByteArray(Charsets.UTF_8))
       base64UrlEncode(signature.sign())
-    } catch (_: Throwable) {
+    } catch (err: Throwable) {
+      Log.e("DeviceIdentity", "signPayload failed: ${err::class.java.simpleName}: ${err.message}")
       null
     }
   }
@@ -97,7 +108,8 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+    val provider = softwareEd25519Provider()
+    val keyPair = KeyPairGenerator.getInstance("Ed25519", provider).generateKeyPair()
     val spki = keyPair.public.encoded
     val rawPublic = stripSpkiPrefix(spki)
     val deviceId = sha256Hex(rawPublic)
@@ -146,5 +158,61 @@ class DeviceIdentityStore(context: Context) {
       byteArrayOf(
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
       )
+
+    /**
+     * Android ships a stripped-down BouncyCastle provider that lacks Ed25519
+     * on API 31-32. The platform Conscrypt provider added Ed25519 in API 33.
+     *
+     * Even on API 33+, [KeyFactory.getInstance] for Ed25519 may resolve to the
+     * AndroidKeyStore provider, which only supports hardware-backed keys and
+     * cannot import PKCS8 software keys. We must always route Ed25519
+     * operations through an explicit software provider.
+     *
+     * Strategy: try Conscrypt ("AndroidOpenSSL") first — it's the fastest
+     * software provider on modern Android. If it doesn't support Ed25519
+     * (API 31-32), fall back to the full BouncyCastle provider.
+     */
+    private var providerReady = false
+    @Volatile private var cachedProvider: String? = null
+
+    // Conscrypt is the platform software crypto provider on modern Android.
+    private const val CONSCRYPT_PROVIDER = "AndroidOpenSSL"
+
+    @Synchronized
+    private fun ensureEd25519Provider() {
+      if (providerReady) return
+      // Try Conscrypt (software) first — available on API 33+.
+      // Probe both KeyPairGenerator and KeyFactory to make sure the provider
+      // handles all Ed25519 operations, not just key generation.
+      try {
+        KeyPairGenerator.getInstance("Ed25519", CONSCRYPT_PROVIDER)
+        KeyFactory.getInstance("Ed25519", CONSCRYPT_PROVIDER)
+        cachedProvider = CONSCRYPT_PROVIDER
+        providerReady = true
+        return
+      } catch (_: GeneralSecurityException) { /* Conscrypt doesn't support Ed25519 */ }
+
+      // Fall back to full BouncyCastle (API 31-32 or stripped platform BC).
+      Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
+      Security.insertProviderAt(BouncyCastleProvider(), 1)
+      // Verify the insertion actually works before caching.
+      try {
+        KeyPairGenerator.getInstance("Ed25519", BouncyCastleProvider.PROVIDER_NAME)
+        cachedProvider = BouncyCastleProvider.PROVIDER_NAME
+        providerReady = true
+      } catch (err: GeneralSecurityException) {
+        Log.e("DeviceIdentity", "BouncyCastle Ed25519 setup failed: ${err.message}")
+      }
+    }
+
+    /**
+     * Returns the name of a software provider that supports Ed25519
+     * key generation, PKCS8 key import, and signing. Avoids AndroidKeyStore
+     * which only handles hardware-backed keys.
+     */
+    fun softwareEd25519Provider(): String {
+      ensureEd25519Provider()
+      return cachedProvider ?: BouncyCastleProvider.PROVIDER_NAME
+    }
   }
 }
