@@ -15,7 +15,45 @@ import { formatCliCommand } from "./command-format.js";
 export function resolveBundledExtensionRootDir(
   here = path.dirname(fileURLToPath(import.meta.url)),
 ) {
+  // Strategy: walk up from the current file location until we find the package root
+  // (directory containing package.json), then look for assets/chrome-extension there.
   let current = here;
+  let packageRoot: string | null = null;
+
+  // First pass: find openclaw package root
+  // In workspace/monorepo scenarios, verify this is the openclaw package (not workspace root)
+  while (true) {
+    const pkgPath = path.join(current, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+        // Accept if this is the openclaw package, or if no name field (dev build)
+        if (!pkg.name || pkg.name === "openclaw") {
+          packageRoot = current;
+          break;
+        }
+        // Otherwise keep walking up (might be in a workspace)
+      } catch {
+        // Invalid package.json, keep walking
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  // If we found package root, try assets/chrome-extension there
+  if (packageRoot) {
+    const candidate = path.join(packageRoot, "assets", "chrome-extension");
+    if (hasManifest(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fallback: walk up from here looking for assets/chrome-extension directly
+  current = here;
   while (true) {
     const candidate = path.join(current, "assets", "chrome-extension");
     if (hasManifest(candidate)) {
@@ -28,6 +66,7 @@ export function resolveBundledExtensionRootDir(
     current = parent;
   }
 
+  // Last resort: relative path (for development builds)
   return path.resolve(here, "../../assets/chrome-extension");
 }
 
