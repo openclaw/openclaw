@@ -471,6 +471,37 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+
+    // Trigger internal hook for message:sent after reply is fully dispatched
+    {
+      const replyContent =
+        replies
+          .map((r) => r.text ?? "")
+          .filter(Boolean)
+          .join("\n") ||
+        accumulatedBlockText ||
+        "";
+      if (replyContent.trim()) {
+        const sentEvent = createInternalHookEvent("message", "sent", ctx.SessionKey ?? "", {
+          from: ctx.To,
+          to: ctx.From,
+          content: replyContent,
+          channelId,
+          conversationId,
+          senderId: ctx.To,
+          provider: ctx.Provider,
+          surface: ctx.Surface,
+          threadId: ctx.MessageThreadId,
+          originatingChannel: ctx.OriginatingChannel,
+          originatingTo: ctx.OriginatingTo,
+          cfg,
+        });
+        void triggerInternalHook(sentEvent).catch((err) => {
+          logVerbose(`dispatch-from-config: message:sent internal hook failed: ${String(err)}`);
+        });
+      }
+    }
+
     recordProcessed("completed");
     markIdle("message_completed");
     return { queuedFinal, counts };

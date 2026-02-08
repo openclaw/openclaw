@@ -283,6 +283,8 @@ Triggered when messages are sent or received:
 
 - **`message:transcribed`**: When a message has been fully processed, including audio transcription and link understanding. At this point, `content` includes the full transcript text for audio messages. Use this hook when you need access to transcribed audio content.
 
+- **`message:sent`**: When the agent's reply has been fully dispatched to the channel. Fires after all reply payloads (block streaming, final reply, TTS) have been delivered. Use this for audit logging, analytics, or post-reply workflows.
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -296,7 +298,6 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
 
 ## Creating Custom Hooks
 
