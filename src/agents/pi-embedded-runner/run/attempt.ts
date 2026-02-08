@@ -743,6 +743,15 @@ export async function runEmbeddedAttempt(
                 `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
               );
             }
+            if (hookResult?.injectMessages?.length) {
+              const existing = activeSession.messages;
+              const injected = hookResult.injectMessages.map((m) => ({
+                ...m,
+                timestamp: m.timestamp ?? Date.now(),
+              })) as typeof existing;
+              activeSession.agent.replaceMessages([...injected, ...existing]);
+              log.debug(`hooks: injected ${injected.length} messages into conversation history`);
+            }
           } catch (hookErr) {
             log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
           }
