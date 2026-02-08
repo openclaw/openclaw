@@ -4,8 +4,13 @@ If you believe you've found a security issue in OpenClaw, please report it priva
 
 ## Reporting
 
-- Email: `steipete@gmail.com`
-- What to include: reproduction steps, impact assessment, and (if possible) a minimal PoC.
+For full reporting instructions - including which repo to report to and how - see our [Trust page](https://trust.openclaw.ai).
+
+Include: reproduction steps, impact assessment, and (if possible) a minimal PoC.
+
+## Security & Trust
+
+**Jamieson O'Reilly** ([@theonejvo](https://twitter.com/theonejvo)) is Security & Trust at OpenClaw. Jamieson is the founder of [Dvuln](https://dvuln.com) and brings extensive experience in offensive security, penetration testing, and security program development.
 
 ## Bug Bounties
 
