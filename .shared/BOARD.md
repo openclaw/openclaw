@@ -13,3 +13,11 @@
 ## 🚨 이슈
 
 - **SENA 말투 오염 (P0)**: 해결됨 (검증 필요).
+
+---
+
+[로아] 검증 완료 (Verified)
+
+- Build: SUCCESS (5.9s)
+- Test: pi-embedded-utils.test.ts (Leak Case 포함) PASS
+- Status: READY FOR MERGE
