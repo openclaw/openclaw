@@ -1,5 +1,6 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { pruneContextMessages } from "./pruner.js";
+
+import { capToolResultMessages, pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
 export default function contextPruningExtension(api: ExtensionAPI): void {
@@ -9,33 +10,45 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       return undefined;
     }
 
+    // ── Per-result hard cap (always, not TTL-gated) ─────────────────────
+    // Prevents a single oversized tool result from blowing out the context
+    // window before the ratio-based pruner gets a chance to act.
+    const maxResultChars = runtime.settings.maxToolResultChars;
+    let messages = event.messages as AgentMessage[];
+    let didCap = false;
+    if (maxResultChars > 0) {
+      const capped = capToolResultMessages(messages, maxResultChars, runtime.isToolPrunable);
+      if (capped !== messages) {
+        messages = capped;
+        didCap = true;
+      }
+    }
+
+    // ── Ratio-based pruning (TTL-gated) ─────────────────────────────────
     if (runtime.settings.mode === "cache-ttl") {
       const ttlMs = runtime.settings.ttlMs;
       const lastTouch = runtime.lastCacheTouchAt ?? null;
-      if (!lastTouch || ttlMs <= 0) {
-        return undefined;
+      const ttlExpired = lastTouch != null && ttlMs > 0 && Date.now() - lastTouch >= ttlMs;
+
+      if (ttlExpired) {
+        const next = pruneContextMessages({
+          messages,
+          settings: runtime.settings,
+          ctx,
+          isToolPrunable: runtime.isToolPrunable,
+          contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
+        });
+
+        if (next !== messages) {
+          messages = next;
+          runtime.lastCacheTouchAt = Date.now();
+          return { messages };
+        }
       }
-      if (ttlMs > 0 && Date.now() - lastTouch < ttlMs) {
-        return undefined;
-      }
     }
 
-    const next = pruneContextMessages({
-      messages: event.messages,
-      settings: runtime.settings,
-      ctx,
-      isToolPrunable: runtime.isToolPrunable,
-      contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
-    });
-
-    if (next === event.messages) {
-      return undefined;
-    }
-
-    if (runtime.settings.mode === "cache-ttl") {
-      runtime.lastCacheTouchAt = Date.now();
-    }
-
-    return { messages: next };
+    // Return capped messages if per-result cap changed anything.
+    if (didCap) return { messages };
+    return undefined;
   });
 }
