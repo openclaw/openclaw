@@ -17,7 +17,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "bocha"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -27,6 +27,7 @@ const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
+const DEFAULT_BOCHA_BASE_URL = "https://api.bocha.cn";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -90,6 +91,11 @@ type PerplexityConfig = {
   model?: string;
 };
 
+type BochaConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+};
+
 type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type PerplexitySearchResponse = {
@@ -102,6 +108,25 @@ type PerplexitySearchResponse = {
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
+
+type BochaSearchResult = {
+  title?: string;
+  url?: string;
+  summary?: string;
+  snippet?: string;
+  siteName?: string;
+  publishedTime?: string;
+};
+
+type BochaSearchResponse = {
+  code?: number;
+  msg?: string;
+  data?: {
+    webPages?: {
+      value?: BochaSearchResult[];
+    };
+  };
+};
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
@@ -137,6 +162,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "bocha") {
+    return {
+      error: "missing_bocha_api_key",
+      message:
+        "web_search (bocha) needs an API key. Set BOCHA_API_KEY in the Gateway environment, or configure tools.web.search.bocha.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -151,6 +184,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       : "";
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "bocha") {
+    return "bocha";
   }
   if (raw === "brave") {
     return "brave";
@@ -245,6 +281,30 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
       ? perplexity.model.trim()
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function resolveBochaConfig(search?: WebSearchConfig): BochaConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const bocha = "bocha" in search ? search.bocha : undefined;
+  if (!bocha || typeof bocha !== "object") {
+    return {};
+  }
+  return bocha as BochaConfig;
+}
+
+function resolveBochaApiKey(bocha?: BochaConfig): string | undefined {
+  const fromConfig =
+    bocha && "apiKey" in bocha && typeof bocha.apiKey === "string" ? bocha.apiKey.trim() : "";
+  const fromEnv = (process.env.BOCHA_API_KEY ?? "").trim();
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveBochaBaseUrl(bocha?: BochaConfig): string {
+  const fromConfig =
+    bocha && "baseUrl" in bocha && typeof bocha.baseUrl === "string" ? bocha.baseUrl.trim() : "";
+  return fromConfig || DEFAULT_BOCHA_BASE_URL;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -350,6 +410,65 @@ async function runPerplexitySearch(params: {
   return { content, citations };
 }
 
+async function runBochaSearch(params: {
+  query: string;
+  count: number;
+  apiKey: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    siteName?: string;
+    published?: string;
+  }>;
+}> {
+  // Normalize: treat baseUrl as a base and ensure the search path is appended
+  const endpoint = new URL("/v1/web-search", params.baseUrl.replace(/\/$/, "")).toString();
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    body: JSON.stringify({
+      query: params.query,
+      count: params.count,
+      freshness: "noLimit",
+    }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`Bocha Search API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as BochaSearchResponse;
+  if (data.code !== 200 && data.code !== undefined) {
+    throw new Error(`Bocha Search API error: ${data.msg || "Unknown error"}`);
+  }
+
+  const results = data.data?.webPages?.value ?? [];
+  const mapped = results.map((entry) => {
+    const description = entry.summary || entry.snippet || "";
+    const title = entry.title ?? "";
+    const url = entry.url ?? "";
+    const rawSiteName = entry.siteName || resolveSiteName(url);
+    return {
+      title: title ? wrapWebContent(title, "web_search") : "",
+      url,
+      description: description ? wrapWebContent(description, "web_search") : "",
+      siteName: rawSiteName || undefined,
+      published: entry.publishedTime || undefined,
+    };
+  });
+
+  return { results: mapped };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -363,11 +482,19 @@ async function runWebSearch(params: {
   freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
+  bochaBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
-  const cacheKey = normalizeCacheKey(
+  // Include provider-specific base URL in cache key so endpoint changes invalidate cache
+  const providerSuffix =
     params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+      ? `:${params.freshness || "default"}`
+      : params.provider === "perplexity"
+        ? `:${params.perplexityBaseUrl || "default"}:${params.perplexityModel || "default"}`
+        : params.provider === "bocha"
+          ? `:${params.bochaBaseUrl || "default"}`
+          : "";
+  const cacheKey = normalizeCacheKey(
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}${providerSuffix}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -392,6 +519,26 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       content: wrapWebContent(content),
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "bocha") {
+    const { results } = await runBochaSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey,
+      baseUrl: params.bochaBaseUrl ?? DEFAULT_BOCHA_BASE_URL,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      results,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -469,11 +616,14 @@ export function createWebSearchTool(options?: {
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
+  const bochaConfig = resolveBochaConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "bocha"
+        ? "Search the web using Bocha Search API. Returns titles, URLs, and snippets for real-time web search with support for Chinese content."
+        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -483,8 +633,13 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const bochaApiKey = provider === "bocha" ? resolveBochaApiKey(bochaConfig) : undefined;
       const apiKey =
-        provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
+        provider === "perplexity"
+          ? perplexityAuth?.apiKey
+          : provider === "bocha"
+            ? bochaApiKey
+            : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -530,6 +685,7 @@ export function createWebSearchTool(options?: {
           perplexityAuth?.apiKey,
         ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
+        bochaBaseUrl: resolveBochaBaseUrl(bochaConfig),
       });
       return jsonResult(result);
     },
