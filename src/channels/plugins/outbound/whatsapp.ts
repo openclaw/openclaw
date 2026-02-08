@@ -67,7 +67,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "whatsapp", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback }) => {
+  sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback, viewOnce }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
@@ -75,6 +75,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       mediaUrl,
       accountId: accountId ?? undefined,
       gifPlayback,
+      viewOnce,
     });
     return { channel: "whatsapp", ...result };
   },
