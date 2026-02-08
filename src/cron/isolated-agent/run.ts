@@ -375,6 +375,19 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
     });
+    // Resolve agent-specific exec config so cron sessions respect per-agent
+    // tools.exec overrides (e.g. ask: "off") instead of global defaults.  #11559
+    const agentExec = agentConfigOverride?.tools?.exec;
+    const globalExec = cfgWithAgentDefaults.tools?.exec;
+    const cronExecOverrides =
+      agentExec || globalExec
+        ? {
+            host: agentExec?.host ?? globalExec?.host,
+            security: agentExec?.security ?? globalExec?.security,
+            ask: agentExec?.ask ?? globalExec?.ask,
+            node: agentExec?.node ?? globalExec?.node,
+          }
+        : undefined;
     const messageChannel = resolvedDelivery.channel;
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
@@ -421,6 +434,7 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
+          execOverrides: cronExecOverrides,
         });
       },
     });
