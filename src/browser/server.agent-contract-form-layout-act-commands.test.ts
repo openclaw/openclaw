@@ -119,6 +119,8 @@ vi.mock("./chrome.js", () => ({
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
+      engine: "chromium",
+      profileName: "openclaw",
     };
   }),
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
@@ -312,6 +314,8 @@ describe("browser control server", () => {
         targetId: "abcd1234",
         ref: "5",
         values: ["a", "b"],
+        engine: "chromium",
+        profileName: "openclaw",
       });
 
       const fill = await postJson(`${base}/act`, {
@@ -323,6 +327,8 @@ describe("browser control server", () => {
         cdpUrl: cdpBaseUrl,
         targetId: "abcd1234",
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
+        engine: "chromium",
+        profileName: "openclaw",
       });
 
       const resize = await postJson(`${base}/act`, {
@@ -336,6 +342,8 @@ describe("browser control server", () => {
         targetId: "abcd1234",
         width: 800,
         height: 600,
+        engine: "chromium",
+        profileName: "openclaw",
       });
 
       const wait = await postJson(`${base}/act`, {
@@ -349,6 +357,8 @@ describe("browser control server", () => {
         timeMs: 5,
         text: undefined,
         textGone: undefined,
+        engine: "chromium",
+        profileName: "openclaw",
       });
 
       const evalRes = await postJson(`${base}/act`, {
@@ -362,6 +372,8 @@ describe("browser control server", () => {
         targetId: "abcd1234",
         fn: "() => 1",
         ref: undefined,
+        engine: "chromium",
+        profileName: "openclaw",
       });
     },
     slowTimeoutMs,
@@ -404,6 +416,8 @@ describe("browser control server", () => {
       targetId: "abcd1234",
       paths: ["/tmp/a.txt"],
       timeoutMs: 1234,
+      engine: "chromium",
+      profileName: "openclaw",
     });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {

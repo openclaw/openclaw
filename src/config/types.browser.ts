@@ -5,6 +5,8 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "extension";
+  /** Browser engine for this profile (default: chromium). */
+  engine?: "chromium" | "firefox";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };

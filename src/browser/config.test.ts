@@ -149,4 +149,37 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome")).toBe(null);
     expect(resolved.defaultProfile).toBe("openclaw");
   });
+
+  it("resolves engine to chromium by default", () => {
+    const resolved = resolveBrowserConfig({});
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile?.engine).toBe("chromium");
+  });
+
+  it("resolves engine to firefox when configured", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "ff-test": { cdpPort: 18801, engine: "firefox", color: "#FF6600" },
+      },
+    });
+    const profile = resolveProfile(resolved, "ff-test");
+    expect(profile?.engine).toBe("firefox");
+    expect(profile?.driver).toBe("openclaw");
+  });
+
+  it("rejects firefox engine with extension driver", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        bad: { cdpPort: 18801, engine: "firefox", driver: "extension", color: "#FF6600" },
+      },
+    });
+    expect(() => resolveProfile(resolved, "bad")).toThrow(/not compatible with driver "extension"/);
+  });
+
+  it("defaults engine to chromium for extension driver profiles", () => {
+    const resolved = resolveBrowserConfig({});
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.engine).toBe("chromium");
+    expect(chrome?.driver).toBe("extension");
+  });
 });

@@ -1,7 +1,15 @@
-import type { Page } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./firefox.js", () => ({
+  getFirefoxContext: vi.fn(() => undefined),
+}));
+
+import { getFirefoxContext } from "./firefox.js";
 import {
   ensurePageState,
+  listPagesViaPlaywright,
+  createPageViaPlaywright,
   refLocator,
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
@@ -137,5 +145,91 @@ describe("pw-session ensurePageState", () => {
     expect(state2.console).toEqual([]);
     expect(state2.errors).toEqual([]);
     expect(state2.requests).toEqual([]);
+  });
+});
+
+describe("pw-session Firefox synthetic page IDs", () => {
+  function fakeFirefoxPage(urlVal = "about:blank", titleVal = ""): Page {
+    const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    return {
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        const list = handlers.get(event) ?? [];
+        list.push(cb);
+        handlers.set(event, list);
+      }),
+      url: vi.fn(() => urlVal),
+      title: vi.fn(async () => titleVal),
+      goto: vi.fn(async () => null),
+      getByRole: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
+      frameLocator: vi.fn(),
+      locator: vi.fn(),
+    } as unknown as Page;
+  }
+
+  it("listPagesViaPlaywright returns empty when Firefox context is missing", async () => {
+    vi.mocked(getFirefoxContext).mockReturnValue(undefined);
+    const pages = await listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18801",
+      engine: "firefox",
+      profileName: "ff-test",
+    });
+    expect(pages).toEqual([]);
+  });
+
+  it("listPagesViaPlaywright returns synthetic ff- IDs for Firefox pages", async () => {
+    const page1 = fakeFirefoxPage("https://example.com", "Example");
+    const page2 = fakeFirefoxPage("https://test.com", "Test");
+    const mockContext = {
+      pages: vi.fn(() => [page1, page2]),
+    } as unknown as BrowserContext;
+
+    vi.mocked(getFirefoxContext).mockReturnValue(mockContext);
+
+    const pages = await listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18801",
+      engine: "firefox",
+      profileName: "ff-list-test",
+    });
+
+    expect(pages).toHaveLength(2);
+    expect(pages[0].targetId).toMatch(/^ff-\d+$/);
+    expect(pages[0].url).toBe("https://example.com");
+    expect(pages[0].title).toBe("Example");
+    expect(pages[0].type).toBe("page");
+    expect(pages[1].targetId).toMatch(/^ff-\d+$/);
+    // IDs should be distinct
+    expect(pages[0].targetId).not.toBe(pages[1].targetId);
+  });
+
+  it("createPageViaPlaywright throws when Firefox context is missing", async () => {
+    vi.mocked(getFirefoxContext).mockReturnValue(undefined);
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18801",
+        url: "https://example.com",
+        engine: "firefox",
+        profileName: "ff-missing",
+      }),
+    ).rejects.toThrow(/not available/);
+  });
+
+  it("createPageViaPlaywright creates page with synthetic ID", async () => {
+    const newPage = fakeFirefoxPage("about:blank", "New Tab");
+    const mockContext = {
+      newPage: vi.fn(async () => newPage),
+    } as unknown as BrowserContext;
+
+    vi.mocked(getFirefoxContext).mockReturnValue(mockContext);
+
+    const result = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18801",
+      url: "",
+      engine: "firefox",
+      profileName: "ff-create-test",
+    });
+
+    expect(result.targetId).toMatch(/^ff-\d+$/);
+    expect(result.type).toBe("page");
+    expect(mockContext.newPage).toHaveBeenCalled();
   });
 });

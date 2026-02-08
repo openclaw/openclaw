@@ -5,7 +5,16 @@ import path from "node:path";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
-  kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
+  kind:
+    | "brave"
+    | "canary"
+    | "chromium"
+    | "chrome"
+    | "custom"
+    | "edge"
+    | "firefox"
+    | "firefox-nightly"
+    | "firefox-dev";
   path: string;
 };
 

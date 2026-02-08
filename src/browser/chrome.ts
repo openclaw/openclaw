@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
+import type { RunningBrowser } from "./browser-process.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -46,14 +47,10 @@ function exists(filePath: string) {
   }
 }
 
-export type RunningChrome = {
-  pid: number;
-  exe: BrowserExecutable;
-  userDataDir: string;
-  cdpPort: number;
-  startedAt: number;
-  proc: ChildProcessWithoutNullStreams;
-};
+export type { RunningBrowser } from "./browser-process.js";
+
+/** @deprecated Use RunningBrowser instead. */
+export type RunningChrome = RunningBrowser;
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
@@ -309,10 +306,12 @@ export async function launchOpenClawChrome(
     cdpPort: profile.cdpPort,
     startedAt,
     proc,
+    engine: "chromium" as const,
+    profileName: profile.name,
   };
 }
 
-export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
+export async function stopOpenClawChrome(running: RunningBrowser, timeoutMs = 2500) {
   const proc = running.proc;
   if (proc.killed) {
     return;

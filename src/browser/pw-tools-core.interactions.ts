@@ -7,11 +7,16 @@ import {
 } from "./pw-session.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
 
-export async function highlightViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-}): Promise<void> {
+/** Common engine opts passed through to getPageForTargetId for Firefox support. */
+type EngineOpts = { engine?: "chromium" | "firefox"; profileName?: string };
+
+export async function highlightViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -23,15 +28,17 @@ export async function highlightViaPlaywright(opts: {
   }
 }
 
-export async function clickViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  doubleClick?: boolean;
-  button?: "left" | "right" | "middle";
-  modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function clickViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    doubleClick?: boolean;
+    button?: "left" | "right" | "middle";
+    modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -60,12 +67,14 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
-export async function hoverViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function hoverViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const ref = requireRef(opts.ref);
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -79,13 +88,15 @@ export async function hoverViaPlaywright(opts: {
   }
 }
 
-export async function dragViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  startRef: string;
-  endRef: string;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function dragViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    startRef: string;
+    endRef: string;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const startRef = requireRef(opts.startRef);
   const endRef = requireRef(opts.endRef);
   if (!startRef || !endRef) {
@@ -103,13 +114,15 @@ export async function dragViaPlaywright(opts: {
   }
 }
 
-export async function selectOptionViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  values: string[];
-  timeoutMs?: number;
-}): Promise<void> {
+export async function selectOptionViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    values: string[];
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const ref = requireRef(opts.ref);
   if (!opts.values?.length) {
     throw new Error("values are required");
@@ -126,12 +139,14 @@ export async function selectOptionViaPlaywright(opts: {
   }
 }
 
-export async function pressKeyViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  key: string;
-  delayMs?: number;
-}): Promise<void> {
+export async function pressKeyViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    key: string;
+    delayMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const key = String(opts.key ?? "").trim();
   if (!key) {
     throw new Error("key is required");
@@ -143,15 +158,17 @@ export async function pressKeyViaPlaywright(opts: {
   });
 }
 
-export async function typeViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  text: string;
-  submit?: boolean;
-  slowly?: boolean;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function typeViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    text: string;
+    submit?: boolean;
+    slowly?: boolean;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const text = String(opts.text ?? "");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -174,12 +191,14 @@ export async function typeViaPlaywright(opts: {
   }
 }
 
-export async function fillFormViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  fields: BrowserFormField[];
-  timeoutMs?: number;
-}): Promise<void> {
+export async function fillFormViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    fields: BrowserFormField[];
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -216,12 +235,14 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
-export async function evaluateViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  fn: string;
-  ref?: string;
-}): Promise<unknown> {
+export async function evaluateViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    fn: string;
+    ref?: string;
+  } & EngineOpts,
+): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
   if (!fnText) {
     throw new Error("function is required");
@@ -267,12 +288,14 @@ export async function evaluateViaPlaywright(opts: {
   return await page.evaluate(browserEvaluator, fnText);
 }
 
-export async function scrollIntoViewViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref: string;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function scrollIntoViewViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref: string;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -287,18 +310,20 @@ export async function scrollIntoViewViaPlaywright(opts: {
   }
 }
 
-export async function waitForViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-}): Promise<void> {
+export async function waitForViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    timeoutMs?: number;
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
@@ -341,14 +366,16 @@ export async function waitForViaPlaywright(opts: {
   }
 }
 
-export async function takeScreenshotViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ref?: string;
-  element?: string;
-  fullPage?: boolean;
-  type?: "png" | "jpeg";
-}): Promise<{ buffer: Buffer }> {
+export async function takeScreenshotViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    ref?: string;
+    element?: string;
+    fullPage?: boolean;
+    type?: "png" | "jpeg";
+  } & EngineOpts,
+): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -376,13 +403,15 @@ export async function takeScreenshotViaPlaywright(opts: {
   return { buffer };
 }
 
-export async function screenshotWithLabelsViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  refs: Record<string, { role: string; name?: string; nth?: number }>;
-  maxLabels?: number;
-  type?: "png" | "jpeg";
-}): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
+export async function screenshotWithLabelsViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    refs: Record<string, { role: string; name?: string; nth?: number }>;
+    maxLabels?: number;
+    type?: "png" | "jpeg";
+  } & EngineOpts,
+): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -503,13 +532,15 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   }
 }
 
-export async function setInputFilesViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  inputRef?: string;
-  element?: string;
-  paths: string[];
-}): Promise<void> {
+export async function setInputFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    inputRef?: string;
+    element?: string;
+    paths: string[];
+  } & EngineOpts,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });

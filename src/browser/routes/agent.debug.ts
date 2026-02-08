@@ -18,6 +18,10 @@ export function registerBrowserAgentDebugRoutes(
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const level = typeof req.query.level === "string" ? req.query.level : "";
 
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "console messages");
@@ -25,6 +29,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const messages = await pw.getConsoleMessagesViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         level: level.trim() || undefined,
@@ -43,6 +48,10 @@ export function registerBrowserAgentDebugRoutes(
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const clear = toBoolean(req.query.clear) ?? false;
 
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "page errors");
@@ -50,6 +59,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const result = await pw.getPageErrorsViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         clear,
@@ -69,6 +79,10 @@ export function registerBrowserAgentDebugRoutes(
     const filter = typeof req.query.filter === "string" ? req.query.filter : "";
     const clear = toBoolean(req.query.clear) ?? false;
 
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "network requests");
@@ -76,6 +90,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const result = await pw.getNetworkRequestsViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         filter: filter.trim() || undefined,
@@ -97,6 +112,10 @@ export function registerBrowserAgentDebugRoutes(
     const screenshots = toBoolean(body.screenshots) ?? undefined;
     const snapshots = toBoolean(body.snapshots) ?? undefined;
     const sources = toBoolean(body.sources) ?? undefined;
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "trace start");
@@ -104,6 +123,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       await pw.traceStartViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         screenshots,
@@ -124,6 +144,10 @@ export function registerBrowserAgentDebugRoutes(
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const out = toStringOrEmpty(body.path) || "";
+    const eOpts = {
+      engine: profileCtx.profile.engine,
+      profileName: profileCtx.profile.name,
+    } as const;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "trace stop");
@@ -135,6 +159,7 @@ export function registerBrowserAgentDebugRoutes(
       await fs.mkdir(dir, { recursive: true });
       const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
       await pw.traceStopViaPlaywright({
+        ...eOpts,
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         path: tracePath,

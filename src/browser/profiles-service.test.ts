@@ -115,6 +115,42 @@ describe("BrowserProfilesService", () => {
     expect(movePathToTrash).not.toHaveBeenCalled();
   });
 
+  it("creates a Firefox profile with engine field persisted", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "ff-test", engine: "firefox" });
+
+    expect(result.ok).toBe(true);
+    expect(result.isRemote).toBe(false);
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browser: expect.objectContaining({
+          profiles: expect.objectContaining({
+            "ff-test": expect.objectContaining({
+              engine: "firefox",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects creating a Firefox profile with extension driver", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    await expect(
+      service.createProfile({ name: "bad", engine: "firefox", driver: "extension" }),
+    ).rejects.toThrow(/not compatible with driver "extension"/);
+  });
+
   it("deletes local profiles and moves data to Trash", async () => {
     const resolved = resolveBrowserConfig({
       profiles: {

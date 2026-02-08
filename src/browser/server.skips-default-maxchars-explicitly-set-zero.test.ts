@@ -117,6 +117,8 @@ vi.mock("./chrome.js", () => ({
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
+      engine: "chromium",
+      profileName: "openclaw",
     };
   }),
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
@@ -290,6 +292,8 @@ describe("browser control server", () => {
     expect(call).toEqual({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
+      engine: "chromium",
+      profileName: "openclaw",
     });
   });
 

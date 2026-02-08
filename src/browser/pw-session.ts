@@ -10,6 +10,7 @@ import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getHeadersWithAuth } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
+import { getFirefoxContext } from "./firefox.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -100,6 +101,36 @@ const MAX_NETWORK_REQUESTS = 500;
 
 let cached: ConnectedBrowser | null = null;
 let connecting: Promise<ConnectedBrowser> | null = null;
+
+// Firefox synthetic page IDs: Firefox doesn't expose CDP target IDs,
+// so we assign stable synthetic IDs (ff-1, ff-2, ...) per page.
+let ffPageCounter = 0;
+const ffPageToId = new WeakMap<Page, string>();
+const ffIdToPage = new Map<string, WeakRef<Page>>();
+
+function getOrAssignFirefoxPageId(page: Page): string {
+  const existing = ffPageToId.get(page);
+  if (existing) {
+    return existing;
+  }
+  ffPageCounter += 1;
+  const id = `ff-${ffPageCounter}`;
+  ffPageToId.set(page, id);
+  ffIdToPage.set(id, new WeakRef(page));
+  page.on("close", () => {
+    ffIdToPage.delete(id);
+  });
+  return id;
+}
+
+function findFirefoxPageById(id: string): Page | null {
+  const ref = ffIdToPage.get(id);
+  if (!ref) {
+    return null;
+  }
+  const page = ref.deref();
+  return page ?? null;
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -438,7 +469,14 @@ async function findPageByTargetId(
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<Page> {
+  // Firefox path: use the Playwright context directly
+  if (opts.engine === "firefox" && opts.profileName) {
+    return getFirefoxPageForTarget(opts.profileName, opts.targetId);
+  }
+
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
   if (!pages.length) {
@@ -459,6 +497,33 @@ export async function getPageForTargetId(opts: {
     throw new Error("tab not found");
   }
   return found;
+}
+
+function getFirefoxPageForTarget(profileName: string, targetId?: string): Page {
+  const context = getFirefoxContext(profileName);
+  if (!context) {
+    throw new Error(`Firefox context for profile "${profileName}" is not available.`);
+  }
+  const pages = context.pages();
+  if (!pages.length) {
+    throw new Error("No pages available in the Firefox browser.");
+  }
+
+  if (!targetId) {
+    return pages[0];
+  }
+
+  // Try synthetic ID lookup first
+  const found = findFirefoxPageById(targetId);
+  if (found && pages.includes(found)) {
+    return found;
+  }
+
+  // Fallback: single page
+  if (pages.length === 1) {
+    return pages[0];
+  }
+  throw new Error("tab not found");
 }
 
 export function refLocator(page: Page, ref: string) {
@@ -513,7 +578,11 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
-export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
+export async function listPagesViaPlaywright(opts: {
+  cdpUrl: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
+}): Promise<
   Array<{
     targetId: string;
     title: string;
@@ -521,6 +590,27 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
     type: string;
   }>
 > {
+  // Firefox: list pages from the Playwright context
+  if (opts.engine === "firefox" && opts.profileName) {
+    const context = getFirefoxContext(opts.profileName);
+    if (!context) {
+      return [];
+    }
+    const pages = context.pages();
+    const results: Array<{ targetId: string; title: string; url: string; type: string }> = [];
+    for (const page of pages) {
+      const id = getOrAssignFirefoxPageId(page);
+      ensurePageState(page);
+      results.push({
+        targetId: id,
+        title: await page.title().catch(() => ""),
+        url: page.url(),
+        type: "page",
+      });
+    }
+    return results;
+  }
+
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
   const results: Array<{
@@ -549,12 +639,38 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: { cdpUrl: string; url: string }): Promise<{
+export async function createPageViaPlaywright(opts: {
+  cdpUrl: string;
+  url: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
+}): Promise<{
   targetId: string;
   title: string;
   url: string;
   type: string;
 }> {
+  // Firefox: create page via Playwright context
+  if (opts.engine === "firefox" && opts.profileName) {
+    const context = getFirefoxContext(opts.profileName);
+    if (!context) {
+      throw new Error(`Firefox context for profile "${opts.profileName}" is not available.`);
+    }
+    const page = await context.newPage();
+    ensurePageState(page);
+    const targetUrl = opts.url.trim() || "about:blank";
+    if (targetUrl !== "about:blank") {
+      await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {});
+    }
+    const tid = getOrAssignFirefoxPageId(page);
+    return {
+      targetId: tid,
+      title: await page.title().catch(() => ""),
+      url: page.url(),
+      type: "page",
+    };
+  }
+
   const { browser } = await connectBrowser(opts.cdpUrl);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
@@ -591,7 +707,18 @@ export async function createPageViaPlaywright(opts: { cdpUrl: string; url: strin
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
+  if (opts.engine === "firefox" && opts.profileName) {
+    const page = findFirefoxPageById(opts.targetId);
+    if (!page) {
+      throw new Error("tab not found");
+    }
+    await page.close();
+    return;
+  }
+
   const { browser } = await connectBrowser(opts.cdpUrl);
   const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!page) {
@@ -607,7 +734,18 @@ export async function closePageByTargetIdViaPlaywright(opts: {
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
 }): Promise<void> {
+  if (opts.engine === "firefox" && opts.profileName) {
+    const page = findFirefoxPageById(opts.targetId);
+    if (!page) {
+      throw new Error("tab not found");
+    }
+    await page.bringToFront();
+    return;
+  }
+
   const { browser } = await connectBrowser(opts.cdpUrl);
   const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!page) {

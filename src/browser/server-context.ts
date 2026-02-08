@@ -22,6 +22,7 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
+import { isFirefoxReachable, launchOpenClawFirefox, stopOpenClawFirefox } from "./firefox.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
@@ -109,6 +110,26 @@ function createProfileContext(
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
+    // Firefox profiles always use Playwright page enumeration (no CDP /json/list)
+    if (profile.engine === "firefox") {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
+      if (typeof listPagesViaPlaywright === "function") {
+        const pages = await listPagesViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          engine: "firefox",
+          profileName: profile.name,
+        });
+        return pages.map((p) => ({
+          targetId: p.targetId,
+          title: p.title,
+          url: p.url,
+          type: p.type,
+        }));
+      }
+      return [];
+    }
+
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -145,6 +166,29 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    // Firefox profiles use Playwright context to create tabs
+    if (profile.engine === "firefox") {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
+      if (typeof createPageViaPlaywright === "function") {
+        const page = await createPageViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          url,
+          engine: "firefox",
+          profileName: profile.name,
+        });
+        const profileState = getProfileState();
+        profileState.lastTargetId = page.targetId;
+        return {
+          targetId: page.targetId,
+          title: page.title,
+          url: page.url,
+          type: page.type,
+        };
+      }
+      throw new Error("Playwright module not available for Firefox tab creation.");
+    }
+
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
     if (!profile.cdpIsLoopback) {
@@ -248,12 +292,18 @@ function createProfileContext(
   };
 
   const isReachable = async (timeoutMs?: number) => {
+    if (profile.engine === "firefox") {
+      return await isFirefoxReachable(profile.name);
+    }
     const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
     const wsTimeout = resolveRemoteWsTimeout(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeout, wsTimeout);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (profile.engine === "firefox") {
+      return await isFirefoxReachable(profile.name);
+    }
     const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeout);
   };
@@ -276,8 +326,26 @@ function createProfileContext(
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
     const isExtension = profile.driver === "extension";
+    const isFirefox = profile.engine === "firefox";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+
+    // Firefox launch path
+    if (isFirefox && !remoteCdp) {
+      if (httpReachable) {
+        return;
+      }
+      if (current.resolved.attachOnly) {
+        throw new Error(
+          `Browser attachOnly is enabled and Firefox profile "${profile.name}" is not running.`,
+        );
+      }
+      const launched = await launchOpenClawFirefox(profile, {
+        headless: current.resolved.headless,
+      });
+      attachRunning(launched);
+      return;
+    }
 
     if (isExtension && remoteCdp) {
       throw new Error(
@@ -437,7 +505,7 @@ function createProfileContext(
       throw new Error("tab not found");
     }
 
-    if (!profile.cdpIsLoopback) {
+    if (profile.engine === "firefox" || !profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
@@ -445,6 +513,8 @@ function createProfileContext(
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolved.targetId,
+          engine: profile.engine,
+          profileName: profile.name,
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolved.targetId;
@@ -467,8 +537,8 @@ function createProfileContext(
       throw new Error("tab not found");
     }
 
-    // For remote profiles, use Playwright's persistent connection to close tabs
-    if (!profile.cdpIsLoopback) {
+    // Firefox and remote profiles use Playwright's persistent connection to close tabs
+    if (profile.engine === "firefox" || !profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
       const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.closePageByTargetIdViaPlaywright;
@@ -476,6 +546,8 @@ function createProfileContext(
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolved.targetId,
+          engine: profile.engine,
+          profileName: profile.name,
         });
         return;
       }
@@ -495,7 +567,11 @@ function createProfileContext(
     if (!profileState.running) {
       return { stopped: false };
     }
-    await stopOpenClawChrome(profileState.running);
+    if (profile.engine === "firefox") {
+      await stopOpenClawFirefox(profileState.running);
+    } else {
+      await stopOpenClawChrome(profileState.running);
+    }
     setProfileRunning(null);
     return { stopped: true };
   };
@@ -602,9 +678,12 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           // Browser might not be responsive
         }
       } else {
-        // Check if something is listening on the port
+        // Check if something is listening on the port (or Firefox context is alive)
         try {
-          const reachable = await isChromeReachable(profile.cdpUrl, 200);
+          const reachable =
+            profile.engine === "firefox"
+              ? await isFirefoxReachable(profile.name)
+              : await isChromeReachable(profile.cdpUrl, 200);
           if (reachable) {
             running = true;
             const ctx = createProfileContext(opts, profile);

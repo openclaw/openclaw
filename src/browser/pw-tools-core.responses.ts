@@ -21,6 +21,8 @@ function matchUrlPattern(pattern: string, url: string): boolean {
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  engine?: "chromium" | "firefox";
+  profileName?: string;
   url: string;
   timeoutMs?: number;
   maxChars?: number;
