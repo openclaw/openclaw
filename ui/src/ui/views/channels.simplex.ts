@@ -34,22 +34,27 @@ export function renderSimplexCard(params: {
     link: string;
     qrDataUrl?: string | null;
     onDelete?: () => void;
+    deleteBusy?: boolean;
   }) => {
-    const { label, link, qrDataUrl, onDelete } = params;
+    const { label, link, qrDataUrl, onDelete, deleteBusy = false } = params;
     return html`
       <div
         style="margin-top: 12px; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;"
       >
-        <div style="font-weight: 600; margin-bottom: 8px;">${label}</div>
-        <div class="row" style="gap: 8px; align-items: center; flex-wrap: wrap;">
-          <input
-            style="flex: 1; min-width: 220px; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 10px; background: var(--bg-secondary); color: var(--text-primary);"
-            readonly
-            .value=${link}
-          />
-          <button class="btn" @click=${() => void copyText(link)}>Copy</button>
-          ${onDelete ? html`<button class="btn danger" @click=${onDelete}>Delete</button>` : nothing}
+        <div class="row" style="justify-content: space-between; gap: 12px; align-items: center;">
+          <div class="muted">${label}</div>
+          <div class="row" style="gap: 8px;">
+            <button class="btn btn--sm" @click=${() => void copyText(link)}>Copy</button>
+            ${
+              onDelete
+                ? html`<button class="btn btn--sm danger" ?disabled=${deleteBusy} @click=${onDelete}>
+                    ${deleteBusy ? "Deleting..." : "Delete"}
+                  </button>`
+                : nothing
+            }
+          </div>
         </div>
+        <pre class="code-block" style="margin-top: 8px;">${link}</pre>
         ${
           qrDataUrl
             ? html`<div class="qr-wrap" style="margin-top: 10px;">
@@ -115,6 +120,7 @@ export function renderSimplexCard(params: {
               link: state.addressLink,
               qrDataUrl: state.addressQrDataUrl,
               onDelete: () => props.onSimplexInviteRevoke(accountId),
+              deleteBusy: busyRevoke,
             })
           : nothing
       }
