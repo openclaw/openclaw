@@ -11,6 +11,7 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
@@ -233,6 +234,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
             messagesToSummarize = pruned.messages;
+
+            // Clean up orphan tool_result entries that may have lost their matching tool_use
+            // after pruning older messages
+            messagesToSummarize = sanitizeToolUseResultPairing(messagesToSummarize);
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
