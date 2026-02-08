@@ -99,3 +99,31 @@ export const NodeInvokeRequestEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Node health frames (gateway -> clients)
+export const NodeHealthNodeSchema = Type.Object(
+  {
+    nodeId: NonEmptyString,
+    connected: Type.Boolean(),
+    connectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    displayName: Type.Optional(NonEmptyString),
+    platform: Type.Optional(NonEmptyString),
+    version: Type.Optional(NonEmptyString),
+    coreVersion: Type.Optional(NonEmptyString),
+    uiVersion: Type.Optional(NonEmptyString),
+    deviceFamily: Type.Optional(NonEmptyString),
+    modelIdentifier: Type.Optional(NonEmptyString),
+    remoteIp: Type.Optional(NonEmptyString),
+    caps: Type.Optional(Type.Array(NonEmptyString)),
+    commands: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
+export const NodeHealthFrameSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    nodes: Type.Array(NodeHealthNodeSchema),
+  },
+  { additionalProperties: false },
+);

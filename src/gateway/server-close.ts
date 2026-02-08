@@ -19,6 +19,7 @@ export function createGatewayCloseHandler(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
+  nodeHealthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   agentUnsub: (() => void) | null;
   heartbeatUnsub: (() => void) | null;
@@ -80,6 +81,7 @@ export function createGatewayCloseHandler(params: {
     });
     clearInterval(params.tickInterval);
     clearInterval(params.healthInterval);
+    clearInterval(params.nodeHealthInterval);
     clearInterval(params.dedupeCleanup);
     if (params.agentUnsub) {
       try {

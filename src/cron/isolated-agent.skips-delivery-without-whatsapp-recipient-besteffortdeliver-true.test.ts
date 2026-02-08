@@ -328,4 +328,46 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
+
+  it("honors explicit delivery channel even when unsupported", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello from cron" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "announce", channel: "webchat", to: "agent:main:main" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+        messageChannel?: string;
+      };
+
+      expect(res.status).toBe("ok");
+      expect(res.deliveryResult?.status).toBe("error");
+      expect(res.deliveryResult?.error).toContain("WebChat");
+      expect(call?.messageChannel).toBe("webchat");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
 });

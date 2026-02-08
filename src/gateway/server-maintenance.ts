@@ -1,15 +1,21 @@
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
+import type { NodeRegistry } from "./node-registry.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
+  NODE_HEALTH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import {
+  refreshNodeHealthSnapshot,
+  setBroadcastNodeHealthUpdate,
+} from "./server/node-health-state.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -37,9 +43,11 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  nodeRegistry: NodeRegistry;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
+  nodeHealthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -50,6 +58,16 @@ export function startGatewayMaintenanceTimers(params: {
       },
     });
     params.nodeSendToAllSubscribed("health", snap);
+  });
+
+  setBroadcastNodeHealthUpdate((frame) => {
+    params.broadcast("nodeHealth", frame, {
+      stateVersion: {
+        presence: params.getPresenceVersion(),
+      },
+      dropIfSlow: true,
+    });
+    params.nodeSendToAllSubscribed("nodeHealth", frame);
   });
 
   // periodic keepalive
@@ -66,10 +84,20 @@ export function startGatewayMaintenanceTimers(params: {
       .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
-  // Prime cache so first client gets a snapshot without waiting.
+  // periodic node health refresh
+  const nodeHealthInterval = setInterval(() => {
+    void refreshNodeHealthSnapshot({ nodeRegistry: params.nodeRegistry }).catch((err) =>
+      params.logHealth.error(`nodeHealth refresh failed: ${formatError(err)}`),
+    );
+  }, NODE_HEALTH_INTERVAL_MS);
+
+  // Prime caches so first client gets a snapshot without waiting.
   void params
     .refreshGatewayHealthSnapshot({ probe: true })
     .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+  void refreshNodeHealthSnapshot({ nodeRegistry: params.nodeRegistry }).catch((err) =>
+    params.logHealth.error(`nodeHealth initial refresh failed: ${formatError(err)}`),
+  );
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -116,5 +144,5 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  return { tickInterval, healthInterval, nodeHealthInterval, dedupeCleanup };
 }

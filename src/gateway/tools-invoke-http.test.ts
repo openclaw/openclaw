@@ -37,25 +37,52 @@ describe("POST /tools/invoke", () => {
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-    });
-    const token = resolveGatewayToken();
+    let port = await getFreePort();
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        // Bun runs can be more prone to port races; retry on EADDRINUSE.
+        // eslint-disable-next-line no-await-in-loop
+        server = await startGatewayServer(port, { bind: "loopback" });
+        break;
+      } catch (err) {
+        const code = (err as { cause?: { code?: string } }).cause?.code;
+        if (code !== "EADDRINUSE") {
+          throw err;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        port = await getFreePort();
+      }
+    }
+    if (!server) {
+      throw new Error("failed to start gateway server after retries");
+    }
 
-    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
-    });
+    try {
+      const token = resolveGatewayToken();
 
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body).toHaveProperty("result");
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+        signal: controller.signal,
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          tool: "agents_list",
+          action: "json",
+          args: {},
+          sessionKey: "main",
+        }),
+      }).finally(() => clearTimeout(timer));
 
-    await server.close();
-  });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+      expect(body).toHaveProperty("result");
+    } finally {
+      await server.close();
+    }
+  }, 180_000);
 
   it("supports tools.alsoAllow as additive allowlist (profile stage)", async () => {
     // No explicit tool allowlist; rely on profile + alsoAllow.

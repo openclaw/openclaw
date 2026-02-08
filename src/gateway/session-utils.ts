@@ -517,8 +517,13 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  // Prefer provider-qualified model ids when available (e.g. "openai-codex/gpt-5.2")
+  // because unqualified ids ("gpt-5.2") may map to a different context window.
+  const lookupId =
+    resolved.provider && resolved.model ? `${resolved.provider}/${resolved.model}` : resolved.model;
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
+    lookupContextTokens(lookupId) ??
     lookupContextTokens(resolved.model) ??
     DEFAULT_CONTEXT_TOKENS;
   return {

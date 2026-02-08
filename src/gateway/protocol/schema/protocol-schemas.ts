@@ -104,6 +104,8 @@ import {
 import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
+  NodeHealthFrameSchema,
+  NodeHealthNodeSchema,
   NodeInvokeParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeRequestEventSchema,
@@ -167,6 +169,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeInvokeParams: NodeInvokeParamsSchema,
   NodeInvokeResultParams: NodeInvokeResultParamsSchema,
   NodeEventParams: NodeEventParamsSchema,
+  NodeHealthNode: NodeHealthNodeSchema,
+  NodeHealthFrame: NodeHealthFrameSchema,
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,

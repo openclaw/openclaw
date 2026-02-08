@@ -423,7 +423,7 @@ export async function startGatewayServer(
     }, skillsRefreshDelayMs);
   });
 
-  const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
+  const { tickInterval, healthInterval, nodeHealthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
     broadcast,
     nodeSendToAllSubscribed,
     getPresenceVersion,
@@ -438,6 +438,7 @@ export async function startGatewayServer(
     removeChatRun,
     agentRunSeq,
     nodeSendToSession,
+    nodeRegistry,
   });
 
   const agentUnsub = onAgentEvent(
@@ -610,6 +611,7 @@ export async function startGatewayServer(
     broadcast,
     tickInterval,
     healthInterval,
+    nodeHealthInterval,
     dedupeCleanup,
     agentUnsub,
     heartbeatUnsub,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { clearNodeHealthFramesForNode } from "./node-health.js";
 
 export type NodeSession = {
   nodeId: string;
@@ -85,6 +86,10 @@ export class NodeRegistry {
     }
     this.nodesByConn.delete(connId);
     this.nodesById.delete(nodeId);
+
+    // Clear node-scoped ephemeral state on disconnect.
+    clearNodeHealthFramesForNode(nodeId);
+
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.nodeId !== nodeId) {
         continue;

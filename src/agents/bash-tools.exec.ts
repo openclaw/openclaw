@@ -440,6 +440,15 @@ async function runExecProcess(opts: {
   let pty: PtyHandle | null = null;
   let stdin: SessionStdin | undefined;
 
+  // In unit tests (vitest/jest/etc), detached child processes can cause hangs/timeouts
+  // because the runner keeps the event loop alive waiting on subprocess handles.
+  const isTestEnv =
+    process.env.VITEST !== undefined ||
+    process.env.VITEST_WORKER_ID !== undefined ||
+    process.env.JEST_WORKER_ID !== undefined ||
+    process.env.NODE_ENV === "test";
+  const detached = process.platform !== "win32" && !isTestEnv;
+
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
       argv: [
@@ -455,7 +464,7 @@ async function runExecProcess(opts: {
       options: {
         cwd: opts.workdir,
         env: process.env,
-        detached: process.platform !== "win32",
+        detached,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
@@ -521,7 +530,7 @@ async function runExecProcess(opts: {
         options: {
           cwd: opts.workdir,
           env: opts.env,
-          detached: process.platform !== "win32",
+          detached,
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
         },
@@ -548,7 +557,7 @@ async function runExecProcess(opts: {
       options: {
         cwd: opts.workdir,
         env: opts.env,
-        detached: process.platform !== "win32",
+        detached,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },

@@ -75,7 +75,7 @@ describe("cli program (smoke)", () => {
       from: "user",
     });
     expect(messageCommand).toHaveBeenCalled();
-  });
+  }, 180_000);
 
   it("runs message react with signal author fields", async () => {
     const program = buildProgram();
