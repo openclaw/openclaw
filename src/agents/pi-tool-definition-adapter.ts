@@ -7,7 +7,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolName, truncateToolNameForOpenAI } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -84,9 +84,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
+    const canonicalName = normalizeToolName(name);
+    const apiName = truncateToolNameForOpenAI(canonicalName);
     return {
-      name,
+      name: apiName,
       label: tool.label ?? name,
       description: tool.description ?? "",
       parameters: tool.parameters,
@@ -107,12 +108,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
-            logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
+            logDebug(`tools: ${canonicalName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
+          logError(`[tools] ${canonicalName} failed: ${described.message}`);
           return jsonResult({
             status: "error",
-            tool: normalizedName,
+            tool: apiName,
             error: described.message,
           });
         }
@@ -130,8 +131,10 @@ export function toClientToolDefinitions(
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
+    const canonicalName = normalizeToolName(func.name);
+    const apiName = truncateToolNameForOpenAI(canonicalName);
     return {
-      name: func.name,
+      name: apiName,
       label: func.name,
       description: func.description ?? "",
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -139,7 +142,7 @@ export function toClientToolDefinitions(
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
-          toolName: func.name,
+          toolName: apiName,
           params,
           toolCallId,
           ctx: hookContext,
@@ -151,12 +154,12 @@ export function toClientToolDefinitions(
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called
         if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+          onClientToolCall(apiName, paramsRecord);
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({
           status: "pending",
-          tool: func.name,
+          tool: apiName,
           message: "Tool execution delegated to client",
         });
       },

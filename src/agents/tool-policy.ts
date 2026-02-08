@@ -79,6 +79,35 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   full: {},
 };
 
+/**
+ * OpenAI API enforces a 64-character maximum on function/tool names.
+ * This function truncates tool names to 64 characters while preserving uniqueness.
+ */
+export function truncateToolNameForOpenAI(name: string): string {
+  const MAX_NAME_LENGTH = 64;
+  if (name.length <= MAX_NAME_LENGTH) {
+    return name;
+  }
+
+  // Truncate to 60 chars and append a 4-char hash suffix for uniqueness
+  const truncated = name.slice(0, 60);
+  const hash = simpleHash(name);
+  return `${truncated}_${hash}`;
+}
+
+/**
+ * Simple hash function for generating short unique identifiers.
+ * Uses a basic DJB2-style hash algorithm.
+ */
+function simpleHash(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 33) ^ str.charCodeAt(i);
+  }
+  // Convert to hex and take first 4 characters
+  return Math.abs(hash).toString(16).padStart(4, "0").slice(0, 4);
+}
+
 export function normalizeToolName(name: string) {
   const normalized = name.trim().toLowerCase();
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
