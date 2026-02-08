@@ -4,22 +4,20 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  frame.sh <video-file> [--time HH:MM:SS] [--index N] --out /path/to/frame.jpg
-
-Examples:
-  frame.sh video.mp4 --out /tmp/frame.jpg
-  frame.sh video.mp4 --time 00:00:10 --out /tmp/frame-10s.jpg
-  frame.sh video.mp4 --index 0 --out /tmp/frame0.png
+  frame.sh <video-file> [--time HH:MM:SS | --index N] --out /path/to/frame.jpg
 EOF
   exit 2
 }
 
-if [[ "${1:-}" == "" || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-fi
+[[ $# -eq 0 || "${1:-}" =~ ^(-h|--help)$ ]] && usage
 
-in="${1:-}"
-shift || true
+command -v ffmpeg >/dev/null 2>&1 || {
+  echo "Error: ffmpeg not found" >&2
+  exit 127
+}
+
+in="$1"
+shift
 
 time=""
 index=""
@@ -28,15 +26,18 @@ out=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --time)
-      time="${2:-}"
+      [[ $# -ge 2 ]] || { echo "--time requires value" >&2; exit 2; }
+      time="$2"
       shift 2
       ;;
     --index)
-      index="${2:-}"
+      [[ $# -ge 2 ]] || { echo "--index requires value" >&2; exit 2; }
+      index="$2"
       shift 2
       ;;
     --out)
-      out="${2:-}"
+      [[ $# -ge 2 ]] || { echo "--out requires value" >&2; exit 2; }
+      out="$2"
       shift 2
       ;;
     *)
@@ -46,36 +47,38 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ! -f "$in" ]]; then
-  echo "File not found: $in" >&2
-  exit 1
-fi
+[[ -f "$in" ]] || { echo "File not found: $in" >&2; exit 1; }
+[[ -n "$out" ]] || { echo "Missing --out" >&2; exit 2; }
 
-if [[ "$out" == "" ]]; then
-  echo "Missing --out" >&2
-  usage
-fi
+[[ -n "$time" && -n "$index" ]] && {
+  echo "Use either --time or --index, not both" >&2
+  exit 2
+}
+
+[[ -n "$index" && ! "$index" =~ ^[0-9]+$ ]] && {
+  echo "--index must be a non-negative integer" >&2
+  exit 2
+}
 
 mkdir -p "$(dirname "$out")"
 
-if [[ "$index" != "" ]]; then
+if [[ -n "$index" ]]; then
   ffmpeg -hide_banner -loglevel error -y \
     -i "$in" \
     -vf "select=eq(n\\,${index})" \
-    -vframes 1 \
+    -frames:v 1 \
     "$out"
-elif [[ "$time" != "" ]]; then
+elif [[ -n "$time" ]]; then
   ffmpeg -hide_banner -loglevel error -y \
-    -ss "$time" \
-    -i "$in" \
+    -i "$in" -ss "$time" \
     -frames:v 1 \
     "$out"
 else
   ffmpeg -hide_banner -loglevel error -y \
     -i "$in" \
     -vf "select=eq(n\\,0)" \
-    -vframes 1 \
+    -frames:v 1 \
     "$out"
 fi
 
-echo "$out"
+[[ -f "$out" ]] && echo "$out"
