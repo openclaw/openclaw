@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `162cc6f feat(web): add UCP Feed API functions (02-08)`
 - `3a54d85 feat(web): add UCP Feed type definitions (02-08)`
 - `b750ec1 feat(web): add UCP orders barrel export (02-08)`
 - `0798e8e feat(web): add UCP orders page (02-08)`
 - `8a09c0f feat(web): add UCP order detail sheet (02-08)`
-- `b766ce9 feat(web): add UCP widget to dashboard page (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
