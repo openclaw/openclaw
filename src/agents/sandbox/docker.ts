@@ -16,13 +16,29 @@ export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
     });
     let stdout = "";
     let stderr = "";
+    let resolved = false;
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
     });
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    child.on("error", (err) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      const message =
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+          ? "Docker is not installed or not in PATH. Install Docker to use sandbox mode."
+          : `Failed to execute docker: ${err.message}`;
+      reject(new Error(message));
+    });
     child.on("close", (code) => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !opts?.allowFailure) {
         reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
