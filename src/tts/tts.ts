@@ -42,6 +42,58 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
+
+/**
+ * Allowlist of trusted ElevenLabs API hosts.
+ * Custom base URLs must match one of these hosts to prevent SSRF/data exfiltration.
+ * CWE-918: Server-Side Request Forgery (SSRF)
+ * CWE-200: Exposure of Sensitive Information
+ */
+const ALLOWED_ELEVENLABS_HOSTS = new Set(["api.elevenlabs.io", "api.elevenlabs.com"]);
+
+/**
+ * Validate that an ElevenLabs base URL is on the allowlist.
+ * Returns the validated URL or throws an error if invalid.
+ */
+function validateElevenLabsBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return DEFAULT_ELEVENLABS_BASE_URL;
+  }
+
+  try {
+    const url = new URL(trimmed);
+
+    // Require HTTPS for security
+    if (url.protocol !== "https:") {
+      throw new Error(
+        `TTS base URL must use HTTPS protocol, got: ${url.protocol.replace(":", "")}`,
+      );
+    }
+
+    // Reject URLs with embedded credentials (potential security risk)
+    if (url.username || url.password) {
+      throw new Error("TTS base URL must not contain embedded credentials");
+    }
+
+    // Check against allowlist
+    if (!ALLOWED_ELEVENLABS_HOSTS.has(url.hostname)) {
+      throw new Error(
+        `TTS base URL host not allowed: ${url.hostname}. ` +
+          `Only official ElevenLabs API hosts are permitted.`,
+      );
+    }
+
+    // Return normalized URL without trailing slash
+    return trimmed.replace(/\/+$/, "");
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("TTS base URL")) {
+      throw e;
+    }
+    throw new Error(`Invalid TTS base URL: ${trimmed}`, { cause: e });
+  }
+}
+
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
@@ -259,7 +311,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
       apiKey: raw.elevenlabs?.apiKey,
-      baseUrl: raw.elevenlabs?.baseUrl?.trim() || DEFAULT_ELEVENLABS_BASE_URL,
+      baseUrl: validateElevenLabsBaseUrl(raw.elevenlabs?.baseUrl ?? ""),
       voiceId: raw.elevenlabs?.voiceId ?? DEFAULT_ELEVENLABS_VOICE_ID,
       modelId: raw.elevenlabs?.modelId ?? DEFAULT_ELEVENLABS_MODEL_ID,
       seed: raw.elevenlabs?.seed,
@@ -1576,4 +1628,6 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  validateElevenLabsBaseUrl,
+  ALLOWED_ELEVENLABS_HOSTS,
 };

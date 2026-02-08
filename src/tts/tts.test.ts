@@ -48,6 +48,8 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  validateElevenLabsBaseUrl,
+  ALLOWED_ELEVENLABS_HOSTS,
 } = _test;
 
 describe("tts", () => {
@@ -556,6 +558,89 @@ describe("tts", () => {
 
       globalThis.fetch = originalFetch;
       process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+  });
+
+  /**
+   * VULN-220: TTS Base URL Validation
+   *
+   * Validates that ElevenLabs base URLs are restricted to an allowlist
+   * to prevent SSRF and data exfiltration attacks.
+   *
+   * CWE-918: Server-Side Request Forgery (SSRF)
+   * CWE-200: Exposure of Sensitive Information
+   */
+  describe("validateElevenLabsBaseUrl", () => {
+    it("accepts official ElevenLabs API URLs", () => {
+      expect(validateElevenLabsBaseUrl("https://api.elevenlabs.io")).toBe(
+        "https://api.elevenlabs.io",
+      );
+      expect(validateElevenLabsBaseUrl("https://api.elevenlabs.com")).toBe(
+        "https://api.elevenlabs.com",
+      );
+      expect(validateElevenLabsBaseUrl("https://api.elevenlabs.io/")).toBe(
+        "https://api.elevenlabs.io",
+      );
+    });
+
+    it("returns default URL for empty string", () => {
+      expect(validateElevenLabsBaseUrl("")).toBe("https://api.elevenlabs.io");
+      expect(validateElevenLabsBaseUrl("   ")).toBe("https://api.elevenlabs.io");
+    });
+
+    it("rejects non-HTTPS URLs", () => {
+      expect(() => validateElevenLabsBaseUrl("http://api.elevenlabs.io")).toThrow(
+        "TTS base URL must use HTTPS protocol",
+      );
+    });
+
+    it("rejects attacker-controlled URLs (SSRF prevention)", () => {
+      expect(() => validateElevenLabsBaseUrl("https://attacker.example.com")).toThrow(
+        "TTS base URL host not allowed",
+      );
+      expect(() => validateElevenLabsBaseUrl("https://evil.com")).toThrow(
+        "TTS base URL host not allowed",
+      );
+      expect(() => validateElevenLabsBaseUrl("https://localhost:8888")).toThrow(
+        "TTS base URL host not allowed",
+      );
+    });
+
+    it("rejects internal network URLs (SSRF prevention)", () => {
+      expect(() => validateElevenLabsBaseUrl("https://192.168.1.1")).toThrow(
+        "TTS base URL host not allowed",
+      );
+      expect(() => validateElevenLabsBaseUrl("https://10.0.0.1")).toThrow(
+        "TTS base URL host not allowed",
+      );
+      expect(() => validateElevenLabsBaseUrl("https://internal.corp.com")).toThrow(
+        "TTS base URL host not allowed",
+      );
+    });
+
+    it("rejects cloud metadata endpoints (SSRF prevention)", () => {
+      expect(() => validateElevenLabsBaseUrl("https://169.254.169.254")).toThrow(
+        "TTS base URL host not allowed",
+      );
+    });
+
+    it("rejects malformed URLs", () => {
+      expect(() => validateElevenLabsBaseUrl("not-a-url")).toThrow("Invalid TTS base URL");
+      expect(() => validateElevenLabsBaseUrl("://missing-protocol")).toThrow(
+        "Invalid TTS base URL",
+      );
+    });
+
+    it("rejects URLs with embedded credentials", () => {
+      expect(() => validateElevenLabsBaseUrl("https://user:pass@api.elevenlabs.io")).toThrow(
+        "TTS base URL must not contain embedded credentials",
+      );
+    });
+
+    it("has expected allowlist entries", () => {
+      expect(ALLOWED_ELEVENLABS_HOSTS.has("api.elevenlabs.io")).toBe(true);
+      expect(ALLOWED_ELEVENLABS_HOSTS.has("api.elevenlabs.com")).toBe(true);
+      expect(ALLOWED_ELEVENLABS_HOSTS.size).toBe(2);
     });
   });
 });
