@@ -44,6 +44,7 @@ import { createOpenClawCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -433,8 +434,12 @@ export async function compactEmbeddedPiSessionDirect(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+        // Repair tool pairing after limiting history to handle orphaned tool_results (#10037)
+        const repaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(limited)
+          : limited;
+        if (repaired.length > 0) {
+          session.agent.replaceMessages(repaired);
         }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages

@@ -48,6 +48,7 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
@@ -560,9 +561,15 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // Repair tool pairing after limiting history to handle orphaned tool_results (#10037)
+        // limitHistoryTurns can slice off assistant messages with tool_use while keeping
+        // subsequent toolResult messages, which causes API rejection.
+        const repaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(limited)
+          : limited;
+        cacheTrace?.recordStage("session:limited", { messages: repaired });
+        if (repaired.length > 0) {
+          activeSession.agent.replaceMessages(repaired);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
