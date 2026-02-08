@@ -8,6 +8,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { runQuotaExport } from "../../../infra/quota-export-runner.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
@@ -869,6 +870,12 @@ export async function runEmbeddedAttempt(
               log.warn(`agent_end hook failed: ${err}`);
             });
         }
+
+        // Export quota info to ~/.openclaw/quota.json for external monitoring
+        // This is fire-and-forget, so we don't await
+        runQuotaExport({ agentDir: params.agentDir }).catch(() => {
+          // Silently ignore - quota export is non-critical
+        });
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
