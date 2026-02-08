@@ -95,12 +95,18 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral;
+  // Anthropic requires tool_use.id to match ^[a-zA-Z0-9_-]+$
+  // When switching models mid-session (e.g., from Kimi-K2 to Claude), the conversation
+  // history may contain tool call IDs with characters like | or : that Claude rejects.
+  // See: https://github.com/openclaw/openclaw/issues/7107
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
-    : sanitizeToolCallIds
-      ? "strict"
-      : undefined;
+    : isAnthropic
+      ? "anthropic"
+      : sanitizeToolCallIds
+        ? "strict"
+        : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }

@@ -76,7 +76,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("does not sanitize tool call ids for non-Google APIs", async () => {
+  it("sanitizes tool call ids with anthropic mode for Anthropic models", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     await sanitizeSessionHistory({
@@ -90,7 +90,29 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
       "session:history",
-      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: false }),
+      expect.objectContaining({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "anthropic",
+      }),
+    );
+  });
+
+  it("does not sanitize tool call ids for non-Google/non-Anthropic/non-Mistral APIs", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-completions",
+      provider: "deepseek",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeToolCallIds: false }),
     );
   });
 

@@ -40,4 +40,28 @@ describe("sanitizeToolCallId", () => {
       expect(sanitizeToolCallId("", "strict9")).toMatch(/^[a-zA-Z0-9]{9}$/);
     });
   });
+
+  describe("anthropic mode (Claude tool_use.id pattern)", () => {
+    it("keeps underscores and hyphens", () => {
+      expect(sanitizeToolCallId("call_abc-123", "anthropic")).toBe("call_abc-123");
+      expect(sanitizeToolCallId("call_abc_def", "anthropic")).toBe("call_abc_def");
+    });
+    it("strips pipe and colon characters (Kimi-K2 ID format)", () => {
+      // Kimi-K2 generates IDs like: call_vgwbGBht9FiGQwYB1Qxq1qjD|fc_06ea39884e58
+      expect(sanitizeToolCallId("call_vgwbGBht|fc_06ea39", "anthropic")).toBe(
+        "call_vgwbGBhtfc_06ea39",
+      );
+      expect(sanitizeToolCallId("call_abc:item_456", "anthropic")).toBe("call_abcitem_456");
+    });
+    it("returns default for empty IDs", () => {
+      expect(sanitizeToolCallId("", "anthropic")).toBe("defaulttoolid");
+    });
+    it("matches Claude tool_use.id pattern ^[a-zA-Z0-9_-]+$", () => {
+      const testIds = ["call_abc-123", "toolu_01ABC", "tool-call_123_test", "call_vgwbGBht"];
+      for (const id of testIds) {
+        const sanitized = sanitizeToolCallId(id, "anthropic");
+        expect(sanitized).toMatch(/^[a-zA-Z0-9_-]+$/);
+      }
+    });
+  });
 });

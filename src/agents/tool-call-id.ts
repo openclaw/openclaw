@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createHash } from "node:crypto";
 
-export type ToolCallIdMode = "strict" | "strict9";
+export type ToolCallIdMode = "strict" | "strict9" | "anthropic";
 
 const STRICT9_LEN = 9;
 
@@ -10,6 +10,7 @@ const STRICT9_LEN = 9;
  *
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
+ * - "anthropic" mode: only [a-zA-Z0-9_-] (Claude tool_use.id pattern requirement)
  */
 export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
@@ -30,6 +31,13 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
     return shortHash("sanitized", STRICT9_LEN);
   }
 
+  if (mode === "anthropic") {
+    // Claude requires tool_use.id to match ^[a-zA-Z0-9_-]+$
+    // This is less strict than "strict" mode - allows underscores and hyphens
+    const anthropicSafe = id.replace(/[^a-zA-Z0-9_-]/g, "");
+    return anthropicSafe.length > 0 ? anthropicSafe : "sanitizedtoolid";
+  }
+
   // Some providers require strictly alphanumeric tool call IDs.
   const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
@@ -41,6 +49,10 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
   }
   if (mode === "strict9") {
     return /^[a-zA-Z0-9]{9}$/.test(id);
+  }
+  if (mode === "anthropic") {
+    // Claude requires tool_use.id to match ^[a-zA-Z0-9_-]+$
+    return /^[a-zA-Z0-9_-]+$/.test(id);
   }
   // Strictly alphanumeric for providers with tighter tool ID constraints
   return /^[a-zA-Z0-9]+$/.test(id);

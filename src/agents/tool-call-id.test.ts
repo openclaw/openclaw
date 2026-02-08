@@ -264,4 +264,80 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(r2.toolCallId).toBe(b.id);
     });
   });
+
+  describe("anthropic mode (Claude tool_use.id pattern)", () => {
+    it("preserves underscores and hyphens in tool call IDs", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_abc-123", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc-123",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      // Input is already valid, should be unchanged
+      expect(out).toBe(input);
+    });
+
+    it("strips pipe and colon characters from Kimi-K2 style IDs", () => {
+      // Kimi-K2 generates IDs like: call_vgwbGBht9FiGQwYB1Qxq1qjD|fc_06ea39884e58
+      const input = [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call_vgwbGBht|fc_06ea39", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_vgwbGBht|fc_06ea39",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      // Anthropic mode strips | but keeps _ and -
+      expect(toolCall.id).toBe("call_vgwbGBhtfc_06ea39");
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "anthropic")).toBe(true);
+
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result.toolCallId).toBe(toolCall.id);
+    });
+
+    it("handles OpenAI Codex style IDs with pipe separator", () => {
+      // Codex generates IDs like: call_vgwbGBht9FiGQwYB1Qxq1qjD|fc_06ea39884e58ce8501696cc853d0708191aedd41fa5859eb31
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_abc123|fc_def456", name: "exec", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc123|fc_def456",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      expect(toolCall.id).toBe("call_abc123fc_def456");
+      // Verify it matches Claude's pattern
+      expect(toolCall.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    });
+  });
 });
