@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "kokoro";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,19 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Kokoro-82M TTS configuration (local or self-hosted, fastest CUDA TTS). */
+  kokoro?: {
+    /** Explicitly enable Kokoro TTS. */
+    enabled?: boolean;
+    /** Base URL for Kokoro API (default: http://localhost:8102). */
+    baseUrl?: string;
+    /** Optional API key if your Kokoro instance requires auth. */
+    apiKey?: string;
+    /** Voice name (e.g., "af_bella", "af_sky", "am_adam"). Supports voice mixing with "+". */
+    voice?: string;
+    /** Speed multiplier (0.5-2.0, default 1.0). */
+    speed?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
