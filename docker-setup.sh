@@ -127,9 +127,10 @@ upsert_env() {
   local file="$1"
   shift
   local -a keys=("$@")
+  # Keep this Bash 3.2-compatible (macOS default): avoid associative arrays.
+  local -a seen_keys=()
   local tmp
   tmp="$(mktemp)"
-  declare -A seen=()
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -138,7 +139,17 @@ upsert_env() {
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
           printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen["$k"]=1
+          local already_seen=false
+          local seen_key
+          for seen_key in "${seen_keys[@]}"; do
+            if [[ "$seen_key" == "$k" ]]; then
+              already_seen=true
+              break
+            fi
+          done
+          if [[ "$already_seen" == false ]]; then
+            seen_keys+=("$k")
+          fi
           replaced=true
           break
         fi
@@ -150,8 +161,17 @@ upsert_env() {
   fi
 
   for k in "${keys[@]}"; do
-    if [[ -z "${seen[$k]:-}" ]]; then
+    local key_seen=false
+    local seen_key
+    for seen_key in "${seen_keys[@]}"; do
+      if [[ "$seen_key" == "$k" ]]; then
+        key_seen=true
+        break
+      fi
+    done
+    if [[ "$key_seen" == false ]]; then
       printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+      seen_keys+=("$k")
     fi
   done
 
