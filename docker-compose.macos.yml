@@ -1,0 +1,78 @@
+# OpenClaw Docker Compose for macOS
+# 
+# This compose file adds fixes for macOS permission issues and security hardening.
+# Build the image first: docker build -f Dockerfile.macos -t openclaw:macos .
+#
+# Usage:
+#   docker compose -f docker-compose.macos.yml up -d
+#
+# Prerequisites:
+#   - Set gateway.bind: "lan" in ~/.openclaw/openclaw.json (NOT "loopback")
+#   - Set OPENCLAW_GATEWAY_TOKEN in environment or .env file
+#   - Ensure $USER and $HOME are set (create .env file if running from CI/scripts):
+#     echo "USER=$(whoami)" >> .env
+#     echo "HOME=$HOME" >> .env
+
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:macos}
+    # Note: container_name omitted to allow multiple instances/profiles
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      # macOS username for /Users/<user> symlink
+      OPENCLAW_HOST_USER: ${USER}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      # Force lan binding (config may have loopback which won't work)
+      OPENCLAW_GATEWAY_BIND: lan
+      # Optional API keys
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      # Mount entire .openclaw directory (config + credentials + workspace)
+      - ${HOME}/.openclaw:/home/node/.openclaw:cached
+    ports:
+      # Dashboard/WebSocket
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      # Bridge (for providers)
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN      # needed for entrypoint permission fixes
+      - SETUID     # needed for gosu
+      - SETGID     # needed for gosu
+    tmpfs:
+      - /tmp:mode=1777,size=100m
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789"
+      ]
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-openclaw:macos}
+    # Note: container_name omitted to allow multiple instances
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      BROWSER: echo
+      OPENCLAW_HOST_USER: ${USER}
+    volumes:
+      - ${HOME}/.openclaw:/home/node/.openclaw:cached
+    stdin_open: true
+    tty: true
+    init: true
+    profiles:
+      - cli
+    entrypoint: ["node", "dist/index.js"]
