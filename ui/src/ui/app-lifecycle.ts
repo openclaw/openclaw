@@ -17,6 +17,7 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { initCodeBlockCopy } from "./markdown.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -52,6 +53,7 @@ export function handleConnected(host: LifecycleHost) {
 
 export function handleFirstUpdated(host: LifecycleHost) {
   observeTopbar(host as unknown as Parameters<typeof observeTopbar>[0]);
+  initCodeBlockCopy();
 }
 
 export function handleDisconnected(host: LifecycleHost) {

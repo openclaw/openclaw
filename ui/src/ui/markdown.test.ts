@@ -22,10 +22,23 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("https://example.com");
   });
 
-  it("renders fenced code blocks", () => {
+  it("renders fenced code blocks with copy button", () => {
     const html = toSanitizedMarkdownHtml(["```ts", "console.log(1)", "```"].join("\n"));
+    expect(html).toContain("code-block-wrapper");
+    expect(html).toContain("code-block-copy-btn");
     expect(html).toContain("<pre>");
     expect(html).toContain("<code");
     expect(html).toContain("console.log(1)");
+  });
+
+  it("includes language class in code element", () => {
+    const html = toSanitizedMarkdownHtml(["```javascript", "const x = 1;", "```"].join("\n"));
+    expect(html).toContain("language-javascript");
+  });
+
+  it("renders code blocks without language", () => {
+    const html = toSanitizedMarkdownHtml(["```", "plain code", "```"].join("\n"));
+    expect(html).toContain("code-block-wrapper");
+    expect(html).toContain("plain code");
   });
 });

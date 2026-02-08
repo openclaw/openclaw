@@ -62,16 +62,136 @@
   border-radius: 4px;
 }
 
-.chat-text :where(pre) {
+/* Code block wrapper with floating copy button (GitHub style) */
+.chat-text :where(.code-block-wrapper) {
+  position: relative;
+  margin: 0;
+  /* Ensure hover events catch the button */
+  isolation: isolate;
+}
+
+.chat-text :where(.code-block-wrapper + .code-block-wrapper) {
+  margin-top: 0.75em;
+}
+
+/* Floating Copy Button */
+.chat-text :where(.code-block-copy-btn) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(40, 44, 52, 0.6); /* Semi-transparent dark bg */
+  backdrop-filter: blur(4px);
+  color: var(--muted);
+
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.2s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+:root[data-theme="light"] .chat-text :where(.code-block-copy-btn) {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.chat-text :where(.code-block-wrapper:hover .code-block-copy-btn) {
+  opacity: 1;
+}
+
+.chat-text :where(.code-block-copy-btn:hover) {
+  background: rgba(60, 64, 72, 0.9);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+:root[data-theme="light"] .chat-text :where(.code-block-copy-btn:hover) {
+  background: #f0f0f0;
+  color: #000;
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+.chat-text :where(.code-block-copy-btn:focus-visible) {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Icons */
+.chat-text :where(.code-block-copy-icon),
+.chat-text :where(.code-block-check-icon) {
+  display: block;
+  /* Slightly larger icon for the button size */
+  width: 16px;
+  height: 16px;
+}
+
+.chat-text :where(.code-block-check-icon) {
+  display: none;
+}
+
+/* Copied State */
+.chat-text :where(.code-block-copy-btn[data-copied="1"]) {
+  opacity: 1;
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.chat-text :where(.code-block-copy-btn[data-copied="1"] .code-block-copy-icon) {
+  display: none;
+}
+
+.chat-text :where(.code-block-copy-btn[data-copied="1"] .code-block-check-icon) {
+  display: block;
+}
+
+/* Error State */
+.chat-text :where(.code-block-copy-btn[data-error="1"]) {
+  opacity: 1;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Pre block styling */
+.chat-text :where(.code-block-wrapper pre) {
   background: rgba(0, 0, 0, 0.15);
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 16px; /* More padding for cleaner look */
   overflow-x: auto;
+  margin: 0;
+}
+
+/* Light mode adjustments */
+:root[data-theme="light"] .chat-text :where(.code-block-wrapper pre) {
+  background: rgba(246, 248, 250, 1); /* GitHub light code bg */
+  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
+  font-family: var(--mono);
+  font-size: 13px; /* Slightly nicer code size */
+}
+
+/* Touch devices: always show copy button */
+@media (hover: none) {
+  .chat-text :where(.code-block-copy-btn) {
+    opacity: 1;
+  }
 }
 
 .chat-text :where(blockquote) {
@@ -109,11 +229,6 @@
 
 :root[data-theme="light"] .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-:root[data-theme="light"] .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
