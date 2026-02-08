@@ -5,10 +5,14 @@ struct MeetingSettings: View {
     @Bindable private var store = MeetingStore.shared
     @State private var selectedMeetingId: UUID?
     @State private var selectedMeeting: StoredMeeting?
+    @AppStorage("meetingGoogleDriveSyncEnabled") private var syncEnabled = false
+    @AppStorage("meetingGoogleDriveFolderId") private var driveFolderId = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             self.togglesSection
+            Divider()
+            self.syncSection
             Divider()
             self.meetingListSection
         }
@@ -68,6 +72,51 @@ struct MeetingSettings: View {
         }
     }
 
+    // MARK: - Google Drive Sync
+
+    @ViewBuilder
+    private var syncSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Google Drive Sync")
+                .font(.headline)
+
+            if self.store.gogAvailable {
+                Toggle(isOn: self.$syncEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sync meetings to Google Drive")
+                        Text("Automatically upload meeting notes after saving.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if self.syncEnabled {
+                    HStack(spacing: 8) {
+                        Text("Drive Folder ID:")
+                            .font(.callout)
+                        TextField("e.g. 1ABC...xyz", text: self.$driveFolderId)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 300)
+                    }
+                }
+            } else {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("gog CLI not found")
+                            .font(.callout)
+                        Text("Install with: brew install steipete/tap/gogcli")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                }
+            }
+        }
+    }
+
     // MARK: - Meeting list
 
     @ViewBuilder
@@ -102,25 +151,35 @@ struct MeetingSettings: View {
 
     private var meetingsList: some View {
         List(self.store.summaries, selection: self.$selectedMeetingId) { summary in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(summary.title)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    Text(summary.formattedDate)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(summary.formattedDuration)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(summary.segmentCount) segments")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+            HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(summary.title)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        Text(summary.formattedDate)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(summary.formattedDuration)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(summary.segmentCount) segments")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
+
+                self.syncStatusIcon(for: summary.id)
             }
             .padding(.vertical, 4)
             .contextMenu {
+                if self.store.gogAvailable, self.syncEnabled {
+                    Button("Sync to Google Drive") {
+                        self.store.retrySyncToGoogleDrive(id: summary.id)
+                    }
+                    Divider()
+                }
                 Button("Delete", role: .destructive) {
                     self.store.delete(id: summary.id)
                     if self.selectedMeetingId == summary.id {
@@ -136,6 +195,25 @@ struct MeetingSettings: View {
                 self.selectedMeeting = self.store.load(id: newId)
             } else {
                 self.selectedMeeting = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func syncStatusIcon(for meetingId: UUID) -> some View {
+        if let status = self.store.syncStatuses[meetingId] {
+            switch status {
+            case .syncing:
+                ProgressView()
+                    .controlSize(.small)
+            case .synced:
+                Image(systemName: "checkmark.icloud.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            case .failed:
+                Image(systemName: "exclamationmark.icloud.fill")
+                    .foregroundStyle(.red)
+                    .font(.caption)
             }
         }
     }
