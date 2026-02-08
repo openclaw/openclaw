@@ -87,7 +87,8 @@ import {
 } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { shouldUseImagePreAnalysis, analyzeImagesWithImageModel } from "./image-pre-analysis.js";
+import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -817,7 +818,65 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            const mainModelSupportsImages = modelSupportsImages(params.model);
+            const usePreAnalysis = shouldUseImagePreAnalysis({ config: params.config });
+
+            if (usePreAnalysis) {
+              // Pre-analyze images with imageModel, then pass text analysis to main model
+              log.debug(`Image pre-analysis: using configured imageModel for image analysis`);
+              try {
+                const preAnalysis = await analyzeImagesWithImageModel({
+                  images: imageResult.images,
+                  config: params.config,
+                  agentDir: params.agentDir ?? "",
+                  userPrompt: effectivePrompt,
+                });
+                if (preAnalysis.analysisText) {
+                  log.debug(
+                    `Image pre-analysis: analyzed ${preAnalysis.imageCount} image(s) with ${preAnalysis.provider}/${preAnalysis.model}`,
+                  );
+                  const promptWithAnalysis = effectivePrompt + preAnalysis.analysisText;
+                  await abortable(activeSession.prompt(promptWithAnalysis));
+                } else {
+                  // No analysis produced, fall back to main model with images if supported
+                  if (mainModelSupportsImages) {
+                    log.debug(
+                      `Image pre-analysis: no analysis, falling back to main model with images`,
+                    );
+                    await abortable(
+                      activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                    );
+                  } else {
+                    await abortable(activeSession.prompt(effectivePrompt));
+                  }
+                }
+              } catch (preAnalysisErr) {
+                log.warn(
+                  `Image pre-analysis failed: ${preAnalysisErr instanceof Error ? preAnalysisErr.message : String(preAnalysisErr)}`,
+                );
+                // Fall back to main model with images if supported
+                if (mainModelSupportsImages) {
+                  log.debug(`Image pre-analysis: failed, falling back to main model with images`);
+                  await abortable(
+                    activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(effectivePrompt));
+                }
+              }
+            } else {
+              // No imageModel configured, use main model directly
+              if (mainModelSupportsImages) {
+                await abortable(
+                  activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                );
+              } else {
+                log.debug(
+                  `Image pre-analysis: no imageModel configured and main model doesn't support images, ignoring images`,
+                );
+                await abortable(activeSession.prompt(effectivePrompt));
+              }
+            }
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
