@@ -14,6 +14,8 @@ const {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  resolveReserveTokens,
+  DEFAULT_RESERVE_TOKENS,
 } = __testing;
 
 describe("compaction-safeguard tool failures", () => {
@@ -209,6 +211,20 @@ describe("isOversizedForSummary", () => {
     const isOversized = isOversizedForSummary(msg, CONTEXT_WINDOW);
     // Due to token estimation, this could be either true or false at the boundary
     expect(typeof isOversized).toBe("boolean");
+  });
+});
+
+describe("resolveReserveTokens", () => {
+  it("falls back to default when reserveTokens is undefined", () => {
+    expect(resolveReserveTokens({})).toBe(DEFAULT_RESERVE_TOKENS);
+  });
+
+  it("prefers reserveTokens when valid", () => {
+    expect(resolveReserveTokens({ reserveTokens: 1234 })).toBe(1234);
+  });
+
+  it("uses reserveTokensFloor when reserveTokens is invalid", () => {
+    expect(resolveReserveTokens({ reserveTokens: undefined, reserveTokensFloor: 2048 })).toBe(2048);
   });
 });
 
