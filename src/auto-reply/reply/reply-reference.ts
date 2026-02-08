@@ -29,23 +29,21 @@ export function createReplyReferencePlanner(options: {
     if (!allowReference) {
       return undefined;
     }
-    if (existingId) {
-      hasReplied = true;
-      return existingId;
-    }
-    if (!startId) {
+    if (options.replyToMode === "off") {
       return undefined;
     }
-    if (options.replyToMode === "off") {
+    const id = existingId ?? startId;
+    if (!id) {
       return undefined;
     }
     if (options.replyToMode === "all") {
       hasReplied = true;
-      return startId;
+      return id;
     }
+    // "first": only the first reply gets a reference.
     if (!hasReplied) {
       hasReplied = true;
-      return startId;
+      return id;
     }
     return undefined;
   };

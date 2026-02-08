@@ -74,7 +74,7 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
     expect(plan.replyReference.use()).toBeUndefined();
   });
 
-  it("always uses existingId when inside a thread", () => {
+  it("respects replyToMode off even inside a thread", () => {
     const plan = resolveDiscordReplyDeliveryPlan({
       replyTarget: "channel:thread",
       replyToMode: "off",
@@ -82,7 +82,33 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
       threadChannel: { id: "thread" },
       createdThreadId: null,
     });
+    expect(plan.replyReference.use()).toBeUndefined();
+  });
+
+  it("uses existingId when inside a thread with replyToMode all", () => {
+    const plan = resolveDiscordReplyDeliveryPlan({
+      replyTarget: "channel:thread",
+      replyToMode: "all",
+      messageId: "m1",
+      threadChannel: { id: "thread" },
+      createdThreadId: null,
+    });
+    // "all" returns the reference on every call.
     expect(plan.replyReference.use()).toBe("m1");
+    expect(plan.replyReference.use()).toBe("m1");
+  });
+
+  it("uses existingId only on first call with replyToMode first inside a thread", () => {
+    const plan = resolveDiscordReplyDeliveryPlan({
+      replyTarget: "channel:thread",
+      replyToMode: "first",
+      messageId: "m1",
+      threadChannel: { id: "thread" },
+      createdThreadId: null,
+    });
+    // "first" returns the reference only once.
+    expect(plan.replyReference.use()).toBe("m1");
+    expect(plan.replyReference.use()).toBeUndefined();
   });
 });
 
