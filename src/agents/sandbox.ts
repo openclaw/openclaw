@@ -1,7 +1,9 @@
 export {
+  resolveSandboxBackend,
   resolveSandboxBrowserConfig,
   resolveSandboxConfigForAgent,
   resolveSandboxDockerConfig,
+  resolveSandboxMicrovmConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
 } from "./sandbox/config.js";
@@ -13,6 +15,11 @@ export {
 export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 
 export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export {
+  buildSandboxExecArgs,
+  execDockerSandbox,
+  isDockerSandboxAvailable,
+} from "./sandbox/docker-sandboxes.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -29,11 +36,13 @@ export {
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 
 export type {
+  SandboxBackend,
   SandboxBrowserConfig,
   SandboxBrowserContext,
   SandboxConfig,
   SandboxContext,
   SandboxDockerConfig,
+  SandboxMicrovmConfig,
   SandboxPruneConfig,
   SandboxScope,
   SandboxToolPolicy,

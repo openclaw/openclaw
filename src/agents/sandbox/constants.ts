@@ -7,6 +7,8 @@ export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(os.homedir(), ".openclaw
 
 export const DEFAULT_SANDBOX_IMAGE = "openclaw-sandbox:bookworm-slim";
 export const DEFAULT_SANDBOX_CONTAINER_PREFIX = "openclaw-sbx-";
+export const DEFAULT_SANDBOX_MICROVM_PREFIX = "openclaw-vm-";
+export const DEFAULT_SANDBOX_MICROVM_TEMPLATE = "docker-sandbox-default";
 export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;

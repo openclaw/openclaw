@@ -41,6 +41,7 @@ import {
 } from "./bash-process-registry.js";
 import {
   buildDockerExecArgs,
+  buildDockerSandboxExecArgs,
   buildSandboxEnv,
   chunkString,
   clampNumber,
@@ -441,17 +442,30 @@ async function runExecProcess(opts: {
   let stdin: SessionStdin | undefined;
 
   if (opts.sandbox) {
+    const isMicrovm = opts.sandbox.backend === "microvm";
+    const execArgv = isMicrovm
+      ? [
+          "docker",
+          ...buildDockerSandboxExecArgs({
+            sandboxName: opts.sandbox.containerName,
+            command: opts.command,
+            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+            env: opts.env,
+            tty: opts.usePty,
+          }),
+        ]
+      : [
+          "docker",
+          ...buildDockerExecArgs({
+            containerName: opts.sandbox.containerName,
+            command: opts.command,
+            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+            env: opts.env,
+            tty: opts.usePty,
+          }),
+        ];
     const { child: spawned } = await spawnWithFallback({
-      argv: [
-        "docker",
-        ...buildDockerExecArgs({
-          containerName: opts.sandbox.containerName,
-          command: opts.command,
-          workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-          env: opts.env,
-          tty: opts.usePty,
-        }),
-      ],
+      argv: execArgv,
       options: {
         cwd: opts.workdir,
         env: process.env,

@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
+  SandboxBackend,
   SandboxBrowserConfig,
   SandboxConfig,
   SandboxDockerConfig,
+  SandboxMicrovmConfig,
   SandboxPruneConfig,
   SandboxScope,
 } from "./types.js";
@@ -18,6 +20,7 @@ import {
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
+  DEFAULT_SANDBOX_MICROVM_PREFIX,
   DEFAULT_SANDBOX_WORKDIR,
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
@@ -110,6 +113,34 @@ export function resolveSandboxBrowserConfig(params: {
   };
 }
 
+export function resolveSandboxBackend(params: {
+  agentBackend?: SandboxBackend;
+  globalBackend?: SandboxBackend;
+}): SandboxBackend {
+  return params.agentBackend ?? params.globalBackend ?? "container";
+}
+
+export function resolveSandboxMicrovmConfig(params: {
+  scope: SandboxScope;
+  globalMicrovm?: Partial<SandboxMicrovmConfig>;
+  agentMicrovm?: Partial<SandboxMicrovmConfig>;
+}): SandboxMicrovmConfig {
+  const agentMicrovm = params.scope === "shared" ? undefined : params.agentMicrovm;
+  const globalMicrovm = params.globalMicrovm;
+
+  const env = agentMicrovm?.env
+    ? { ...globalMicrovm?.env, ...agentMicrovm.env }
+    : (globalMicrovm?.env ?? {});
+
+  return {
+    sandboxPrefix:
+      agentMicrovm?.sandboxPrefix ?? globalMicrovm?.sandboxPrefix ?? DEFAULT_SANDBOX_MICROVM_PREFIX,
+    template: agentMicrovm?.template ?? globalMicrovm?.template,
+    env: Object.keys(env).length > 0 ? env : undefined,
+    setupCommand: agentMicrovm?.setupCommand ?? globalMicrovm?.setupCommand,
+  };
+}
+
 export function resolveSandboxPruneConfig(params: {
   scope: SandboxScope;
   globalPrune?: Partial<SandboxPruneConfig>;
@@ -141,11 +172,17 @@ export function resolveSandboxConfigForAgent(
     perSession: agentSandbox?.perSession ?? agent?.perSession,
   });
 
+  const backend = resolveSandboxBackend({
+    agentBackend: agentSandbox?.backend,
+    globalBackend: agent?.backend,
+  });
+
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     scope,
+    backend,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
@@ -153,6 +190,11 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+    }),
+    microvm: resolveSandboxMicrovmConfig({
+      scope,
+      globalMicrovm: agent?.microvm,
+      agentMicrovm: agentSandbox?.microvm,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

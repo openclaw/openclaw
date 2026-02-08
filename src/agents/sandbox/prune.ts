@@ -2,6 +2,8 @@ import type { SandboxConfig } from "./types.js";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
+import { DEFAULT_SANDBOX_MICROVM_PREFIX } from "./constants.js";
+import { execDockerSandbox } from "./docker-sandboxes.js";
 import { dockerContainerState, execDocker } from "./docker.js";
 import {
   readBrowserRegistry,
@@ -28,9 +30,12 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
       (maxAgeDays > 0 && ageMs > maxAgeDays * 24 * 60 * 60 * 1000)
     ) {
       try {
-        await execDocker(["rm", "-f", entry.containerName], {
-          allowFailure: true,
-        });
+        const isMicrovm = entry.containerName.startsWith(DEFAULT_SANDBOX_MICROVM_PREFIX);
+        if (isMicrovm) {
+          await execDockerSandbox(["rm", entry.containerName], { allowFailure: true });
+        } else {
+          await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
+        }
       } catch {
         // ignore prune failures
       } finally {

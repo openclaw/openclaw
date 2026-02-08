@@ -4,6 +4,7 @@ import {
   MemorySearchSchema,
   SandboxBrowserSchema,
   SandboxDockerSchema,
+  SandboxMicrovmSchema,
   SandboxPruneSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
@@ -159,12 +160,14 @@ export const AgentDefaultsSchema = z
     sandbox: z
       .object({
         mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+        backend: z.union([z.literal("container"), z.literal("microvm")]).optional(),
         workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
         sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
         scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
         perSession: z.boolean().optional(),
         workspaceRoot: z.string().optional(),
         docker: SandboxDockerSchema,
+        microvm: SandboxMicrovmSchema,
         browser: SandboxBrowserSchema,
         prune: SandboxPruneSchema,
       })

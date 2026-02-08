@@ -12,6 +12,7 @@ export type SandboxRegistryEntry = {
   lastUsedAtMs: number;
   image: string;
   configHash?: string;
+  backend?: "container" | "microvm";
 };
 
 type SandboxRegistry = {
@@ -57,8 +58,9 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
   next.push({
     ...entry,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-    image: existing?.image ?? entry.image,
+    image: entry.backend === "microvm" ? entry.image : (existing?.image ?? entry.image),
     configHash: entry.configHash ?? existing?.configHash,
+    backend: entry.backend ?? existing?.backend,
   });
   await writeRegistry({ entries: next });
 }

@@ -8,6 +8,7 @@ import type {
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
+  SandboxMicrovmSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
 import type { MemorySearchConfig } from "./types.tools.js";
@@ -222,6 +223,8 @@ export type AgentDefaultsConfig = {
      * - "rw": mount the agent workspace read/write; enables write/edit tools
      */
     workspaceAccess?: "none" | "ro" | "rw";
+    /** Sandbox backend: "container" (default) or "microvm" (Docker Desktop 4.58+). */
+    backend?: "container" | "microvm";
     /**
      * Session tools visibility for sandboxed sessions.
      * - "spawned": only allow session tools to target sessions spawned from this session (default)
@@ -236,6 +239,8 @@ export type AgentDefaultsConfig = {
     workspaceRoot?: string;
     /** Docker-specific sandbox settings. */
     docker?: SandboxDockerSettings;
+    /** Docker Sandboxes (microVM) settings. Requires Docker Desktop 4.58+. */
+    microvm?: SandboxMicrovmSettings;
     /** Optional sandboxed browser settings. */
     browser?: SandboxBrowserSettings;
     /** Auto-prune sandbox containers. */

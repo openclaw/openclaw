@@ -8,6 +8,15 @@ type SandboxHashInput = {
   agentWorkspaceDir: string;
 };
 
+export type MicrovmHashInput = {
+  template?: string;
+  sandboxPrefix: string;
+  env?: Record<string, string>;
+  setupCommand?: string;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+};
+
 function isPrimitive(value: unknown): value is string | number | boolean | bigint | symbol | null {
   return value === null || (typeof value !== "object" && typeof value !== "function");
 }
@@ -58,6 +67,12 @@ function primitiveToString(value: unknown): string {
 }
 
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
+  const payload = normalizeForHash(input);
+  const raw = JSON.stringify(payload);
+  return crypto.createHash("sha1").update(raw).digest("hex");
+}
+
+export function computeMicrovmConfigHash(input: MicrovmHashInput): string {
   const payload = normalizeForHash(input);
   const raw = JSON.stringify(payload);
   return crypto.createHash("sha1").update(raw).digest("hex");

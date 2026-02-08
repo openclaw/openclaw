@@ -8,6 +8,7 @@ import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { ensureMicrovmSandbox } from "./docker-sandboxes.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
@@ -66,32 +67,52 @@ export async function resolveSandboxContext(params: {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
 
-  const containerName = await ensureSandboxContainer({
-    sessionKey: rawSessionKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    cfg,
-  });
+  let containerName: string;
+  if (cfg.backend === "microvm") {
+    containerName = await ensureMicrovmSandbox({
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      cfg,
+    });
+  } else {
+    containerName = await ensureSandboxContainer({
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      cfg,
+    });
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
-  const browser = await ensureSandboxBrowser({
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    cfg,
-    evaluateEnabled,
-  });
+  // Browser sandboxing is only supported with container backend.
+  let browser: Awaited<ReturnType<typeof ensureSandboxBrowser>> | null = null;
+  if (cfg.backend === "container") {
+    browser = await ensureSandboxBrowser({
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      cfg,
+      evaluateEnabled,
+    });
+  } else if (cfg.browser.enabled) {
+    defaultRuntime.log(
+      `Sandbox browser is enabled but backend is "${cfg.backend}"; browser sandboxing requires backend: "container".`,
+    );
+  }
 
   return {
     enabled: true,
+    backend: cfg.backend,
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     workspaceAccess: cfg.workspaceAccess,
     containerName,
-    containerWorkdir: cfg.docker.workdir,
+    containerWorkdir: cfg.backend === "microvm" ? workspaceDir : cfg.docker.workdir,
     docker: cfg.docker,
+    microvm: cfg.backend === "microvm" ? cfg.microvm : undefined,
     tools: cfg.tools,
     browserAllowHostControl: cfg.browser.allowHostControl,
     browser: browser ?? undefined,
@@ -150,6 +171,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
 
   return {
     workspaceDir,
-    containerWorkdir: cfg.docker.workdir,
+    containerWorkdir: cfg.backend === "microvm" ? workspaceDir : cfg.docker.workdir,
   };
 }

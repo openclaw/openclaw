@@ -44,6 +44,21 @@ export type SandboxDockerSettings = {
   binds?: string[];
 };
 
+export type SandboxMicrovmSettings = {
+  /** Prefix for sandbox VM names. */
+  sandboxPrefix?: string;
+  /** Custom template image for the microVM (e.g. "python:3-alpine"). */
+  template?: string;
+  /** Extra environment variables passed via `docker sandbox exec -e`. */
+  env?: Record<string, string>;
+  /**
+   * Optional setup command run once after sandbox creation.
+   * Runs with full privileges inside the microVM (which has its own private
+   * Docker daemon), so it can install packages, start services, etc.
+   */
+  setupCommand?: string;
+};
+
 export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
