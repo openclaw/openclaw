@@ -71,6 +71,11 @@ export class GatewayBrowserClient {
   private connectSent = false;
   private connectTimer: number | null = null;
   private backoffMs = 800;
+  // Track last tick to detect silent stalls (Issue #6087)
+  private lastTick: number | null = null;
+  private tickIntervalMs = 30_000;
+  private tickTimer: number | null = null;
+  private visibilityHandler: (() => void) | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -81,6 +86,8 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    this.stopTickWatch();
+    this.removeVisibilityHandler();
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("gateway client stopped"));
@@ -225,6 +232,14 @@ export class GatewayBrowserClient {
           });
         }
         this.backoffMs = 800;
+        // Initialize tick monitoring (Issue #6087)
+        this.tickIntervalMs =
+          typeof hello?.policy?.tickIntervalMs === "number"
+            ? hello.policy.tickIntervalMs
+            : 30_000;
+        this.lastTick = Date.now();
+        this.startTickWatch();
+        this.addVisibilityHandler();
         this.opts.onHello?.(hello);
       })
       .catch(() => {
@@ -261,6 +276,10 @@ export class GatewayBrowserClient {
           this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
         }
         this.lastSeq = seq;
+      }
+      // Update lastTick on tick events (Issue #6087)
+      if (evt.event === "tick") {
+        this.lastTick = Date.now();
       }
       try {
         this.opts.onEvent?.(evt);
@@ -308,5 +327,59 @@ export class GatewayBrowserClient {
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
     }, 750);
+  }
+
+  // Tick monitoring methods (Issue #6087)
+  private startTickWatch() {
+    this.stopTickWatch();
+    const interval = Math.max(this.tickIntervalMs, 1000);
+    this.tickTimer = window.setInterval(() => {
+      if (this.closed) {
+        return;
+      }
+      if (!this.lastTick) {
+        return;
+      }
+      const gap = Date.now() - this.lastTick;
+      if (gap > this.tickIntervalMs * 2) {
+        this.ws?.close(4000, "tick timeout");
+      }
+    }, interval);
+  }
+
+  private stopTickWatch() {
+    if (this.tickTimer !== null) {
+      window.clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+  }
+
+  // Visibility change handling (Issue #6087)
+  private addVisibilityHandler() {
+    this.removeVisibilityHandler();
+    this.visibilityHandler = () => this.handleVisibilityChange();
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+  }
+
+  private removeVisibilityHandler() {
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
+  }
+
+  private handleVisibilityChange() {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    // Tab became visible - check if connection is stale
+    if (!this.lastTick) {
+      return;
+    }
+    const gap = Date.now() - this.lastTick;
+    if (gap > this.tickIntervalMs * 2) {
+      // Connection is stale, force reconnect
+      this.ws?.close(4000, "tick timeout on visibility");
+    }
   }
 }
