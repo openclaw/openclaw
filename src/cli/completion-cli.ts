@@ -241,9 +241,26 @@ export function registerCompletionCli(program: Command) {
       "--write-state",
       "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
     )
+    .option("--no-cache", "Bypass cache and regenerate completion script")
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
-      const shell = options.shell ?? "zsh";
+      const shell: CompletionShell = options.shell ?? "zsh";
+      const binName = program.name();
+      const useCache = options.cache !== false;
+
+      // Fast path: if just outputting completion and cache exists, use it directly
+      // This avoids loading all subcommand modules (~4s startup time)
+      if (!options.writeState && !options.install && useCache) {
+        const cachePath = resolveCompletionCachePath(shell, binName);
+        if (await pathExists(cachePath)) {
+          const cached = await fs.readFile(cachePath, "utf-8");
+          console.log(cached);
+          return;
+        }
+        // Cache doesn't exist - fall through to generate and also write cache
+        // This auto-caches on first run so subsequent runs are fast
+      }
+
       // Eagerly register all subcommands to build the full tree
       const entries = getSubCliEntries();
       for (const entry of entries) {
@@ -259,13 +276,13 @@ export function registerCompletionCli(program: Command) {
         await writeCompletionCache({
           program,
           shells: writeShells,
-          binName: program.name(),
+          binName,
         });
       }
 
       if (options.install) {
         const targetShell = options.shell ?? resolveShellFromEnv();
-        await installCompletion(targetShell, Boolean(options.yes), program.name());
+        await installCompletion(targetShell, Boolean(options.yes), binName);
         return;
       }
 
@@ -274,9 +291,25 @@ export function registerCompletionCli(program: Command) {
       }
 
       if (!isCompletionShell(shell)) {
-        throw new Error(`Unsupported shell: ${shell}`);
+        throw new Error(`Unsupported shell: ${shell as string}`);
       }
       const script = getCompletionScript(shell, program);
+
+      // Auto-cache on first generation so subsequent runs are fast
+      // This happens silently in background after outputting the script
+      if (useCache && !options.writeState) {
+        const cachePath = resolveCompletionCachePath(shell, binName);
+        const cacheDir = resolveCompletionCacheDir();
+        void (async () => {
+          try {
+            await fs.mkdir(cacheDir, { recursive: true });
+            await fs.writeFile(cachePath, script, "utf-8");
+          } catch {
+            // Silently ignore cache write errors
+          }
+        })();
+      }
+
       console.log(script);
     });
 }
