@@ -35,7 +35,8 @@ vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
 }));
 
-const { startWebLoginWithQr, waitForWebLogin } = await import("./login-qr.js");
+const { startWebLoginWithQr, startWebLoginWithPairingCode, waitForWebLogin } =
+  await import("./login-qr.js");
 const { createWaSocket, waitForWaConnection, logoutWeb } = await import("./session.js");
 
 describe("login-qr", () => {
@@ -56,5 +57,73 @@ describe("login-qr", () => {
     expect(result.connected).toBe(true);
     expect(createWaSocket).toHaveBeenCalledTimes(2);
     expect(logoutWeb).not.toHaveBeenCalled();
+  });
+
+  describe("startWebLoginWithPairingCode", () => {
+    it("returns error for invalid phone number (too short)", async () => {
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "123" });
+      expect(result.pairingCode).toBeUndefined();
+      expect(result.message).toContain("Invalid phone number");
+    });
+
+    it("returns error for invalid phone number (too long)", async () => {
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "1234567890123456" });
+      expect(result.pairingCode).toBeUndefined();
+      expect(result.message).toContain("Invalid phone number");
+    });
+
+    it("strips non-numeric characters from phone number", async () => {
+      const mockRequestPairingCode = vi.fn().mockResolvedValue("123-456");
+      createWaSocket.mockResolvedValueOnce({
+        ws: { close: vi.fn() },
+        requestPairingCode: mockRequestPairingCode,
+      });
+      waitForWaConnection.mockReturnValueOnce(new Promise(() => {}));
+
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "+1 (415) 555-1234" });
+
+      expect(mockRequestPairingCode).toHaveBeenCalledWith("14155551234");
+      expect(result.pairingCode).toBe("123-456");
+    });
+
+    it("returns pairing code on success", async () => {
+      const mockRequestPairingCode = vi.fn().mockResolvedValue("ABC-123");
+      createWaSocket.mockResolvedValueOnce({
+        ws: { close: vi.fn() },
+        requestPairingCode: mockRequestPairingCode,
+      });
+      waitForWaConnection.mockReturnValueOnce(new Promise(() => {}));
+
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "14155551234" });
+
+      expect(result.pairingCode).toBe("ABC-123");
+      expect(result.message).toContain("ABC-123");
+    });
+
+    it("returns error when requestPairingCode is not available", async () => {
+      createWaSocket.mockResolvedValueOnce({
+        ws: { close: vi.fn() },
+      });
+      waitForWaConnection.mockReturnValueOnce(new Promise(() => {}));
+
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "14155551234" });
+
+      expect(result.pairingCode).toBeUndefined();
+      expect(result.message).toContain("not supported");
+    });
+
+    it("returns error when requestPairingCode throws", async () => {
+      const mockRequestPairingCode = vi.fn().mockRejectedValue(new Error("Network error"));
+      createWaSocket.mockResolvedValueOnce({
+        ws: { close: vi.fn() },
+        requestPairingCode: mockRequestPairingCode,
+      });
+      waitForWaConnection.mockReturnValueOnce(new Promise(() => {}));
+
+      const result = await startWebLoginWithPairingCode({ phoneNumber: "14155551234" });
+
+      expect(result.pairingCode).toBeUndefined();
+      expect(result.message).toContain("Failed to get pairing code");
+    });
   });
 });

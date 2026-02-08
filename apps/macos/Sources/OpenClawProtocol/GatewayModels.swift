@@ -1551,6 +1551,35 @@ public struct WebLoginStartParams: Codable, Sendable {
     }
 }
 
+public struct WebLoginPairingStartParams: Codable, Sendable {
+    public let phonenumber: String
+    public let force: Bool?
+    public let timeoutms: Int?
+    public let verbose: Bool?
+    public let accountid: String?
+
+    public init(
+        phonenumber: String,
+        force: Bool?,
+        timeoutms: Int?,
+        verbose: Bool?,
+        accountid: String?
+    ) {
+        self.phonenumber = phonenumber
+        self.force = force
+        self.timeoutms = timeoutms
+        self.verbose = verbose
+        self.accountid = accountid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case phonenumber = "phoneNumber"
+        case force
+        case timeoutms = "timeoutMs"
+        case verbose
+        case accountid = "accountId"
+    }
+}
+
 public struct WebLoginWaitParams: Codable, Sendable {
     public let timeoutms: Int?
     public let accountid: String?

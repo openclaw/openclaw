@@ -18,6 +18,8 @@ import {
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
+type LoginMethod = "qr" | "pairing";
+
 type ActiveLogin = {
   accountId: string;
   authDir: string;
@@ -25,8 +27,10 @@ type ActiveLogin = {
   id: string;
   sock: WaSocket;
   startedAt: number;
+  method: LoginMethod;
   qr?: string;
   qrDataUrl?: string;
+  pairingCode?: string;
   connected: boolean;
   error?: string;
   errorStatus?: number;
@@ -183,6 +187,7 @@ export async function startWebLoginWithQr(
     id: randomUUID(),
     sock,
     startedAt: Date.now(),
+    method: "qr",
     connected: false,
     waitPromise: Promise.resolve(),
     restartAttempted: false,
@@ -213,6 +218,98 @@ export async function startWebLoginWithQr(
   };
 }
 
+export async function startWebLoginWithPairingCode(opts: {
+  phoneNumber: string;
+  verbose?: boolean;
+  timeoutMs?: number;
+  force?: boolean;
+  accountId?: string;
+  runtime?: RuntimeEnv;
+}): Promise<{ pairingCode?: string; message: string }> {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const hasWeb = await webAuthExists(account.authDir);
+  const selfId = readWebSelfId(account.authDir);
+  if (hasWeb && !opts.force) {
+    const who = selfId.e164 ?? selfId.jid ?? "unknown";
+    return {
+      message: `WhatsApp is already linked (${who}). Use force=true to relink.`,
+    };
+  }
+
+  const phoneNumber = opts.phoneNumber.replace(/[^0-9]/g, "");
+  if (phoneNumber.length < 10 || phoneNumber.length > 15) {
+    return {
+      message: "Invalid phone number. Use international format without + (e.g., 14155551234).",
+    };
+  }
+
+  await resetActiveLogin(account.accountId);
+
+  let sock: WaSocket;
+  try {
+    sock = await createWaSocket(false, Boolean(opts.verbose), {
+      authDir: account.authDir,
+    });
+  } catch (err) {
+    await resetActiveLogin(account.accountId);
+    return {
+      message: `Failed to start WhatsApp login: ${String(err)}`,
+    };
+  }
+
+  const login: ActiveLogin = {
+    accountId: account.accountId,
+    authDir: account.authDir,
+    isLegacyAuthDir: account.isLegacyAuthDir,
+    id: randomUUID(),
+    sock,
+    startedAt: Date.now(),
+    method: "pairing",
+    connected: false,
+    waitPromise: Promise.resolve(),
+    restartAttempted: false,
+    verbose: Boolean(opts.verbose),
+  };
+  activeLogins.set(account.accountId, login);
+  attachLoginWaiter(account.accountId, login);
+
+  try {
+    if (typeof sock.requestPairingCode !== "function") {
+      await resetActiveLogin(account.accountId);
+      return {
+        message: "Pairing code authentication is not supported by this Baileys version.",
+      };
+    }
+
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    const pairingCodePromise = sock.requestPairingCode(phoneNumber);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error("Timed out waiting for pairing code")),
+        timeoutMs,
+      );
+    });
+
+    const pairingCode = await Promise.race([pairingCodePromise, timeoutPromise]).finally(() => {
+      clearTimeout(timeoutId);
+    });
+    login.pairingCode = pairingCode;
+    runtime.log(info(`WhatsApp pairing code received: ${pairingCode}`));
+    return {
+      pairingCode,
+      message: `Enter this code in WhatsApp → Linked Devices → Link with phone number: ${pairingCode}`,
+    };
+  } catch (err) {
+    await resetActiveLogin(account.accountId);
+    return {
+      message: `Failed to get pairing code: ${String(err)}`,
+    };
+  }
+}
+
 export async function waitForWebLogin(
   opts: { timeoutMs?: number; runtime?: RuntimeEnv; accountId?: string } = {},
 ): Promise<{ connected: boolean; message: string }> {
@@ -228,11 +325,22 @@ export async function waitForWebLogin(
   }
 
   const login = activeLogin;
+  const isPairingCode = login.method === "pairing";
+  const expiredMessage = isPairingCode
+    ? "The pairing code session expired. Request a new pairing code."
+    : "The login QR expired. Ask me to generate a new one.";
+  const waitingMessage = isPairingCode
+    ? "Still waiting for the pairing code to be entered. Let me know when done."
+    : "Still waiting for the QR scan. Let me know when you've scanned it.";
+  const loggedOutMessage = isPairingCode
+    ? "WhatsApp reported the session is logged out. Cleared cached web session; please request a new pairing code."
+    : "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
+
   if (!isLoginFresh(login)) {
     await resetActiveLogin(account.accountId);
     return {
       connected: false,
-      message: "The login QR expired. Ask me to generate a new one.",
+      message: expiredMessage,
     };
   }
   const timeoutMs = Math.max(opts.timeoutMs ?? 120_000, 1000);
@@ -243,7 +351,7 @@ export async function waitForWebLogin(
     if (remaining <= 0) {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: waitingMessage,
       };
     }
     const timeout = new Promise<"timeout">((resolve) =>
@@ -254,7 +362,7 @@ export async function waitForWebLogin(
     if (result === "timeout") {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: waitingMessage,
       };
     }
 
@@ -265,11 +373,9 @@ export async function waitForWebLogin(
           isLegacyAuthDir: login.isLegacyAuthDir,
           runtime,
         });
-        const message =
-          "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
-        await resetActiveLogin(account.accountId, message);
-        runtime.log(danger(message));
-        return { connected: false, message };
+        await resetActiveLogin(account.accountId, loggedOutMessage);
+        runtime.log(danger(loggedOutMessage));
+        return { connected: false, message: loggedOutMessage };
       }
       if (login.errorStatus === 515) {
         const restarted = await restartLoginSocket(login, runtime);
