@@ -305,5 +305,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
 
-  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig };
+  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig, template: snapshot.parsed };
 }
