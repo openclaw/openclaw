@@ -6,6 +6,7 @@ vi.mock("./run/attempt.js", () => ({
 
 vi.mock("./compact.js", () => ({
   compactEmbeddedPiSessionDirect: vi.fn(),
+  resolveCompactionAgentDir: vi.fn(() => "/tmp/agent-dir"),
 }));
 
 vi.mock("./model.js", () => ({
