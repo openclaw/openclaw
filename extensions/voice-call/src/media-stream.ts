@@ -89,7 +89,8 @@ export class MediaStreamHandler {
    */
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
-    const streamToken = this.getStreamToken(_request);
+    // Fallback: try URL query param (older setups). Primary source is customParameters in start message.
+    const urlToken = this.getStreamToken(_request);
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -100,9 +101,12 @@ export class MediaStreamHandler {
             console.log("[MediaStream] Twilio connected");
             break;
 
-          case "start":
+          case "start": {
+            // Prefer token from Twilio customParameters; fall back to URL query param.
+            const streamToken = message.start?.customParameters?.token ?? urlToken;
             session = await this.handleStart(ws, message, streamToken);
             break;
+          }
 
           case "media":
             if (session && message.media?.payload) {
@@ -393,6 +397,7 @@ interface TwilioMediaMessage {
     accountSid: string;
     callSid: string;
     tracks: string[];
+    customParameters?: Record<string, string>;
     mediaFormat: {
       encoding: string;
       sampleRate: number;
