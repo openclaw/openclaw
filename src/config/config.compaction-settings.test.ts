@@ -22,6 +22,7 @@ describe("config compaction settings", () => {
                     softThresholdTokens: 1234,
                     prompt: "Write notes.",
                     systemPrompt: "Flush memory now.",
+                    runDuringHeartbeats: true,
                   },
                 },
               },
@@ -43,6 +44,7 @@ describe("config compaction settings", () => {
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.runDuringHeartbeats).toBe(true);
     });
   });
 

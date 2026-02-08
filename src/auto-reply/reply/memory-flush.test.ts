@@ -113,6 +113,24 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(true);
   });
+
+  it("defaults runDuringHeartbeats to false", () => {
+    const settings = resolveMemoryFlushSettings();
+    expect(settings?.runDuringHeartbeats).toBe(false);
+  });
+
+  it("respects runDuringHeartbeats config", () => {
+    const settings = resolveMemoryFlushSettings({
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: { runDuringHeartbeats: true },
+          },
+        },
+      },
+    });
+    expect(settings?.runDuringHeartbeats).toBe(true);
+  });
 });
 
 describe("resolveMemoryFlushContextWindowTokens", () => {

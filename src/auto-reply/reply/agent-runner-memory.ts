@@ -61,7 +61,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldFlushMemory =
     memoryFlushSettings &&
     memoryFlushWritable &&
-    !params.isHeartbeat &&
+    (!params.isHeartbeat || memoryFlushSettings.runDuringHeartbeats) &&
     !isCliProvider(params.followupRun.run.provider, params.cfg) &&
     shouldRunMemoryFlush({
       entry:
