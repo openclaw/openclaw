@@ -1,0 +1,9 @@
+{
+  "id": "dailyflows",
+  "channels": ["dailyflows"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

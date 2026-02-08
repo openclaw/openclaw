@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/dailyflows",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dailyflows",
+      "label": "Dailyflows",
+      "selectionLabel": "Dailyflows (Chat API)",
+      "docsPath": "/channels/dailyflows",
+      "docsLabel": "dailyflows",
+      "blurb": "Dailyflows webhook channel.",
+      "order": 90,
+      "aliases": [
+        "dailyflow"
+      ]
+    },
+    "install": {
+      "localPath": "extensions/dailyflows",
+      "defaultChoice": "local"
+    }
+  }
+}
