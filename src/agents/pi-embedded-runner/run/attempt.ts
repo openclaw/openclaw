@@ -58,6 +58,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { ToolBlockedError } from "../../tool-blocked-error.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
@@ -475,6 +476,54 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      const hookRunner = getGlobalHookRunner();
+
+      // Hook injection: wrap tools to enforce before_tool_call policies
+      // Tool execute signature: (toolCallId, args, signal, onUpdate)
+      // oxlint-disable-next-line typescript/no-explicit-any -- tool types vary between AgentTool and ToolDefinition
+      const wrapToolForHooks = (tool: any) => {
+        // Guard: only wrap tools that have a callable execute function
+        if (typeof tool.execute !== "function") {
+          return;
+        }
+        const originalExecute = tool.execute;
+        // oxlint-disable-next-line typescript/no-explicit-any -- preserving original signature
+        tool.execute = async (toolCallId: any, args: any, signal?: any, onUpdate?: any) => {
+          if (hookRunner?.hasHooks("before_tool_call")) {
+            let hookResult;
+            try {
+              hookResult = await hookRunner.runBeforeToolCall(
+                { toolName: tool.name, params: args as Record<string, unknown> },
+                {
+                  agentId: sessionAgentId,
+                  sessionKey: params.sessionKey,
+                  toolName: tool.name,
+                },
+              );
+            } catch (err) {
+              // Hook execution failed - block for safety (fail-closed)
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log.warn(
+                `before_tool_call hook execution error for ${tool.name}, blocking: ${errMsg}`,
+              );
+              throw new ToolBlockedError(`Hook error (blocked for safety): ${errMsg}`);
+            }
+
+            // Block check happens OUTSIDE try/catch - cannot be accidentally swallowed
+            if (hookResult?.block) {
+              throw new ToolBlockedError(hookResult.blockReason || "Tool call blocked by policy");
+            }
+            if (hookResult?.params) {
+              args = hookResult.params;
+            }
+          }
+          return originalExecute.call(tool, toolCallId, args, signal, onUpdate);
+        };
+      };
+
+      builtInTools.forEach(wrapToolForHooks);
+      allCustomTools.forEach(wrapToolForHooks);
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -707,8 +756,7 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
-      const hookRunner = getGlobalHookRunner();
+      // Resolve agent ID for before_agent_start and agent_end hooks
       const hookAgentId =
         typeof params.agentId === "string" && params.agentId.trim()
           ? normalizeAgentId(params.agentId)
