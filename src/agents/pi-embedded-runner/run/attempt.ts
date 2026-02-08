@@ -727,6 +727,7 @@ export async function runEmbeddedAttempt(
           try {
             const hookResult = await hookRunner.runBeforeAgentStart(
               {
+                originalPrompt: params.prompt,
                 prompt: params.prompt,
                 messages: activeSession.messages,
               },
@@ -737,8 +738,14 @@ export async function runEmbeddedAttempt(
                 messageProvider: params.messageProvider ?? undefined,
               },
             );
+            if (hookResult?.systemPrompt) {
+              applySystemPromptOverrideToSession(activeSession, hookResult.systemPrompt);
+            }
+            if (hookResult?.promptOverride) {
+              effectivePrompt = hookResult.promptOverride;
+            }
             if (hookResult?.prependContext) {
-              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+              effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
               log.debug(
                 `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
               );

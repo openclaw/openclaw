@@ -310,6 +310,8 @@ export type PluginHookAgentContext = {
 
 // before_agent_start hook
 export type PluginHookBeforeAgentStartEvent = {
+  /** Original prompt from the user before any plugin overrides. */
+  originalPrompt?: string;
   prompt: string;
   messages?: unknown[];
 };
@@ -317,6 +319,11 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /**
+   * Optional override for the user prompt before the model call.
+   * Useful for safe truncation when context windows are exceeded.
+   */
+  promptOverride?: string;
 };
 
 // agent_end hook

@@ -184,18 +184,59 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
-      "before_agent_start",
-      event,
-      ctx,
-      (acc, next) => ({
-        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-        prependContext:
-          acc?.prependContext && next.prependContext
-            ? `${acc.prependContext}\n\n${next.prependContext}`
-            : (next.prependContext ?? acc?.prependContext),
-      }),
-    );
+    const hooks = getHooksForName(registry, "before_agent_start");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running before_agent_start (${hooks.length} handlers, sequential)`);
+
+    let result: PluginHookBeforeAgentStartResult | undefined;
+    const originalPrompt = event.originalPrompt ?? event.prompt;
+    let currentPrompt = event.prompt;
+
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (
+            event: unknown,
+            ctx: unknown,
+          ) => Promise<PluginHookBeforeAgentStartResult>
+        )(
+          {
+            ...event,
+            originalPrompt,
+            prompt: currentPrompt,
+          },
+          ctx,
+        );
+
+        if (handlerResult !== undefined && handlerResult !== null) {
+          const next = handlerResult;
+          if (next.promptOverride) {
+            currentPrompt = next.promptOverride;
+          }
+          result = {
+            systemPrompt: next.systemPrompt ?? result?.systemPrompt,
+            prependContext:
+              result?.prependContext && next.prependContext
+                ? `${result.prependContext}\n\n${next.prependContext}`
+                : (next.prependContext ?? result?.prependContext),
+            promptOverride:
+              currentPrompt !== originalPrompt ? currentPrompt : result?.promptOverride,
+          };
+        }
+      } catch (err) {
+        const msg = `[hooks] before_agent_start handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    return result;
   }
 
   /**
