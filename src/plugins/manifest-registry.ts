@@ -138,7 +138,7 @@ export function loadPluginManifestRegistry(params: {
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
-  const seenIds = new Set<string>();
+  const seenIds = new Map<string, string>();
 
   for (const candidate of candidates) {
     const manifestRes = loadPluginManifest(candidate.rootDir);
@@ -161,15 +161,19 @@ export function loadPluginManifestRegistry(params: {
       });
     }
 
-    if (seenIds.has(manifest.id)) {
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+    const previousRoot = seenIds.get(manifest.id);
+    if (previousRoot !== undefined) {
+      const currentRoot = fs.realpathSync(candidate.rootDir);
+      if (previousRoot !== currentRoot) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
-      seenIds.add(manifest.id);
+      seenIds.set(manifest.id, fs.realpathSync(candidate.rootDir));
     }
 
     const configSchema = manifest.configSchema;
