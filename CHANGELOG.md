@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents: scope error-specific rewrites in `sanitizeUserFacingText` behind `errorContext` flag to prevent false-positives on normal assistant replies. (#11649)
 - Cron: scheduler reliability (timer drift, restart catch-up, lock contention, stale running markers). (#10776) Thanks @tyler6204.
 - Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
 - Telegram: auto-inject DM topic threadId in message tool + subagent announce. (#7235) Thanks @Lukavyi.

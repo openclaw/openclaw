@@ -400,7 +400,7 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string): string {
+export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
   if (!text) {
     return text;
   }
@@ -410,36 +410,44 @@ export function sanitizeUserFacingText(text: string): string {
     return stripped;
   }
 
-  if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-    return (
-      "Message ordering conflict - please try again. " +
-      "If this persists, use /new to start a fresh session."
-    );
-  }
+  const isError = opts?.errorContext ?? false;
 
-  if (shouldRewriteContextOverflowText(trimmed)) {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try again with less input or a larger-context model."
-    );
-  }
-
-  if (isBillingErrorMessage(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
-  if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-    return formatRawAssistantErrorForUi(trimmed);
-  }
-
-  if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
+  // Error-specific rewrites — only applied when the caller knows the text
+  // originates from an error payload (stopReason === "error", HTTP error, etc.).
+  // Without this guard, normal assistant replies that mention billing/rate-limit
+  // keywords get false-positive replaced.  #11649
+  if (isError) {
+    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+      return (
+        "Message ordering conflict - please try again. " +
+        "If this persists, use /new to start a fresh session."
+      );
     }
-    if (isTimeoutErrorMessage(trimmed)) {
-      return "LLM request timed out.";
+
+    if (shouldRewriteContextOverflowText(trimmed)) {
+      return (
+        "Context overflow: prompt too large for the model. " +
+        "Try again with less input or a larger-context model."
+      );
     }
-    return formatRawAssistantErrorForUi(trimmed);
+
+    if (isBillingErrorMessage(trimmed)) {
+      return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
+    }
+
+    if (ERROR_PREFIX_RE.test(trimmed)) {
+      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      }
+      if (isTimeoutErrorMessage(trimmed)) {
+        return "LLM request timed out.";
+      }
+      return formatRawAssistantErrorForUi(trimmed);
+    }
   }
 
   return collapseConsecutiveDuplicateBlocks(stripped);
