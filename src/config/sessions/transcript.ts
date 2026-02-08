@@ -64,7 +64,7 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
-  await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true, mode: 0o700 });
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -72,7 +72,11 @@ async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    mode: 0o600,
+    encoding: "utf-8",
+  });
+  await fs.promises.chmod(params.sessionFile, 0o600);
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {

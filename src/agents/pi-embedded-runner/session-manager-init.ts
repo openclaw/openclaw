@@ -43,7 +43,8 @@ export async function prepareSessionManagerForRun(params: {
 
   if (params.hadSessionFile && header && !hasAssistant) {
     // Reset file so the first assistant flush includes header+user+assistant in order.
-    await fs.writeFile(params.sessionFile, "", "utf-8");
+    await fs.writeFile(params.sessionFile, "", { mode: 0o600, encoding: "utf-8" });
+    await fs.chmod(params.sessionFile, 0o600);
     sm.fileEntries = [header];
     sm.byId?.clear?.();
     sm.labelsById?.clear?.();
