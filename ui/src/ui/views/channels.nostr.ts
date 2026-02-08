@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
-import { formatAgo } from "../format.ts";
+import { formatRelativeTimestamp } from "../format.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
@@ -79,7 +79,7 @@ export function renderNostrCard(params: {
           </div>
           <div>
             <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+            <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
           </div>
           ${
             account.lastError
@@ -213,7 +213,7 @@ export function renderNostrCard(params: {
               </div>
               <div>
                 <span class="label">Last start</span>
-                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : "n/a"}</span>
+                <span>${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span>
               </div>
             </div>
           `

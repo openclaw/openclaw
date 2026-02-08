@@ -72,7 +72,7 @@ USER.md
 .serena/
 
 # Agent credentials and memory (NEVER COMMIT)
-memory/
+/memory/
 .agent/*.json
 !.agent/workflows/
 local/
