@@ -40,7 +40,7 @@ export async function verifyGroupMembership(params: {
   botId: number;
   allowFrom: NormalizedAllowFrom;
 }): Promise<MembershipResult> {
-  const { chatId, api, botId, allowFrom } = params;
+  const { chatId, api, botId: _botId, allowFrom } = params;
   const key = getChatKey(chatId);
 
   // Check cache
