@@ -340,6 +340,8 @@ export type ToolsConfig = {
       provider?: "brave" | "perplexity";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
+      /** Brave Search API base URL override (default: https://api.search.brave.com). Useful for self-hosted proxies like SearXNG adapters. */
+      baseUrl?: string;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */

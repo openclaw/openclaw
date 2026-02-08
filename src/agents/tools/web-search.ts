@@ -21,7 +21,8 @@ const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
+const BRAVE_SEARCH_PATH = "/res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -156,6 +157,20 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     return "brave";
   }
   return "brave";
+}
+
+function resolveBraveBaseUrl(search?: WebSearchConfig): string | undefined {
+  const raw =
+    search && typeof search === "object" && "baseUrl" in search ? search.baseUrl : undefined;
+  const fromConfig = typeof raw === "string" ? raw.trim() : "";
+  if (fromConfig) {
+    return fromConfig.replace(/\/+$/, "");
+  }
+  const fromEnv = (process.env.BRAVE_API_URL ?? "").trim();
+  if (fromEnv) {
+    return fromEnv.replace(/\/+$/, "");
+  }
+  return undefined;
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -361,6 +376,7 @@ async function runWebSearch(params: {
   search_lang?: string;
   ui_lang?: string;
   freshness?: string;
+  braveBaseUrl?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
@@ -401,7 +417,8 @@ async function runWebSearch(params: {
     throw new Error("Unsupported web search provider.");
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const braveBase = (params.braveBaseUrl || "").replace(/\/+$/, "") || DEFAULT_BRAVE_BASE_URL;
+  const url = new URL(`${braveBase}${BRAVE_SEARCH_PATH}`);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -524,6 +541,7 @@ export function createWebSearchTool(options?: {
         search_lang,
         ui_lang,
         freshness,
+        braveBaseUrl: resolveBraveBaseUrl(search),
         perplexityBaseUrl: resolvePerplexityBaseUrl(
           perplexityConfig,
           perplexityAuth?.source,
@@ -539,5 +557,6 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  resolveBraveBaseUrl,
   normalizeFreshness,
 } as const;
