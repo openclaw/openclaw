@@ -216,7 +216,42 @@ export class GatewayChatClient {
     const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
     return Array.isArray(res?.models) ? res.models : [];
   }
+
+  async getUsageCost(days = 1): Promise<UsageCostResult | null> {
+    try {
+      const res = await this.client.request<UsageCostResult>("usage.cost", { days });
+      return res ?? null;
+    } catch {
+      return null;
+    }
+  }
 }
+
+export type UsageCostDailyEntry = {
+  date: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  totalCost: number;
+  missingCostEntries: number;
+};
+
+export type UsageCostResult = {
+  updatedAt: number;
+  days: number;
+  daily: UsageCostDailyEntry[];
+  totals: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    totalCost: number;
+    missingCostEntries: number;
+  };
+};
 
 export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const config = loadConfig();
