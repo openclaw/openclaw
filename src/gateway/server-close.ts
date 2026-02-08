@@ -5,6 +5,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -37,6 +38,17 @@ export function createGatewayCloseHandler(params: {
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+
+    // Run gateway_stop plugin hook before shutting down.
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("gateway_stop")) {
+      try {
+        await hookRunner.runGatewayStop({ reason }, {});
+      } catch {
+        /* ignore hook errors during shutdown */
+      }
+    }
+
     if (params.bonjourStop) {
       try {
         await params.bonjourStop();

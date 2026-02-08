@@ -707,7 +707,7 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
+      // Get hook runner once for before_agent_start, agent_end, and session hooks
       const hookRunner = getGlobalHookRunner();
       const hookAgentId =
         typeof params.agentId === "string" && params.agentId.trim()
@@ -716,6 +716,23 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               config: params.config,
             }).sessionAgentId;
+
+      // Run session_start plugin hook (fire-and-forget).
+      if (hookRunner?.hasHooks("session_start")) {
+        void hookRunner
+          .runSessionStart(
+            {
+              sessionId: params.sessionId,
+            },
+            {
+              agentId: hookAgentId,
+              sessionId: params.sessionId,
+            },
+          )
+          .catch((err) => {
+            log.warn(`session_start hook failed: ${String(err)}`);
+          });
+      }
 
       let promptError: unknown = null;
       try {
@@ -916,6 +933,25 @@ export async function runEmbeddedAttempt(
         clientToolCall: clientToolCallDetected ?? undefined,
       };
     } finally {
+      // Run session_end plugin hook (fire-and-forget) before teardown.
+      const sessionEndHookRunner = getGlobalHookRunner();
+      if (sessionEndHookRunner?.hasHooks("session_end")) {
+        void sessionEndHookRunner
+          .runSessionEnd(
+            {
+              sessionId: params.sessionId,
+              messageCount: session?.messages?.length ?? 0,
+            },
+            {
+              agentId: sessionAgentId,
+              sessionId: params.sessionId,
+            },
+          )
+          .catch((err) => {
+            log.warn(`session_end hook failed: ${String(err)}`);
+          });
+      }
+
       // Always tear down the session (and release the lock) before we leave this attempt.
       sessionManager?.flushPendingToolResults?.();
       session?.dispose();

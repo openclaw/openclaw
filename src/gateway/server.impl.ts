@@ -551,6 +551,7 @@ export async function startGatewayServer(
     pluginRegistry,
     defaultWorkspaceDir,
     deps,
+    port,
     startChannels,
     log,
     logHooks,

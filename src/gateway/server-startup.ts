@@ -16,6 +16,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
@@ -28,6 +29,7 @@ export async function startGatewaySidecars(params: {
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
+  port?: number;
   startChannels: () => Promise<void>;
   log: { warn: (msg: string) => void };
   logHooks: {
@@ -154,6 +156,15 @@ export async function startGatewaySidecars(params: {
     setTimeout(() => {
       void scheduleRestartSentinelWake({ deps: params.deps });
     }, 750);
+  }
+
+  // Run gateway_start plugin hook (fire-and-forget).
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("gateway_start")) {
+    const gatewayPort = params.port ?? 18789;
+    void hookRunner.runGatewayStart({ port: gatewayPort }, { port: gatewayPort }).catch((err) => {
+      params.log.warn(`gateway_start hook failed: ${String(err)}`);
+    });
   }
 
   return { browserControl, pluginServices };

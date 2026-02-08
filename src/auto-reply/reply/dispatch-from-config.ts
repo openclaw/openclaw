@@ -353,6 +353,45 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      // Run message_sending plugin hook before delivering the final reply.
+      // Plugins can modify content or cancel the message entirely.
+      if (hookRunner?.hasHooks("message_sending") && reply.text) {
+        try {
+          const channelId = (
+            ctx.OriginatingChannel ??
+            ctx.Surface ??
+            ctx.Provider ??
+            ""
+          ).toLowerCase();
+          const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+          const sendingResult = await hookRunner.runMessageSending(
+            {
+              to: ctx.To ?? ctx.From ?? "",
+              content: reply.text,
+              metadata: {
+                sessionKey: ctx.SessionKey,
+                channel: channelId,
+                threadId: ctx.MessageThreadId,
+              },
+            },
+            {
+              channelId,
+              accountId: ctx.AccountId,
+              conversationId,
+            },
+          );
+          if (sendingResult?.cancel) {
+            logVerbose("dispatch-from-config: message_sending hook cancelled outgoing message");
+            continue;
+          }
+          if (sendingResult?.content) {
+            reply.text = sendingResult.content;
+          }
+        } catch (err) {
+          logVerbose(`dispatch-from-config: message_sending hook failed: ${String(err)}`);
+        }
+      }
+
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
         cfg,
