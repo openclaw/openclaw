@@ -114,4 +114,35 @@ describe("getMemorySearchManager caching", () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
   });
+
+  it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {
+    const retryAgentId = "retry-agent-close";
+    const cfg = {
+      memory: { backend: "qmd", qmd: {} },
+      agents: { list: [{ id: retryAgentId, default: true, workspace: "/tmp/workspace" }] },
+    } as const;
+
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+
+    const first = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    expect(first.manager).toBeTruthy();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+    await first.manager.search("hello");
+
+    const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    expect(second.manager).toBeTruthy();
+    if (!second.manager) {
+      throw new Error("manager missing");
+    }
+    expect(second.manager).not.toBe(first.manager);
+
+    await first.manager.close?.();
+
+    const third = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    expect(third.manager).toBe(second.manager);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
+  });
 });
