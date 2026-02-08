@@ -2,6 +2,7 @@ import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+import { extractMentions } from "../../whatsapp/mentions.js";
 
 export function createWebSendApi(params: {
   sock: {
@@ -26,6 +27,7 @@ export function createWebSendApi(params: {
             image: mediaBuffer,
             caption: text || undefined,
             mimetype: mediaType,
+            mentions: extractMentions(text),
           };
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
@@ -36,6 +38,7 @@ export function createWebSendApi(params: {
             caption: text || undefined,
             mimetype: mediaType,
             ...(gifPlayback ? { gifPlayback: true } : {}),
+            mentions: extractMentions(text),
           };
         } else {
           payload = {
@@ -43,10 +46,11 @@ export function createWebSendApi(params: {
             fileName: "file",
             caption: text || undefined,
             mimetype: mediaType,
+            mentions: extractMentions(text),
           };
         }
       } else {
-        payload = { text };
+        payload = { text, mentions: extractMentions(text) };
       }
       const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
