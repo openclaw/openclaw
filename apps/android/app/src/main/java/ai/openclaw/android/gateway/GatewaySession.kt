@@ -258,6 +258,7 @@ class GatewaySession(
             val nonce = awaitConnectNonce()
             sendConnect(nonce)
           } catch (err: Throwable) {
+            Log.w(loggerTag, "connect failed: ${err.message}")
             connectDeferred.completeExceptionally(err)
             closeQuietly()
           }
