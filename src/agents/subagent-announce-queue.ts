@@ -189,3 +189,5 @@ export function enqueueAnnounce(params: {
   scheduleAnnounceDrain(params.key);
   return true;
 }
+
+// TRACK 5: Prevent race condition with concurrent heartbeat
