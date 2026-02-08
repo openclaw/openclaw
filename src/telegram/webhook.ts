@@ -51,8 +51,15 @@ export async function startTelegramWebhook(opts: {
     startDiagnosticHeartbeat();
   }
 
+  let lastWebhookError: string | null = null;
+
   const server = createServer((req, res) => {
     if (req.url === healthPath) {
+      if (lastWebhookError) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "unhealthy", error: lastWebhookError }));
+        return;
+      }
       res.writeHead(200);
       res.end("ok");
       return;
@@ -70,6 +77,7 @@ export async function startTelegramWebhook(opts: {
     if (handled && typeof handled.catch === "function") {
       void handled
         .then(() => {
+          lastWebhookError = null;
           if (diagnosticsEnabled) {
             logWebhookProcessed({
               channel: "telegram",
@@ -80,6 +88,7 @@ export async function startTelegramWebhook(opts: {
         })
         .catch((err) => {
           const errMsg = formatErrorMessage(err);
+          lastWebhookError = errMsg;
           if (diagnosticsEnabled) {
             logWebhookError({
               channel: "telegram",
