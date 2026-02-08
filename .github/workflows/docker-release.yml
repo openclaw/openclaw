@@ -140,7 +140,73 @@ jobs:
           provenance: false
           push: true
 
-  # Create multi-platform manifest
+  # Build riscv64 image (QEMU-emulated, non-blocking)
+  build-riscv64:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 120
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: riscv64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags (riscv64)
+        id: tags
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          tags=()
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            tags+=("${IMAGE}:main-riscv64")
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            tags+=("${IMAGE}:${version}-riscv64")
+          fi
+          if [[ ${#tags[@]} -eq 0 ]]; then
+            echo "::error::No riscv64 tags resolved for ref ${GITHUB_REF}"
+            exit 1
+          fi
+          {
+            echo "value<<EOF"
+            printf "%s\n" "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push riscv64 image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/riscv64
+          tags: ${{ steps.tags.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          push: true
+
+  # Create multi-platform manifest (amd64 + arm64)
   create-manifest:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
@@ -196,3 +262,59 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             ${{ needs.build-amd64.outputs.image-digest }} \
             ${{ needs.build-arm64.outputs.image-digest }}
+
+  # Update manifest to include riscv64 when available
+  update-manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    needs: [build-amd64, build-arm64, build-riscv64, create-manifest]
+    if: needs.build-riscv64.outputs.image-digest != ''
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve manifest tags
+        id: tags
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          tags=()
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            tags+=("${IMAGE}:main")
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            tags+=("${IMAGE}:${version}")
+          fi
+          if [[ ${#tags[@]} -eq 0 ]]; then
+            echo "::error::No manifest tags resolved for ref ${GITHUB_REF}"
+            exit 1
+          fi
+          {
+            echo "value<<EOF"
+            printf "%s\n" "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest with riscv64
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tags <<< "${{ steps.tags.outputs.value }}"
+          args=()
+          for tag in "${tags[@]}"; do
+            [ -z "$tag" ] && continue
+            args+=("-t" "$tag")
+          done
+          docker buildx imagetools create "${args[@]}" \
+            ${{ needs.build-amd64.outputs.image-digest }} \
+            ${{ needs.build-arm64.outputs.image-digest }} \
+            ${{ needs.build-riscv64.outputs.image-digest }}

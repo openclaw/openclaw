@@ -1,7 +1,10 @@
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
+# Install Bun where supported (no riscv64 binary exists yet)
+RUN mkdir -p /root/.bun/bin && \
+    if [ "$(dpkg --print-architecture)" != "riscv64" ]; then \
+      curl -fsSL https://bun.sh/install | bash; \
+    fi
 ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
