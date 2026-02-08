@@ -42,6 +42,11 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    // Limit restart attempts: max 5 restarts within 5 minutes.
+    // Prevents infinite crash-loops on persistent errors (e.g., invalid config).
+    // After hitting the limit, manual intervention is required.
+    "StartLimitIntervalSec=300",
+    "StartLimitBurst=5",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
