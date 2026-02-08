@@ -10,6 +10,7 @@ export type ModelCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
+  supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
 };
 
