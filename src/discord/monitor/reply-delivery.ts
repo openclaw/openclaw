@@ -70,7 +70,8 @@ export async function deliverDiscordReply(params: {
       replyTo,
     });
     for (const extra of mediaList.slice(1)) {
-      await sendMessageDiscord(params.target, "", {
+      // Discord API requires non-empty content; use placeholder for additional media
+      await sendMessageDiscord(params.target, "📎", {
         token: params.token,
         rest: params.rest,
         mediaUrl: extra,

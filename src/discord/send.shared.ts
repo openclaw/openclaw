@@ -358,13 +358,14 @@ async function sendDiscordMedia(
   if (!chunks.length && text) {
     chunks.push(text);
   }
-  const caption = chunks[0] ?? "";
+  // Discord API requires non-empty content; files alone may cause 400 Bad Request
+  const caption = chunks[0]?.trim() || "📎";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
-          content: caption || undefined,
+          content: caption,
           message_reference: messageReference,
           ...(embeds?.length ? { embeds } : {}),
           files: [
