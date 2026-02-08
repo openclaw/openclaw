@@ -178,7 +178,7 @@ export function createSmartStatus(params: {
         timeoutMs,
       });
       if (status && !disposed) {
-        params.onUpdate(`*${status}*`);
+        params.onUpdate(status);
       }
     } catch (err) {
       log.warn(`smart-status: update failed: ${formatErrorMessage(err)}`);

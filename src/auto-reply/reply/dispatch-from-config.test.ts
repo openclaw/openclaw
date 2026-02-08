@@ -275,7 +275,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "*🔎 Web Search*" }),
+      expect.objectContaining({ text: "🔎 Web Search" }),
     );
   });
 

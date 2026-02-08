@@ -453,7 +453,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // This gives immediate feedback while the model is thinking.
   const quickAck = discordConfig?.quickAck;
   if (quickAck) {
-    const ackText = typeof quickAck === "string" ? quickAck : "*Processing your request...*";
+    const ackText = typeof quickAck === "string" ? quickAck : "Processing your request...";
     await deliverDiscordReply({
       replies: [{ text: ackText }],
       target: deliverTarget,
@@ -470,10 +470,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     });
   }
 
-  // Unified status message: a single Discord message that gets edited in-place for all
-  // interim feedback (tool status, progress timer, smart ack). Prevents message spam.
-  let statusMessageId: string | undefined;
-  let statusChannelId: string | undefined;
+  // Status messages: each update is sent as a new message so the user sees the
+  // full progression. The last status message is deleted when the final reply arrives.
+  let lastStatusMessageId: string | undefined;
+  let lastStatusChannelId: string | undefined;
   let statusLastText: string | undefined;
   let statusSending = false;
 
@@ -487,24 +487,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     statusLastText = text;
     statusSending = true;
     try {
-      if (statusMessageId && statusChannelId) {
-        await editMessageDiscord(
-          statusChannelId,
-          statusMessageId,
-          { content: text },
-          { rest: client.rest },
-        );
-      } else {
-        const result = await sendMessageDiscord(deliverTarget, text, {
-          token,
-          accountId,
-          rest: client.rest,
-        });
-        statusMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
-        statusChannelId = result.channelId;
-      }
+      const result = await sendMessageDiscord(deliverTarget, text, {
+        token,
+        accountId,
+        rest: client.rest,
+      });
+      lastStatusMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
+      lastStatusChannelId = result.channelId;
       // Reinforce typing after status message updates. Sending a new message
-      // clears Discord's typing indicator, and edits can cause brief drops.
+      // clears Discord's typing indicator.
       typingGuard.reinforce();
     } catch (err) {
       logVerbose(`discord: status message update failed: ${String(err)}`);
@@ -514,12 +505,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   };
 
   const deleteStatusMessage = () => {
-    if (statusMessageId && statusChannelId) {
-      deleteMessageDiscord(statusChannelId, statusMessageId, { rest: client.rest }).catch((err) => {
-        logVerbose(`discord: failed to delete status message: ${String(err)}`);
-      });
-      statusMessageId = undefined;
-      statusChannelId = undefined;
+    if (lastStatusMessageId && lastStatusChannelId) {
+      deleteMessageDiscord(lastStatusChannelId, lastStatusMessageId, { rest: client.rest }).catch(
+        (err) => {
+          logVerbose(`discord: failed to delete status message: ${String(err)}`);
+        },
+      );
+      lastStatusMessageId = undefined;
+      lastStatusChannelId = undefined;
     }
   };
 
@@ -685,8 +678,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       // (paragraph-by-paragraph) instead of waiting for the full response.
       disableBlockStreaming:
         typeof discordConfig?.blockStreaming === "boolean" ? !discordConfig.blockStreaming : false,
-      // Disable tool feedback as separate block replies; smart-status handles updates.
-      toolFeedback: false,
+      // Show tool calls as block replies so the user can see what the bot is doing.
+      toolFeedback: true,
       // Forward streaming events to smart-status for context-aware periodic updates.
       onStreamEvent: smartStatusFilter
         ? (event: import("../../auto-reply/types.js").AgentStreamEvent) => {

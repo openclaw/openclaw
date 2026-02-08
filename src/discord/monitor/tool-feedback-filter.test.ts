@@ -71,7 +71,7 @@ describe("createToolFeedbackFilter", () => {
     expect(promptArg).toContain("Read (x2)");
     expect(promptArg).toContain("Grep");
 
-    expect(onUpdate).toHaveBeenCalledWith("*Exploring the codebase...*");
+    expect(onUpdate).toHaveBeenCalledWith("Exploring the codebase...");
     filter.dispose();
   });
 
@@ -125,7 +125,7 @@ describe("createToolFeedbackFilter", () => {
     await vi.advanceTimersByTimeAsync(1100);
 
     expect(mockRunCommandWithTimeout).toHaveBeenCalledTimes(1);
-    expect(onUpdate).toHaveBeenCalledWith("*Running tests...*");
+    expect(onUpdate).toHaveBeenCalledWith("Running tests...");
     filter.dispose();
   });
 
@@ -285,7 +285,7 @@ describe("createToolFeedbackFilter", () => {
     await vi.advanceTimersByTimeAsync(1100);
 
     expect(mockRunCommandWithTimeout).toHaveBeenCalledTimes(2);
-    expect(onUpdate).toHaveBeenCalledWith("*Writing files...*");
+    expect(onUpdate).toHaveBeenCalledWith("Writing files...");
     filter.dispose();
   });
 
@@ -326,7 +326,7 @@ describe("createToolFeedbackFilter", () => {
     expect(promptArg).toContain("BACKLOG.md");
     // Verify user message context is in the prompt
     expect(promptArg).toContain("Read a random file");
-    expect(onUpdate).toHaveBeenCalledWith("*Reading the backlog file...*");
+    expect(onUpdate).toHaveBeenCalledWith("Reading the backlog file...");
     filter.dispose();
   });
 
@@ -391,7 +391,7 @@ describe("createToolFeedbackFilter", () => {
       (_: string, i: number, arr: string[]) => i > 0 && arr[i - 1] === "-p",
     );
     expect(promptArg).toContain("npm install");
-    expect(onUpdate).toHaveBeenCalledWith("*Running npm install...*");
+    expect(onUpdate).toHaveBeenCalledWith("Running npm install...");
     filter.dispose();
   });
 
@@ -444,7 +444,7 @@ describe("createToolFeedbackFilter", () => {
     filter.push({ toolName: "WebSearch", toolCallId: "call-1" });
     await vi.advanceTimersByTimeAsync(600);
 
-    expect(onUpdate).toHaveBeenCalledWith("*Searching the web...*");
+    expect(onUpdate).toHaveBeenCalledWith("Searching the web...");
     filter.dispose();
   });
 });

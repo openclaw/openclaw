@@ -213,7 +213,7 @@ export function createToolFeedbackFilter(params: {
       });
 
       if (status && !disposed) {
-        params.onUpdate(`*${status}*`);
+        params.onUpdate(status);
       }
     } catch (err) {
       log.warn(`tool-feedback-filter: flush failed: ${formatErrorMessage(err)}`);
