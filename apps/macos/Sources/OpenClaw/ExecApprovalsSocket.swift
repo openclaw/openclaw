@@ -243,32 +243,12 @@ enum ExecApprovalsPromptPresenter {
         stack.spacing = 8
         stack.alignment = .leading
 
-        let commandTitle = NSTextField(labelWithString: "Command")
-        commandTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
-        stack.addArrangedSubview(commandTitle)
-
-        let commandText = NSTextView()
-        commandText.isEditable = false
-        commandText.isSelectable = true
-        commandText.drawsBackground = true
-        commandText.backgroundColor = NSColor.textBackgroundColor
-        commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
-        commandText.textContainerInset = NSSize(width: 6, height: 6)
-        commandText.textContainer?.lineFragmentPadding = 0
-        commandText.textContainer?.widthTracksTextView = true
-        commandText.isHorizontallyResizable = false
-        commandText.isVerticallyResizable = false
-
-        let commandScroll = NSScrollView()
-        commandScroll.borderType = .lineBorder
-        commandScroll.hasVerticalScroller = false
-        commandScroll.hasHorizontalScroller = false
-        commandScroll.documentView = commandText
-        commandScroll.translatesAutoresizingMaskIntoConstraints = false
-        commandScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 440).isActive = true
-        commandScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        stack.addArrangedSubview(commandScroll)
+        let commandLabel = NSTextField(wrappingLabelWithString: request.command)
+        commandLabel.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        commandLabel.isSelectable = true
+        commandLabel.maximumNumberOfLines = 10
+        commandLabel.preferredMaxLayoutWidth = 420
+        stack.addArrangedSubview(commandLabel)
 
         let contextTitle = NSTextField(labelWithString: "Context")
         contextTitle.font = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -315,6 +295,11 @@ enum ExecApprovalsPromptPresenter {
         footer.textColor = NSColor.secondaryLabelColor
         footer.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         stack.addArrangedSubview(footer)
+
+        // NSAlert accessory views require explicit sizing to display
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(equalToConstant: 440).isActive = true
+        stack.setFrameSize(stack.fittingSize)
 
         return stack
     }
