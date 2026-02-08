@@ -77,7 +77,7 @@ async function main() {
     argValue(args, "--port") ??
     process.env.OPENCLAW_GATEWAY_PORT ??
     process.env.CLAWDBOT_GATEWAY_PORT ??
-    (typeof cfg.gateway?.port === "number" ? String(cfg.gateway.port) : "") ??
+    (typeof cfg.gateway?.port === "number" ? String(cfg.gateway.port) : undefined) ??
     "18789";
   const port = Number.parseInt(portRaw, 10);
   if (Number.isNaN(port) || port <= 0) {
