@@ -298,7 +298,12 @@ export type PluginHookName =
   | "session_start"
   | "session_end"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  // HTTP API hooks - scan direct API requests that bypass messaging platforms
+  | "http_request_received"
+  | "http_response_sending"
+  | "http_tool_invoke"
+  | "http_tool_result";
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -460,6 +465,145 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// ============================================================================
+// HTTP API Hooks - For direct API requests that bypass messaging platforms
+// ============================================================================
+
+// HTTP context shared across HTTP hooks
+export type PluginHookHttpContext = {
+  /** HTTP method (POST, GET, etc.) */
+  httpMethod: string;
+  /** HTTP path (e.g., /v1/chat/completions) */
+  httpPath: string;
+  /** Request headers (sensitive headers redacted) */
+  httpHeaders?: Record<string, string>;
+  /** Client IP address */
+  clientIp?: string;
+  /** Request ID for correlation */
+  requestId?: string;
+  /** Authenticated user/org context */
+  authContext?: {
+    userId?: string;
+    orgId?: string;
+    apiKeyId?: string;
+  };
+};
+
+// http_request_received hook - fires before processing HTTP API requests
+export type PluginHookHttpRequestReceivedEvent = {
+  /** Extracted user content from the request (messages, input, etc.) */
+  content: string;
+  /** Full request body (parsed JSON) */
+  requestBody: {
+    model?: string;
+    messages?: Array<{ role: string; content: unknown }>;
+    input?: unknown;
+    tools?: unknown[];
+    [key: string]: unknown;
+  };
+  /** Request metadata */
+  metadata?: {
+    model?: string;
+    messageCount?: number;
+    hasTools?: boolean;
+    hasImages?: boolean;
+  };
+};
+
+export type PluginHookHttpRequestReceivedResult = {
+  /** Block the request entirely */
+  block?: boolean;
+  /** Reason for blocking (logged, may be shown to client) */
+  blockReason?: string;
+  /** HTTP status code to return when blocked (default: 400) */
+  blockStatusCode?: number;
+  /** Modified content (if sanitization is needed) */
+  modifiedContent?: string;
+  /** Modified request body */
+  modifiedRequestBody?: Record<string, unknown>;
+};
+
+// http_response_sending hook - fires before sending HTTP API response
+export type PluginHookHttpResponseSendingEvent = {
+  /** Extracted assistant content from the response */
+  content: string;
+  /** Full response body */
+  responseBody: {
+    choices?: Array<{ message?: { content?: string }; delta?: { content?: string } }>;
+    output?: Array<{ content?: unknown }>;
+    [key: string]: unknown;
+  };
+  /** Original request body for context */
+  requestBody?: Record<string, unknown>;
+  /** Whether this is a streaming response chunk */
+  isStreaming?: boolean;
+  /** For streaming: whether this is the final chunk */
+  isFinalChunk?: boolean;
+};
+
+export type PluginHookHttpResponseSendingResult = {
+  /** Block the response (return error to client) */
+  block?: boolean;
+  /** Reason for blocking */
+  blockReason?: string;
+  /** HTTP status code for block response (default: 400) */
+  blockStatusCode?: number;
+  /** Modified content (for redaction) */
+  modifiedContent?: string;
+  /** Modified response body */
+  modifiedResponseBody?: Record<string, unknown>;
+};
+
+// http_tool_invoke hook - fires before /tools/invoke executes a tool
+export type PluginHookHttpToolInvokeEvent = {
+  /** Name of the tool being invoked */
+  toolName: string;
+  /** Tool parameters/arguments */
+  toolParams: Record<string, unknown>;
+  /** Stringified params for scanning */
+  content: string;
+};
+
+export type PluginHookHttpToolInvokeResult = {
+  /** Block the tool invocation */
+  block?: boolean;
+  /** Reason for blocking */
+  blockReason?: string;
+  /** HTTP status code for block response (default: 400) */
+  blockStatusCode?: number;
+  /** Modified parameters */
+  modifiedParams?: Record<string, unknown>;
+};
+
+// http_tool_result hook - fires after /tools/invoke returns
+export type PluginHookHttpToolResultEvent = {
+  /** Name of the tool that was invoked */
+  toolName: string;
+  /** Original tool parameters */
+  toolParams: Record<string, unknown>;
+  /** Tool execution result */
+  toolResult: unknown;
+  /** Stringified result for scanning */
+  content: string;
+  /** Execution duration in ms */
+  durationMs?: number;
+  /** Whether execution succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+};
+
+export type PluginHookHttpToolResultResult = {
+  /** Block the result from being returned */
+  block?: boolean;
+  /** Reason for blocking */
+  blockReason?: string;
+  /** HTTP status code for block response (default: 400) */
+  blockStatusCode?: number;
+  /** Modified result */
+  modifiedResult?: unknown;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_agent_start: (
@@ -515,6 +659,35 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  // HTTP API hooks
+  http_request_received: (
+    event: PluginHookHttpRequestReceivedEvent,
+    ctx: PluginHookHttpContext,
+  ) =>
+    | Promise<PluginHookHttpRequestReceivedResult | undefined>
+    | PluginHookHttpRequestReceivedResult
+    | undefined;
+  http_response_sending: (
+    event: PluginHookHttpResponseSendingEvent,
+    ctx: PluginHookHttpContext,
+  ) =>
+    | Promise<PluginHookHttpResponseSendingResult | undefined>
+    | PluginHookHttpResponseSendingResult
+    | undefined;
+  http_tool_invoke: (
+    event: PluginHookHttpToolInvokeEvent,
+    ctx: PluginHookHttpContext,
+  ) =>
+    | Promise<PluginHookHttpToolInvokeResult | undefined>
+    | PluginHookHttpToolInvokeResult
+    | undefined;
+  http_tool_result: (
+    event: PluginHookHttpToolResultEvent,
+    ctx: PluginHookHttpContext,
+  ) =>
+    | Promise<PluginHookHttpToolResultResult | undefined>
+    | PluginHookHttpToolResultResult
+    | undefined;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

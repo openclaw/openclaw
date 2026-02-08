@@ -3,6 +3,16 @@
  *
  * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
  *
+ * SECURITY NOTE: Streaming responses run http_response_sending hook at END-OF-STREAM.
+ * Content is accumulated during streaming and scanned when the stream completes.
+ * However, already-streamed content cannot be "unsent" - if the hook returns block=true,
+ * it is logged for audit purposes but the data has already reached the client.
+ *
+ * For real-time blocking of streaming responses, consider:
+ * 1. Disable streaming (stream: false) - full blocking/redaction supported
+ * 2. Use message_sending hook at the messaging layer
+ * 3. Accept audit-only mode for streaming (current behavior)
+ *
  * @see https://www.open-responses.com/
  */
 
@@ -11,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { PluginHookHttpContext } from "../plugins/types.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -33,6 +44,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -66,7 +78,14 @@ const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  } catch {
+    // Fallback for non-serializable data (bigint, circular refs)
+    res.write(
+      `data: ${JSON.stringify({ type: event.type, error: "payload_not_serializable" })}\n\n`,
+    );
+  }
 }
 
 function extractTextContent(content: string | ContentPart[]): string {
@@ -125,6 +144,59 @@ function resolveResponsesLimits(
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   return (body.tools ?? []) as ClientToolDefinition[];
+}
+
+/**
+ * Extract all user-provided content from input for security scanning.
+ * Note: function_call_output (tool results) are excluded here to avoid false positives.
+ * Tool results should be scanned via the http_tool_result hook instead.
+ */
+function extractUserContentForScanning(input: string | ItemParam[]): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  const parts: string[] = [];
+  for (const item of input) {
+    if (item.type === "message") {
+      const content = extractTextContent(item.content).trim();
+      if (
+        content &&
+        (item.role === "user" || item.role === "system" || item.role === "developer")
+      ) {
+        parts.push(content);
+      }
+    }
+    // Note: function_call_output intentionally excluded - scan via http_tool_result hook
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Build HTTP context for hook invocation.
+ */
+function buildHttpContext(req: IncomingMessage, requestId: string): PluginHookHttpContext {
+  // Redact sensitive headers, normalize multi-value headers
+  const safeHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "authorization" || lowerKey === "cookie" || lowerKey === "x-api-key") {
+      safeHeaders[key] = "[REDACTED]";
+    } else if (typeof value === "string") {
+      safeHeaders[key] = value;
+    } else if (Array.isArray(value)) {
+      // Join multi-value headers (e.g., x-forwarded-for, set-cookie)
+      safeHeaders[key] = value.join(", ");
+    }
+  }
+
+  return {
+    httpMethod: req.method || "POST",
+    httpPath: "/v1/responses",
+    httpHeaders: safeHeaders,
+    clientIp: req.socket?.remoteAddress,
+    requestId,
+  };
 }
 
 function applyToolChoice(params: {
@@ -332,7 +404,13 @@ export async function handleOpenResponsesHttpRequest(
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    // Malformed URL - not our endpoint
+    return false;
+  }
   if (url.pathname !== "/v1/responses") {
     return false;
   }
@@ -380,6 +458,67 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
+  const responseId = `resp_${randomUUID()}`;
+
+  // ==========================================================================
+  // SECURITY: Run http_request_received hook before processing
+  // ==========================================================================
+  const hookRunner = getGlobalHookRunner();
+  // Build HTTP context once for use in both request and response hooks
+  const httpCtx = hookRunner ? buildHttpContext(req, responseId) : undefined;
+  if (hookRunner && httpCtx) {
+    const userContent = extractUserContentForScanning(payload.input);
+
+    try {
+      const hookResult = await hookRunner.runHttpRequestReceived(
+        {
+          content: userContent,
+          requestBody: payload as unknown as Record<string, unknown>,
+          metadata: {
+            model,
+            messageCount: Array.isArray(payload.input) ? payload.input.length : 1,
+            hasTools: Array.isArray(payload.tools) && payload.tools.length > 0,
+            hasImages: false,
+          },
+        },
+        httpCtx,
+      );
+
+      if (hookResult?.block) {
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: "security_block",
+            message: hookResult.blockReason || "Request blocked by security plugin",
+          },
+        });
+        sendJson(res, hookResult.blockStatusCode ?? 400, response);
+        return true;
+      }
+      // Replace request body if plugin sanitized it (full replacement, not merge)
+      if (hookResult?.modifiedRequestBody) {
+        // Clear existing keys and apply new ones to support key deletion
+        for (const key of Object.keys(payload)) {
+          delete (payload as Record<string, unknown>)[key];
+        }
+        Object.assign(payload, hookResult.modifiedRequestBody);
+      }
+    } catch (hookError) {
+      console.error("[openresponses-http] http_request_received hook error:", hookError);
+      const response = createResponseResource({
+        id: responseId,
+        model,
+        status: "failed",
+        output: [],
+        error: { code: "security_error", message: "Security check failed" },
+      });
+      sendJson(res, 500, response);
+      return true;
+    }
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
@@ -502,7 +641,6 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const streamParams =
@@ -563,13 +701,58 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const content =
+      let content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
           : "No response from OpenClaw.";
+
+      // ======================================================================
+      // SECURITY: Run http_response_sending hook before returning response
+      // ======================================================================
+      if (hookRunner && httpCtx) {
+        try {
+          const responseHook = await hookRunner.runHttpResponseSending(
+            {
+              content,
+              responseBody: { output: [{ content }] },
+              requestBody: payload as unknown as Record<string, unknown>,
+              isStreaming: false,
+            },
+            httpCtx,
+          );
+          if (responseHook?.block) {
+            const blocked = createResponseResource({
+              id: responseId,
+              model,
+              status: "failed",
+              output: [],
+              error: {
+                code: "security_block",
+                message: responseHook.blockReason || "Response blocked for security reasons",
+              },
+            });
+            sendJson(res, responseHook.blockStatusCode ?? 400, blocked);
+            return true;
+          }
+          if (responseHook?.modifiedContent) {
+            content = responseHook.modifiedContent;
+          }
+        } catch (hookError) {
+          console.error("[openresponses-http] http_response_sending hook error:", hookError);
+          const errResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "security_error", message: "Security check failed" },
+          });
+          sendJson(res, 500, errResponse);
+          return true;
+        }
+      }
 
       const response = createResponseResource({
         id: responseId,
@@ -596,7 +779,10 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Streaming mode
+  // Streaming mode - End-of-stream scanning for http_response_sending hook.
+  // Content is accumulated during streaming and scanned at completion.
+  // NOTE: Already-sent content cannot be "unsent" - blocking at end-of-stream
+  // logs for audit but cannot prevent already-streamed data from reaching client.
   // ─────────────────────────────────────────────────────────────────────────
 
   setSseHeaders(res);
@@ -622,6 +808,34 @@ export async function handleOpenResponsesHttpRequest(
 
     closed = true;
     unsubscribe();
+
+    // Run http_response_sending hook at end-of-stream for audit
+    if (hookRunner && httpCtx && accumulatedText) {
+      hookRunner
+        .runHttpResponseSending(
+          {
+            content: accumulatedText,
+            responseBody: {
+              output: [{ content: accumulatedText }],
+            },
+            requestBody: payload as unknown as Record<string, unknown>,
+            isStreaming: true,
+            isFinalChunk: true,
+          },
+          httpCtx,
+        )
+        .then((hookResult) => {
+          if (hookResult?.block) {
+            // Cannot unsend already-streamed content, but log for audit
+            console.warn(
+              `[openresponses-http] STREAMING AUDIT: Response would have been blocked: ${hookResult.blockReason || "security policy"}`,
+            );
+          }
+        })
+        .catch((err) => {
+          console.error("[openresponses-http] End-of-stream hook error:", err);
+        });
+    }
 
     writeSseEvent(res, {
       type: "response.output_text.done",

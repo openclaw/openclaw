@@ -19,6 +19,15 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookHttpContext,
+  PluginHookHttpRequestReceivedEvent,
+  PluginHookHttpRequestReceivedResult,
+  PluginHookHttpResponseSendingEvent,
+  PluginHookHttpResponseSendingResult,
+  PluginHookHttpToolInvokeEvent,
+  PluginHookHttpToolInvokeResult,
+  PluginHookHttpToolResultEvent,
+  PluginHookHttpToolResultResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -61,6 +70,16 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  // HTTP API hooks
+  PluginHookHttpContext,
+  PluginHookHttpRequestReceivedEvent,
+  PluginHookHttpRequestReceivedResult,
+  PluginHookHttpResponseSendingEvent,
+  PluginHookHttpResponseSendingResult,
+  PluginHookHttpToolInvokeEvent,
+  PluginHookHttpToolInvokeResult,
+  PluginHookHttpToolResultEvent,
+  PluginHookHttpToolResultResult,
 };
 
 export type HookRunnerLogger = {
@@ -424,6 +443,111 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // HTTP API Hooks
+  // =========================================================================
+
+  /**
+   * Run http_request_received hook.
+   * Allows plugins to scan and block incoming HTTP API requests.
+   * Runs sequentially (modifying hook - can block or modify request).
+   *
+   * SECURITY: This hook is CRITICAL for protecting direct API consumers
+   * that bypass messaging platform hooks (Telegram, Discord, etc.).
+   */
+  async function runHttpRequestReceived(
+    event: PluginHookHttpRequestReceivedEvent,
+    ctx: PluginHookHttpContext,
+  ): Promise<PluginHookHttpRequestReceivedResult | undefined> {
+    return runModifyingHook<"http_request_received", PluginHookHttpRequestReceivedResult>(
+      "http_request_received",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        blockStatusCode: next.blockStatusCode ?? acc?.blockStatusCode,
+        modifiedContent: next.modifiedContent ?? acc?.modifiedContent,
+        modifiedRequestBody: next.modifiedRequestBody ?? acc?.modifiedRequestBody,
+      }),
+    );
+  }
+
+  /**
+   * Run http_response_sending hook.
+   * Allows plugins to scan and block outgoing HTTP API responses.
+   * Runs sequentially (modifying hook - can block or modify response).
+   *
+   * SECURITY: Detects data exfiltration, credential leaks, and
+   * indirect injection in LLM responses.
+   */
+  async function runHttpResponseSending(
+    event: PluginHookHttpResponseSendingEvent,
+    ctx: PluginHookHttpContext,
+  ): Promise<PluginHookHttpResponseSendingResult | undefined> {
+    return runModifyingHook<"http_response_sending", PluginHookHttpResponseSendingResult>(
+      "http_response_sending",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        blockStatusCode: next.blockStatusCode ?? acc?.blockStatusCode,
+        modifiedContent: next.modifiedContent ?? acc?.modifiedContent,
+        modifiedResponseBody: next.modifiedResponseBody ?? acc?.modifiedResponseBody,
+      }),
+    );
+  }
+
+  /**
+   * Run http_tool_invoke hook.
+   * Allows plugins to scan and block tool invocations via /tools/invoke.
+   * Runs sequentially (modifying hook - can block or modify params).
+   *
+   * SECURITY: Prevents tool argument injection and malicious tool usage.
+   */
+  async function runHttpToolInvoke(
+    event: PluginHookHttpToolInvokeEvent,
+    ctx: PluginHookHttpContext,
+  ): Promise<PluginHookHttpToolInvokeResult | undefined> {
+    return runModifyingHook<"http_tool_invoke", PluginHookHttpToolInvokeResult>(
+      "http_tool_invoke",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        blockStatusCode: next.blockStatusCode ?? acc?.blockStatusCode,
+        modifiedParams: next.modifiedParams ?? acc?.modifiedParams,
+      }),
+    );
+  }
+
+  /**
+   * Run http_tool_result hook.
+   * Allows plugins to scan and block tool results before returning to client.
+   * Runs sequentially (modifying hook - can block or modify result).
+   *
+   * SECURITY: Detects indirect injection in tool output that could
+   * manipulate downstream LLM behavior.
+   */
+  async function runHttpToolResult(
+    event: PluginHookHttpToolResultEvent,
+    ctx: PluginHookHttpContext,
+  ): Promise<PluginHookHttpToolResultResult | undefined> {
+    return runModifyingHook<"http_tool_result", PluginHookHttpToolResultResult>(
+      "http_tool_result",
+      event,
+      ctx,
+      (acc, next) => ({
+        block: next.block ?? acc?.block,
+        blockReason: next.blockReason ?? acc?.blockReason,
+        blockStatusCode: next.blockStatusCode ?? acc?.blockStatusCode,
+        modifiedResult: next.modifiedResult ?? acc?.modifiedResult,
+      }),
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -461,6 +585,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // HTTP API hooks
+    runHttpRequestReceived,
+    runHttpResponseSending,
+    runHttpToolInvoke,
+    runHttpToolResult,
     // Utility
     hasHooks,
     getHookCount,

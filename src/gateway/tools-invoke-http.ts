@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
+import type { PluginHookHttpContext } from "../plugins/types.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -18,6 +20,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -33,6 +36,19 @@ import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+
+/**
+ * Safe JSON stringify that handles BigInt and circular references.
+ * Falls back to "[unserializable]" if serialization fails.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v));
+  } catch {
+    // Circular reference or other serialization error
+    return "[unserializable]";
+  }
+}
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -104,7 +120,13 @@ export async function handleToolsInvokeHttpRequest(
   res: ServerResponse,
   opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  } catch {
+    // Malformed URL - not our endpoint
+    return false;
+  }
   if (url.pathname !== "/tools/invoke") {
     return false;
   }
@@ -306,15 +328,126 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  const requestId = `tool_${randomUUID()}`;
+  const toolArgs = mergeActionIntoArgsIfSupported({
+    // oxlint-disable-next-line typescript/no-explicit-any
+    toolSchema: (tool as any).parameters,
+    action,
+    args,
+  });
+
+  // ==========================================================================
+  // SECURITY: Run http_tool_invoke hook before execution
+  // ==========================================================================
+  const hookRunner = getGlobalHookRunner();
+  // Build HTTP context only when hooks are enabled (avoid overhead otherwise)
+  let httpCtx: PluginHookHttpContext | undefined;
+  if (hookRunner) {
+    const safeHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey === "authorization" || lowerKey === "cookie" || lowerKey === "x-api-key") {
+        safeHeaders[key] = "[REDACTED]";
+      } else if (typeof value === "string") {
+        safeHeaders[key] = value;
+      } else if (Array.isArray(value)) {
+        // Join multi-value headers (e.g., x-forwarded-for, set-cookie)
+        safeHeaders[key] = value.join(", ");
+      }
+    }
+    httpCtx = {
+      httpMethod: req.method || "POST",
+      httpPath: "/tools/invoke",
+      httpHeaders: safeHeaders,
+      clientIp: req.socket?.remoteAddress,
+      requestId,
+    };
+    try {
+      const preHook = await hookRunner.runHttpToolInvoke(
+        {
+          toolName,
+          toolParams: toolArgs,
+          content: safeStringify(toolArgs),
+        },
+        httpCtx,
+      );
+
+      if (preHook?.block) {
+        sendJson(res, preHook.blockStatusCode ?? 400, {
+          ok: false,
+          error: {
+            type: "security_block",
+            message: preHook.blockReason || "Tool invocation blocked by security plugin",
+          },
+        });
+        return true;
+      }
+      // Replace params if plugin sanitized them (full replacement, not merge)
+      if (preHook?.modifiedParams !== undefined) {
+        // Clear existing keys and apply new ones to support key deletion
+        for (const key of Object.keys(toolArgs)) {
+          delete toolArgs[key];
+        }
+        Object.assign(toolArgs, preHook.modifiedParams);
+      }
+    } catch (hookError) {
+      console.error("[tools-invoke-http] http_tool_invoke hook error:", hookError);
+      sendJson(res, 500, {
+        ok: false,
+        error: { type: "security_error", message: "Security check failed" },
+      });
+      return true;
+    }
+  }
+
+  const startTime = Date.now();
   try {
-    const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
-      action,
-      args,
-    });
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const durationMs = Date.now() - startTime;
+
+    // ==========================================================================
+    // SECURITY: Run http_tool_result hook after execution
+    // ==========================================================================
+    if (hookRunner) {
+      try {
+        const postHook = await hookRunner.runHttpToolResult(
+          {
+            toolName,
+            toolParams: toolArgs,
+            toolResult: result,
+            content: safeStringify(result),
+            durationMs,
+            success: true,
+          },
+          httpCtx!, // httpCtx is always defined when hookRunner exists
+        );
+
+        if (postHook?.block) {
+          sendJson(res, postHook.blockStatusCode ?? 400, {
+            ok: false,
+            error: {
+              type: "security_block",
+              message: postHook.blockReason || "Tool result blocked by security plugin",
+            },
+          });
+          return true;
+        }
+        // Use modified result if plugin sanitized it
+        if (postHook?.modifiedResult !== undefined) {
+          sendJson(res, 200, { ok: true, result: postHook.modifiedResult });
+          return true;
+        }
+      } catch (hookError) {
+        console.error("[tools-invoke-http] http_tool_result hook error:", hookError);
+        sendJson(res, 500, {
+          ok: false,
+          error: { type: "security_error", message: "Security check failed" },
+        });
+        return true;
+      }
+    }
+
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     sendJson(res, 400, {
