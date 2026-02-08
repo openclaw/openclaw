@@ -7,6 +7,7 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
   .object({
@@ -172,13 +173,13 @@ export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z.union([z.literal("brave"), z.literal("perplexity")]).optional(),
-    apiKey: z.string().optional(),
+    apiKey: z.string().optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -318,9 +319,7 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z
-      .union([z.literal("openai"), z.literal("local"), z.literal("gemini"), z.literal("voyage")])
-      .optional(),
+    provider: z.union([z.literal("openai"), z.literal("local"), z.literal("gemini")]).optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -340,13 +339,7 @@ export const MemorySearchSchema = z
       .strict()
       .optional(),
     fallback: z
-      .union([
-        z.literal("openai"),
-        z.literal("gemini"),
-        z.literal("local"),
-        z.literal("voyage"),
-        z.literal("none"),
-      ])
+      .union([z.literal("openai"), z.literal("gemini"), z.literal("local"), z.literal("none")])
       .optional(),
     model: z.string().optional(),
     local: z

@@ -5,6 +5,7 @@ import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 import {
   CommandsSchema,
   MessagesSchema,
@@ -299,7 +300,7 @@ export const OpenClawSchema = z
       .object({
         enabled: z.boolean().optional(),
         path: z.string().optional(),
-        token: z.string().optional(),
+        token: z.string().optional().register(sensitive),
         maxBodyBytes: z.number().int().positive().optional(),
         presets: z.array(z.string()).optional(),
         transformsDir: z.string().optional(),
@@ -359,7 +360,7 @@ export const OpenClawSchema = z
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
         outputFormat: z.string().optional(),
-        apiKey: z.string().optional(),
+        apiKey: z.string().optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
       })
       .strict()
@@ -391,8 +392,8 @@ export const OpenClawSchema = z
         auth: z
           .object({
             mode: z.union([z.literal("token"), z.literal("password")]).optional(),
-            token: z.string().optional(),
-            password: z.string().optional(),
+            token: z.string().optional().register(sensitive),
+            password: z.string().optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
           })
           .strict()
@@ -409,8 +410,8 @@ export const OpenClawSchema = z
           .object({
             url: z.string().optional(),
             transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: z.string().optional(),
-            password: z.string().optional(),
+            token: z.string().optional().register(sensitive),
+            password: z.string().optional().register(sensitive),
             tlsFingerprint: z.string().optional(),
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),

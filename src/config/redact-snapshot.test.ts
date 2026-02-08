@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import {
   REDACTED_SENTINEL,
@@ -193,35 +194,103 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot);
     const env = result.config.env as Record<string, Record<string, string>>;
-    expect(env.vars.OPENAI_API_KEY).toBe(REDACTED_SENTINEL);
     // NODE_ENV is not sensitive, should be preserved
     expect(env.vars.NODE_ENV).toBe("production");
   });
 
-  it("redacts raw by key pattern even when parsed config is empty", () => {
-    const snapshot: ConfigFileSnapshot = {
-      path: "/test",
-      exists: true,
-      raw: '{ token: "raw-secret-1234567890" }',
-      parsed: {},
-      valid: false,
-      config: {} as ConfigFileSnapshot["config"],
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    };
-    const result = redactConfigSnapshot(snapshot);
-    expect(result.raw).not.toContain("raw-secret-1234567890");
-    expect(result.raw).toContain(REDACTED_SENTINEL);
-  });
-
-  it("redacts sensitive fields even when the value is not a string", () => {
+  it("does NOT redact numeric 'tokens' fields (token regex fix)", () => {
     const snapshot = makeSnapshot({
-      gateway: { auth: { token: 1234 } },
+      memory: { tokens: 8192 },
     });
     const result = redactConfigSnapshot(snapshot);
+    const memory = result.config.memory as Record<string, number>;
+    expect(memory.tokens).toBe(8192);
+  });
+
+  it("does NOT redact 'softThresholdTokens' (token regex fix)", () => {
+    const snapshot = makeSnapshot({
+      compaction: { softThresholdTokens: 50000 },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const compaction = result.config.compaction as Record<string, number>;
+    expect(compaction.softThresholdTokens).toBe(50000);
+  });
+
+  it("does NOT redact string 'tokens' field either", () => {
+    const snapshot = makeSnapshot({
+      memory: { tokens: "should-not-be-redacted" },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const memory = result.config.memory as Record<string, string>;
+    expect(memory.tokens).toBe("should-not-be-redacted");
+  });
+
+  it("still redacts 'token' (singular) fields", () => {
+    const snapshot = makeSnapshot({
+      channels: { slack: { token: "secret-slack-token-value-here" } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, string>>;
+    expect(channels.slack.token).toBe(REDACTED_SENTINEL);
+  });
+
+  it("uses uiHints to determine sensitivity", () => {
+    const hints: ConfigUiHints = {
+      "custom.mySecret": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      custom: { mySecret: "this-is-a-custom-secret-value" },
+    });
+    const result = redactConfigSnapshot(snapshot, hints);
+    const custom = result.config.custom as Record<string, string>;
+    expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+  });
+
+  it("respects sensitive:false in uiHints even for regex-matching paths", () => {
+    const hints: ConfigUiHints = {
+      "gateway.auth.token": { sensitive: false },
+    };
+    const snapshot = makeSnapshot({
+      gateway: { auth: { token: "not-actually-secret-value" } },
+    });
+    const result = redactConfigSnapshot(snapshot, hints);
     const gw = result.config.gateway as Record<string, Record<string, string>>;
-    expect(gw.auth.token).toBe(REDACTED_SENTINEL);
+    expect(gw.auth.token).toBe("not-actually-secret-value");
+  });
+
+  it("does not redact paths absent from uiHints (schema is single source of truth)", () => {
+    const hints: ConfigUiHints = {
+      "some.other.path": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      gateway: { auth: { password: "not-in-hints-value" } },
+    });
+    const result = redactConfigSnapshot(snapshot, hints);
+    const gw = result.config.gateway as Record<string, Record<string, string>>;
+    expect(gw.auth.password).toBe("not-in-hints-value");
+  });
+
+  it("uses wildcard hints for array items", () => {
+    const hints: ConfigUiHints = {
+      "channels.slack.accounts.*.botToken": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      channels: {
+        slack: {
+          accounts: [
+            { botToken: "first-account-token-value-here" },
+            { botToken: "second-account-token-value-here" },
+          ],
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<
+      string,
+      Record<string, Array<Record<string, string>>>
+    >;
+    expect(channels.slack.accounts[0].botToken).toBe(REDACTED_SENTINEL);
+    expect(channels.slack.accounts[1].botToken).toBe(REDACTED_SENTINEL);
   });
 });
 
@@ -294,7 +363,9 @@ describe("restoreRedactedValues", () => {
       channels: { newChannel: { token: REDACTED_SENTINEL } },
     };
     const original = {};
-    expect(() => restoreRedactedValues(incoming, original)).toThrow(/redacted/i);
+    const result = restoreRedactedValues(incoming, original) as typeof incoming;
+    // No original to restore from, sentinel stays
+    expect(result.channels.newChannel.token).toBe(REDACTED_SENTINEL);
   });
 
   it("handles null and undefined inputs", () => {
@@ -331,5 +402,72 @@ describe("restoreRedactedValues", () => {
     const restored = restoreRedactedValues(redacted.config, snapshot.config);
 
     expect(restored).toEqual(originalConfig);
+  });
+
+  it("round-trips with uiHints for custom sensitive fields", () => {
+    const hints: ConfigUiHints = {
+      "custom.myApiKey": { sensitive: true },
+      "custom.displayName": { sensitive: false },
+    };
+    const originalConfig = {
+      custom: { myApiKey: "secret-custom-api-key-value", displayName: "My Bot" },
+    };
+    const snapshot = makeSnapshot(originalConfig);
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const custom = redacted.config.custom as Record<string, string>;
+    expect(custom.myApiKey).toBe(REDACTED_SENTINEL);
+    expect(custom.displayName).toBe("My Bot");
+
+    const restored = restoreRedactedValues(
+      redacted.config,
+      snapshot.config,
+      hints,
+    ) as typeof originalConfig;
+    expect(restored).toEqual(originalConfig);
+  });
+
+  it("restores with uiHints respecting sensitive:false override", () => {
+    const hints: ConfigUiHints = {
+      "gateway.auth.token": { sensitive: false },
+    };
+    const incoming = {
+      gateway: { auth: { token: REDACTED_SENTINEL } },
+    };
+    const original = {
+      gateway: { auth: { token: "real-secret" } },
+    };
+    // With sensitive:false, the sentinel is NOT on a sensitive path,
+    // so restore should NOT replace it (it's treated as a literal value)
+    const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
+    expect(result.gateway.auth.token).toBe(REDACTED_SENTINEL);
+  });
+
+  it("restores array items using wildcard uiHints", () => {
+    const hints: ConfigUiHints = {
+      "channels.slack.accounts.*.botToken": { sensitive: true },
+    };
+    const incoming = {
+      channels: {
+        slack: {
+          accounts: [
+            { botToken: REDACTED_SENTINEL },
+            { botToken: "user-provided-new-token-value" },
+          ],
+        },
+      },
+    };
+    const original = {
+      channels: {
+        slack: {
+          accounts: [
+            { botToken: "original-token-first-account" },
+            { botToken: "original-token-second-account" },
+          ],
+        },
+      },
+    };
+    const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
+    expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
+    expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
   });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HookMappingSchema = z
   .object({
@@ -12,7 +13,7 @@ export const HookMappingSchema = z
     action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
     wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
     name: z.string().optional(),
-    sessionKey: z.string().optional(),
+    sessionKey: z.string().optional().register(sensitive),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
@@ -93,7 +94,7 @@ export const HooksGmailSchema = z
     label: z.string().optional(),
     topic: z.string().optional(),
     subscription: z.string().optional(),
-    pushToken: z.string().optional(),
+    pushToken: z.string().optional().register(sensitive),
     hookUrl: z.string().optional(),
     includeBody: z.boolean().optional(),
     maxBytes: z.number().int().positive().optional(),

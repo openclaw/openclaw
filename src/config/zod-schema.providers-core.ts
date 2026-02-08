@@ -20,6 +20,7 @@ import {
   RetryConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -37,7 +38,6 @@ const TelegramCapabilitiesSchema = z.union([
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -48,7 +48,6 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -97,7 +96,7 @@ export const TelegramAccountSchemaBase = z
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    botToken: z.string().optional(),
+    botToken: z.string().optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
@@ -124,7 +123,7 @@ export const TelegramAccountSchemaBase = z
       .optional(),
     proxy: z.string().optional(),
     webhookUrl: z.string().optional(),
-    webhookSecret: z.string().optional(),
+    webhookSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     actions: z
       .object({
@@ -261,7 +260,7 @@ export const DiscordAccountSchema = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    token: z.string().optional(),
+    token: z.string().optional().register(sensitive),
     allowBots: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -321,7 +320,7 @@ export const DiscordAccountSchema = z
     pluralkit: z
       .object({
         enabled: z.boolean().optional(),
-        token: z.string().optional(),
+        token: z.string().optional().register(sensitive),
       })
       .strict()
       .optional(),
@@ -459,16 +458,16 @@ export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
-    signingSecret: z.string().optional(),
+    signingSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
-    botToken: z.string().optional(),
-    appToken: z.string().optional(),
-    userToken: z.string().optional(),
+    botToken: z.string().optional().register(sensitive),
+    appToken: z.string().optional().register(sensitive),
+    userToken: z.string().optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -517,7 +516,7 @@ export const SlackAccountSchema = z
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
   mode: z.enum(["socket", "http"]).optional().default("socket"),
-  signingSecret: z.string().optional(),
+  signingSecret: z.string().optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
@@ -723,7 +722,7 @@ export const BlueBubblesAccountSchemaBase = z
     configWrites: z.boolean().optional(),
     enabled: z.boolean().optional(),
     serverUrl: z.string().optional(),
-    password: z.string().optional(),
+    password: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
@@ -794,7 +793,7 @@ export const MSTeamsConfigSchema = z
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
     appId: z.string().optional(),
-    appPassword: z.string().optional(),
+    appPassword: z.string().optional().register(sensitive),
     tenantId: z.string().optional(),
     webhook: z
       .object({
