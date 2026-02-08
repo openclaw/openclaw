@@ -27,7 +27,10 @@ import {
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import {
+  loadAndMaybeMigrateDoctorConfig,
+  restoreConfigEnvTemplates,
+} from "./doctor-config-flow.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
 import {
@@ -282,7 +285,13 @@ export async function doctorCommand(
   const shouldWriteConfig = prompter.shouldRepair || configResult.shouldWriteConfig;
   if (shouldWriteConfig) {
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
-    await writeConfigFile(cfg);
+    const configToWrite = restoreConfigEnvTemplates({
+      rawConfig: configResult.sourceTemplateConfig,
+      config: cfg,
+      env: process.env,
+      blockedPaths: configResult.removedUnknownPaths,
+    });
+    await writeConfigFile(configToWrite);
     logConfigUpdated(runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
     if (fs.existsSync(backupPath)) {

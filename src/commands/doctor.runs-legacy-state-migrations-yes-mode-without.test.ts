@@ -457,4 +457,54 @@ describe("doctor command", () => {
     expect(profiles["anthropic:me@example.com"]).toBeTruthy();
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
+
+  it("keeps env templates when writing config in repair mode", async () => {
+    const previousApiKey = process.env.OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "sk-live-secret";
+      readConfigFileSnapshot.mockResolvedValue({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: JSON.stringify({
+          models: {
+            providers: {
+              openai: {
+                apiKey: "${OPENAI_API_KEY}",
+              },
+            },
+          },
+        }),
+        parsed: undefined,
+        valid: true,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "sk-live-secret",
+              },
+            },
+          },
+        },
+        issues: [],
+        legacyIssues: [],
+      });
+
+      const { doctorCommand } = await import("./doctor.js");
+      await doctorCommand({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }, { yes: true });
+
+      const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      const apiKey = (
+        (written.models as { providers?: { openai?: { apiKey?: string } } })?.providers as {
+          openai?: { apiKey?: string };
+        }
+      )?.openai?.apiKey;
+      expect(apiKey).toBe("${OPENAI_API_KEY}");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousApiKey;
+      }
+    }
+  }, 30_000);
 });

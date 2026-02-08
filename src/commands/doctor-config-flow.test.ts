@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import {
+  loadAndMaybeMigrateDoctorConfig,
+  restoreConfigEnvTemplates,
+} from "./doctor-config-flow.js";
 
 describe("doctor config flow", () => {
   it("preserves invalid config for doctor repairs", async () => {
@@ -63,5 +66,64 @@ describe("doctor config flow", () => {
         token: "ok",
       });
     });
+  });
+
+  it("restores env templates when repaired config omits the leaf key", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "sk-live-secret" };
+    const result = restoreConfigEnvTemplates({
+      rawConfig: {
+        models: {
+          providers: {
+            openai: {
+              apiKey: "${OPENAI_API_KEY}",
+            },
+          },
+        },
+      },
+      config: {
+        models: {
+          providers: {
+            openai: {},
+          },
+        },
+      } as never,
+      env,
+    });
+
+    const apiKey = (
+      (
+        (
+          result.models as {
+            providers?: {
+              openai?: { apiKey?: string };
+            };
+          }
+        )?.providers ?? {}
+      ).openai ?? {}
+    ).apiKey;
+    expect(apiKey).toBe("${OPENAI_API_KEY}");
+  });
+
+  it("does not restore env templates for unknown paths removed by doctor", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "sk-live-secret" };
+    const result = restoreConfigEnvTemplates({
+      rawConfig: {
+        gateway: {
+          auth: {
+            extra: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+      config: {
+        gateway: {
+          auth: {},
+        },
+      } as never,
+      env,
+      blockedPaths: ["gateway.auth.extra"],
+    });
+
+    const extra = ((result.gateway as { auth?: { extra?: string } })?.auth ?? {}).extra;
+    expect(extra).toBeUndefined();
   });
 });
