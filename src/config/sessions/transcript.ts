@@ -2,6 +2,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "./types.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "./paths.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
@@ -118,7 +119,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
-  const sessionManager = SessionManager.open(sessionFile);
+  const rawSessionManager = SessionManager.open(sessionFile);
+  const sessionManager = guardSessionManager(rawSessionManager);
   sessionManager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],

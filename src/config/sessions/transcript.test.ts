@@ -111,4 +111,35 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
   });
+
+  it("redacts secrets in mirrored text on disk", async () => {
+    const sessionId = "test-session-redact";
+    const sessionKey = "test-redact";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "slack",
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+
+    const secret = "xoxb-transcript-mirror-secret-token-abcdef";
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: `Here is the token: ${secret}`,
+      storePath,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      const messageLine = JSON.parse(lines[1]);
+      const diskText = messageLine.message.content[0].text;
+      // Secret should be redacted on disk
+      expect(diskText).not.toContain(secret);
+      expect(diskText).toContain("xoxb-t");
+      expect(diskText).toContain("…");
+    }
+  });
 });
