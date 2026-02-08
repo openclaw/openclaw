@@ -183,12 +183,23 @@ function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefine
     .join(" · ");
 }
 
+// Resolve the file path from tool args, accepting both `path` (native) and `file_path` (Claude Code alias).
+function resolvePathArg(record: Record<string, unknown>): string | undefined {
+  if (typeof record.path === "string") {
+    return record.path;
+  }
+  if (typeof record.file_path === "string") {
+    return record.file_path;
+  }
+  return undefined;
+}
+
 function resolveReadDetail(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
   const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
+  const path = resolvePathArg(record);
   if (!path) {
     return undefined;
   }
@@ -205,8 +216,7 @@ function resolveWriteDetail(args: unknown): string | undefined {
     return undefined;
   }
   const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  return path;
+  return resolvePathArg(record);
 }
 
 function resolveActionSpec(
