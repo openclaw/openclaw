@@ -62,37 +62,37 @@ function storeMagazine(db, userId, chatId, content, context = null, priority = 0
 // 主處理函數
 export default async function handler(event) {
   // 只處理 LINE 消息
-  if (event.type !== "message:received") return;
-  if (event.channel !== "line") return;
+  if (event.type !== "message" || event.action !== "received") return;
+  const ctx = event.context || {};
+  if (ctx.channel !== "line") return;
 
   const db = new DatabaseSync(DB_PATH);
 
   try {
     initMagazineTable(db);
 
-    const userId = event.senderId || "unknown";
-    const chatId = event.chatId || "unknown";
+    const userId = ctx.senderId || "unknown";
+    const chatId = ctx.chatId || "unknown";
 
     // 獲取待發送的彈夾
     const magazines = getMagazineContents(db, userId, chatId);
 
     if (magazines.length > 0) {
-      console.log(`[line-dual-track] 📬 Found ${magazines.length} magazine items for ${userId}`);
+      console.log(`[line-dual-track] Found ${magazines.length} magazine items for ${userId}`);
 
       // 標記為已處理（實際發送由 agent 處理）
-      // 這裡只是記錄狀態，真正的發送需要整合到 reply 流程
       const ids = magazines.map((m) => m.id);
 
-      // 將彈夾內容注入到 event 中，讓 agent 可以取用
-      event._magazineContents = magazines.map((m) => m.content);
-      event._magazineIds = ids;
+      // 將彈夾內容注入到 event context，讓 agent 可以取用
+      ctx._magazineContents = magazines.map((m) => m.content);
+      ctx._magazineIds = ids;
 
-      console.log(`[line-dual-track] 💾 Magazine contents attached to event`);
+      console.log(`[line-dual-track] Magazine contents attached to event`);
     }
 
     // 記錄這次消息，供之後的深度思考參考
     console.log(
-      `[line-dual-track] 📝 LINE message from ${userId}: ${event.content?.substring(0, 50)}...`,
+      `[line-dual-track] LINE message from ${userId}: ${(ctx.content || "").substring(0, 50)}...`,
     );
   } catch (err) {
     console.error("[line-dual-track] Error:", err.message);

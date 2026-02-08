@@ -1,0 +1,1352 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neural Topology / 神經系統拓撲</title>
+    <style>
+      :root {
+        --green: #00d68f;
+        --orange: #ff9f43;
+        --red: #ff4757;
+        --blue: #54a0ff;
+        --bg: #0a0e17;
+        --card: #111827;
+        --border: #1e2d42;
+        --dim: #4a5568;
+        --text: #c8d6e5;
+        --bright: #e2e8f0;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        min-height: 100vh;
+        line-height: 1.5;
+      }
+
+      /* ── Header ── */
+      .hdr {
+        text-align: center;
+        padding: 32px 20px 16px;
+      }
+      .hdr h1 {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--bright);
+        letter-spacing: 3px;
+      }
+      .hdr .sub {
+        font-size: 12px;
+        color: var(--dim);
+        margin-top: 4px;
+        font-family: "SF Mono", "Fira Code", monospace;
+      }
+
+      /* ── Health Score ── */
+      .health {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 32px;
+        padding: 16px 20px 20px;
+      }
+      .health-ring {
+        width: 100px;
+        height: 100px;
+        position: relative;
+      }
+      .health-ring svg {
+        transform: rotate(-90deg);
+      }
+      .health-ring .ring-bg {
+        fill: none;
+        stroke: #1a2332;
+        stroke-width: 6;
+      }
+      .health-ring .ring-fill {
+        fill: none;
+        stroke: var(--green);
+        stroke-width: 6;
+        stroke-linecap: round;
+        stroke-dasharray: 251;
+        stroke-dashoffset: 50;
+        transition: stroke-dashoffset 1.5s ease;
+      }
+      .health-pct {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--green);
+      }
+      .health-stats {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .hs-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .hs-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .hs-dot.g {
+        background: var(--green);
+      }
+      .hs-dot.o {
+        background: var(--orange);
+      }
+      .hs-dot.r {
+        background: var(--red);
+      }
+      .hs-dot.b {
+        background: var(--blue);
+      }
+      .hs-num {
+        font-weight: 700;
+        width: 20px;
+        text-align: right;
+      }
+      .hs-label {
+        color: var(--dim);
+        font-size: 12px;
+      }
+
+      /* ── Legend ── */
+      .legend {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        padding: 0 20px 20px;
+        font-size: 11px;
+        color: var(--dim);
+        flex-wrap: wrap;
+      }
+      .leg {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .leg-line {
+        width: 24px;
+        height: 2px;
+        border-radius: 1px;
+      }
+      .leg-line.solid-g {
+        background: var(--green);
+      }
+      .leg-line.dash-o {
+        background: repeating-linear-gradient(90deg, var(--orange) 0 6px, transparent 6px 10px);
+      }
+      .leg-line.dash-r {
+        background: repeating-linear-gradient(90deg, var(--red) 0 4px, transparent 4px 8px);
+      }
+      .leg-line.solid-b {
+        background: var(--blue);
+      }
+
+      /* ── Topology Container ── */
+      .topo-wrap {
+        position: relative;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      .topo {
+        display: grid;
+        grid-template-columns: 210px 1fr 210px;
+        gap: 0;
+        position: relative;
+        z-index: 1;
+      }
+      svg.wires {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      /* ── Column ── */
+      .col {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .col-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: var(--dim);
+        text-align: center;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 4px;
+      }
+      .col-title .zh {
+        display: block;
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: var(--text);
+        margin-bottom: 2px;
+      }
+
+      /* ── Node (shared) ── */
+      .nd {
+        padding: 7px 10px;
+        border-radius: 5px;
+        font-size: 11px;
+        position: relative;
+        transition: all 0.2s;
+        cursor: default;
+      }
+      .nd:hover {
+        z-index: 10;
+      }
+      .nd .zh {
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .nd .en {
+        font-size: 9px;
+        color: var(--dim);
+      }
+      .nd .loc {
+        font-size: 8px;
+        color: #3a4a5e;
+        font-family: "SF Mono", monospace;
+      }
+
+      /* source */
+      .nd.src {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--dim);
+      }
+      .nd.src.on {
+        border-left-color: var(--green);
+      }
+      .nd.src.off {
+        opacity: 0.35;
+      }
+
+      /* event */
+      .nd.evt {
+        padding: 5px 10px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-family: "SF Mono", monospace;
+        font-size: 11px;
+      }
+      .nd.evt .badge {
+        font-size: 9px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        white-space: nowrap;
+        margin-left: auto;
+      }
+      .nd.evt.g {
+        background: #0d1f1a;
+        border: 1px solid #00d68f33;
+        color: var(--green);
+      }
+      .nd.evt.g .badge {
+        background: #00d68f22;
+      }
+      .nd.evt.o {
+        background: #1f1a0d;
+        border: 1px solid #ff9f4333;
+        color: var(--orange);
+      }
+      .nd.evt.o .badge {
+        background: #ff9f4322;
+      }
+      .nd.evt.r {
+        background: #1f0d0d;
+        border: 1px solid #ff475733;
+        color: var(--red);
+      }
+      .nd.evt.r .badge {
+        background: #ff475722;
+      }
+
+      .evt-grp {
+        margin-bottom: 12px;
+      }
+      .evt-grp-lbl {
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #2d3a4e;
+        margin-bottom: 4px;
+        padding-left: 4px;
+      }
+      .evt-bus {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .mid {
+        padding: 0 16px;
+      }
+
+      /* dot indicator */
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .dot.g {
+        background: var(--green);
+        animation: blink 2s infinite;
+      }
+      .dot.o {
+        background: var(--orange);
+        animation: blink 3s infinite;
+      }
+      .dot.r {
+        background: var(--red);
+        opacity: 0.4;
+      }
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+          box-shadow: 0 0 3px currentColor;
+        }
+        50% {
+          opacity: 0.4;
+          box-shadow: 0 0 8px currentColor;
+        }
+      }
+
+      /* hook */
+      .nd.hk {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-right: 3px solid var(--dim);
+      }
+      .nd.hk.g {
+        border-right-color: var(--green);
+      }
+      .nd.hk.o {
+        border-right-color: var(--orange);
+      }
+      .nd.hk.r {
+        border-right-color: var(--red);
+      }
+
+      /* ── Builder Pipeline ── */
+      .pipe-sec {
+        max-width: 1100px;
+        margin: 24px auto 0;
+        padding: 0 16px;
+      }
+      .pipe-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: var(--dim);
+        text-align: center;
+        padding: 14px 0 10px;
+        border-top: 1px solid var(--border);
+      }
+      .pipe-title .zh {
+        display: block;
+        font-size: 13px;
+        color: var(--text);
+        letter-spacing: 1px;
+        margin-bottom: 2px;
+      }
+      .pipe {
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        gap: 0;
+        flex-wrap: wrap;
+        padding: 8px 0;
+      }
+      .pipe-nd {
+        padding: 10px 16px;
+        background: #0d1a2a;
+        border: 1px solid #54a0ff33;
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 600;
+        text-align: center;
+      }
+      .pipe-nd:first-child {
+        border-radius: 6px 0 0 6px;
+      }
+      .pipe-nd:last-child {
+        border-radius: 0 6px 6px 0;
+        border-color: #e2e8f033;
+        color: var(--bright);
+      }
+      .pipe-nd .sm {
+        font-size: 9px;
+        color: var(--dim);
+        font-weight: 400;
+        margin-top: 2px;
+      }
+      .pipe-arr {
+        display: flex;
+        align-items: center;
+        color: var(--blue);
+        opacity: 0.3;
+        font-size: 14px;
+        padding: 0 2px;
+        background: #0d1a2a;
+        border-top: 1px solid #54a0ff33;
+        border-bottom: 1px solid #54a0ff33;
+      }
+      .pipe-note {
+        text-align: center;
+        font-size: 10px;
+        color: var(--dim);
+        padding: 6px 0 0;
+      }
+
+      /* ── Diagnosis ── */
+      .diag-sec {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      .diag-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: var(--dim);
+        text-align: center;
+        padding: 20px 0 12px;
+        border-top: 1px solid var(--border);
+      }
+      .diag-title .zh {
+        display: block;
+        font-size: 13px;
+        color: var(--text);
+        letter-spacing: 1px;
+        margin-bottom: 2px;
+      }
+      .diag-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 10px;
+        padding-bottom: 24px;
+      }
+      .dg-card {
+        padding: 14px 16px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: #0f1520;
+      }
+      .dg-card h3 {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .dg-card .zh-desc {
+        font-size: 11px;
+        color: var(--text);
+        line-height: 1.6;
+        margin-bottom: 6px;
+      }
+      .dg-card .en-desc {
+        font-size: 10px;
+        color: var(--dim);
+        line-height: 1.5;
+      }
+      .dg-card code {
+        font-family: "SF Mono", monospace;
+        font-size: 10px;
+        padding: 1px 4px;
+        border-radius: 2px;
+        background: #1a2332;
+        color: var(--bright);
+      }
+      .dg-card.crit {
+        border-color: #ff475744;
+      }
+      .dg-card.crit h3 {
+        color: var(--red);
+      }
+      .dg-card.warn {
+        border-color: #ff9f4344;
+      }
+      .dg-card.warn h3 {
+        color: var(--orange);
+      }
+      .dg-card.info {
+        border-color: #54a0ff44;
+      }
+      .dg-card.info h3 {
+        color: var(--blue);
+      }
+
+      /* ── Usage Bars ── */
+      .usage-sec {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 16px 40px;
+      }
+      .usage-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: var(--dim);
+        text-align: center;
+        padding: 16px 0 10px;
+        border-top: 1px solid var(--border);
+      }
+      .usage-title .zh {
+        display: block;
+        font-size: 13px;
+        color: var(--text);
+        letter-spacing: 1px;
+        margin-bottom: 2px;
+      }
+      .ubar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 11px;
+      }
+      .ubar .lbl {
+        width: 140px;
+        text-align: right;
+        color: var(--dim);
+      }
+      .ubar .track {
+        flex: 1;
+        height: 14px;
+        background: var(--card);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .ubar .fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 1.2s ease;
+      }
+      .ubar .fill.g {
+        background: linear-gradient(90deg, #00d68f22, #00d68f55);
+      }
+      .ubar .fill.r {
+        background: linear-gradient(90deg, #ff475722, #ff475755);
+      }
+      .ubar .val {
+        width: 80px;
+        font-family: "SF Mono", monospace;
+        font-size: 10px;
+      }
+      .fn-list {
+        padding: 8px 0 0 148px;
+        font-size: 10px;
+        color: var(--dim);
+        line-height: 1.8;
+      }
+      .fn-list code {
+        font-family: "SF Mono", monospace;
+        font-size: 10px;
+        padding: 1px 5px;
+        border-radius: 2px;
+        background: #1a2332;
+        color: var(--green);
+        margin: 0 2px;
+      }
+
+      /* ── Footer ── */
+      .ftr {
+        text-align: center;
+        padding: 16px;
+        font-size: 9px;
+        color: #2d3a4e;
+        border-top: 1px solid var(--border);
+      }
+
+      /* ── Highlight on hover ── */
+      .nd.dim {
+        opacity: 0.15 !important;
+        transition: opacity 0.2s;
+      }
+      .nd.hi {
+        opacity: 1 !important;
+      }
+      svg .wire {
+        transition: opacity 0.2s;
+      }
+      svg .wire.dim {
+        opacity: 0.03 !important;
+      }
+      svg .wire.hi {
+        opacity: 0.6 !important;
+        stroke-width: 2.5;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ════════════ HEADER ════════════ -->
+    <div class="hdr">
+      <h1>NERVOUS SYSTEM TOPOLOGY</h1>
+      <div class="sub">Hook Architecture Signal Flow / 鉤子架構信號流拓撲</div>
+    </div>
+
+    <!-- ════════════ HEALTH RING ════════════ -->
+    <div class="health">
+      <div class="health-ring">
+        <svg viewBox="0 0 100 100" width="100" height="100">
+          <circle class="ring-bg" cx="50" cy="50" r="40" />
+          <!-- 100% = 0 offset -->
+          <circle class="ring-fill" cx="50" cy="50" r="40" style="stroke-dashoffset: 0" />
+        </svg>
+        <div class="health-pct">100%</div>
+      </div>
+      <div class="health-stats">
+        <div class="hs-row">
+          <div class="hs-dot g"></div>
+          <div class="hs-num" style="color: var(--green)">15</div>
+          <div class="hs-label">正常連接 Live connections</div>
+        </div>
+        <div class="hs-row">
+          <div class="hs-dot o"></div>
+          <div class="hs-num" style="color: var(--orange)">0</div>
+          <div class="hs-label">名稱錯配 Name mismatch</div>
+        </div>
+        <div class="hs-row">
+          <div class="hs-dot r"></div>
+          <div class="hs-num" style="color: var(--red)">0</div>
+          <div class="hs-label">神經斷裂 Dead nerves</div>
+        </div>
+        <div class="hs-row">
+          <div class="hs-dot b"></div>
+          <div class="hs-num" style="color: var(--blue)">4</div>
+          <div class="hs-label">直連管線 Direct pipeline</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ LEGEND ════════════ -->
+    <div class="legend">
+      <div class="leg">
+        <div class="leg-line solid-g"></div>
+        通 Live
+      </div>
+      <div class="leg">
+        <div class="leg-line solid-b"></div>
+        直連 Direct call
+      </div>
+      <div class="leg" style="opacity: 0.4">
+        <div class="leg-line dash-o"></div>
+        錯配 Mismatch (none)
+      </div>
+      <div class="leg" style="opacity: 0.4">
+        <div class="leg-line dash-r"></div>
+        斷 Dead (none)
+      </div>
+    </div>
+
+    <!-- ════════════ TOPOLOGY ════════════ -->
+    <div class="topo-wrap">
+      <svg class="wires" id="wires"></svg>
+      <div class="topo" id="topo">
+        <!-- ── LEFT: Signal Sources / 信號源 ── -->
+        <div class="col" id="col-src">
+          <div class="col-title">
+            <span class="zh">信號源</span>
+            Signal Sources
+          </div>
+
+          <div class="nd src on" data-src="msg-in">
+            <div class="zh">收到訊息</div>
+            <div class="en">Inbound message</div>
+            <div class="loc">dispatch-from-config.ts</div>
+          </div>
+          <div class="nd src on" data-src="msg-out">
+            <div class="zh">送出訊息</div>
+            <div class="en">Outbound delivery</div>
+            <div class="loc">deliver.ts</div>
+          </div>
+          <div class="nd src on" data-src="model-sel">
+            <div class="zh">選擇模型</div>
+            <div class="en">Model selection</div>
+            <div class="loc">model-fallback.ts</div>
+          </div>
+          <div class="nd src on" data-src="model-fail">
+            <div class="zh">模型切換</div>
+            <div class="en">Model failover</div>
+            <div class="loc">model-fallback.ts</div>
+          </div>
+          <div class="nd src on" data-src="model-done">
+            <div class="zh">模型完成</div>
+            <div class="en">Model complete</div>
+            <div class="loc">model-fallback.ts</div>
+          </div>
+          <div class="nd src on" data-src="cmd-new">
+            <div class="zh">/new 指令</div>
+            <div class="en">/new, /reset command</div>
+            <div class="loc">commands-core.ts</div>
+          </div>
+          <div class="nd src on" data-src="bootstrap">
+            <div class="zh">Agent 啟動</div>
+            <div class="en">Agent bootstrap</div>
+            <div class="loc">bootstrap-hooks.ts</div>
+          </div>
+          <div class="nd src on" data-src="gw-start">
+            <div class="zh">Gateway 啟動</div>
+            <div class="en">Gateway startup</div>
+            <div class="loc">server-startup.ts:133</div>
+          </div>
+          <div class="nd src on" data-src="gw-err">
+            <div class="zh">Gateway/Agent 錯誤</div>
+            <div class="en">Gateway/Agent error</div>
+            <div class="loc">server-channels.ts, server-node-events.ts</div>
+          </div>
+          <div class="nd src on" data-src="sess-start">
+            <div class="zh">Session 開始</div>
+            <div class="en">Session start</div>
+            <div class="loc">commands-core.ts</div>
+          </div>
+        </div>
+
+        <!-- ── CENTER: Event Bus / 事件匯流排 ── -->
+        <div class="col mid" id="col-evt">
+          <div class="col-title">
+            <span class="zh">事件匯流排</span>
+            Event Bus
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">message 訊息</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="message:received">
+                <div class="dot g"></div>
+                <span>message:received</span>
+                <span class="badge">8 handlers</span>
+              </div>
+              <div class="nd evt g" data-evt="message:sent">
+                <div class="dot g"></div>
+                <span>message:sent</span>
+                <span class="badge">3 handlers</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">model 模型</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="model:select">
+                <div class="dot g"></div>
+                <span>model:select</span>
+                <span class="badge">1</span>
+              </div>
+              <div class="nd evt g" data-evt="model:failover">
+                <div class="dot g"></div>
+                <span>model:failover</span>
+                <span class="badge">1</span>
+              </div>
+              <div class="nd evt g" data-evt="model:complete">
+                <div class="dot g"></div>
+                <span>model:complete</span>
+                <span class="badge">1</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">command 指令</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="command:new">
+                <div class="dot g"></div>
+                <span>command:new</span>
+                <span class="badge">1</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">agent 代理</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="agent:bootstrap">
+                <div class="dot g"></div>
+                <span>agent:bootstrap</span>
+                <span class="badge">1</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">gateway 閘道</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="gateway:startup">
+                <div class="dot g"></div>
+                <span>gateway:startup</span>
+                <span class="badge">1 handler</span>
+              </div>
+              <div class="nd evt g" data-evt="gateway:error">
+                <div class="dot g"></div>
+                <span>gateway:error</span>
+                <span class="badge">1 handler</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="evt-grp">
+            <div class="evt-grp-lbl">lifecycle 生命週期</div>
+            <div class="evt-bus">
+              <div class="nd evt g" data-evt="agent:error">
+                <div class="dot g"></div>
+                <span>agent:error</span>
+                <span class="badge">1 handler</span>
+              </div>
+              <div class="nd evt g" data-evt="session:start">
+                <div class="dot g"></div>
+                <span>session:start</span>
+                <span class="badge">1 handler</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── RIGHT: Hook Handlers / 鉤子 ── -->
+        <div class="col" id="col-hk">
+          <div class="col-title">
+            <span class="zh">鉤子（器官）</span>
+            Hook Handlers
+          </div>
+
+          <div class="nd hk g" data-hk="time-tunnel" data-evts="message:received,message:sent">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              time-tunnel 時光隧道
+            </div>
+            <div class="en">Inbound + outbound → record to SQLite</div>
+          </div>
+          <div class="nd hk g" data-hk="smart-router" data-evts="model:select">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              smart-router 智慧路由
+            </div>
+            <div class="en">Select model by context length & task</div>
+          </div>
+          <div class="nd hk g" data-hk="cost-tracker" data-evts="model:complete">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              cost-tracker 成本追蹤
+            </div>
+            <div class="en">Log token usage & estimated cost</div>
+          </div>
+          <div class="nd hk g" data-hk="failover-monitor" data-evts="model:failover">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              failover-monitor 熔斷器
+            </div>
+            <div class="en">Circuit breaker + Telegram alert</div>
+          </div>
+          <div class="nd hk g" data-hk="media-ingestion" data-evts="message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              media-ingestion 媒體處理
+            </div>
+            <div class="en">Download + OCR/STT → inject to context</div>
+          </div>
+          <div
+            class="nd hk g"
+            data-hk="graceful-shutdown"
+            data-evts="message:received,message:sent"
+          >
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              graceful-shutdown 優雅關機
+            </div>
+            <div class="en">Track in-flight messages before exit</div>
+          </div>
+          <div class="nd hk g" data-hk="message-mirror" data-evts="message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              message-mirror 訊息鏡像
+            </div>
+            <div class="en">Mirror all inbound to TG log group</div>
+          </div>
+          <div class="nd hk g" data-hk="learning-engine" data-evts="message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              learning-engine 學習引擎
+            </div>
+            <div class="en">Extract keywords, patterns, sentiment</div>
+          </div>
+          <div class="nd hk g" data-hk="feedback-tracker" data-evts="message:sent,message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              feedback-tracker 回饋迴路
+            </div>
+            <div class="en">Record reply → check response → reward</div>
+          </div>
+          <div class="nd hk g" data-hk="video-processor" data-evts="message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              video-processor 影片處理
+            </div>
+            <div class="en">ffmpeg keyframe extraction</div>
+          </div>
+          <div class="nd hk g" data-hk="memory-guardian" data-evts="command:new">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              memory-guardian 記憶守護
+            </div>
+            <div class="en">Block dangerous ops on memory paths</div>
+          </div>
+          <div class="nd hk g" data-hk="group-context" data-evts="agent:bootstrap">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              group-context 群組上下文
+            </div>
+            <div class="en">Inject group-specific context files</div>
+          </div>
+          <div
+            class="nd hk g"
+            data-hk="context-atoms-idx"
+            data-evts="gateway:startup,session:start"
+          >
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              context-atoms 索引器
+            </div>
+            <div class="en">Rebuild vector index on startup & session reset</div>
+          </div>
+          <div class="nd hk g" data-hk="error-recovery" data-evts="gateway:error,agent:error">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              error-recovery 錯誤自癒
+            </div>
+            <div class="en">Auto-recovery on gateway/agent errors</div>
+          </div>
+          <div class="nd hk g" data-hk="line-dual-track" data-evts="message:received">
+            <div class="zh">
+              <div
+                class="dot g"
+                style="display: inline-block; vertical-align: middle; margin-right: 4px"
+              ></div>
+              line-dual-track 雙軌回覆
+            </div>
+            <div class="en">Quick reply + deep magazine for LINE</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ BUILDER PIPELINE ════════════ -->
+    <div class="pipe-sec">
+      <div class="pipe-title">
+        <span class="zh">直連管線（繞過事件系統，永遠有效）</span>
+        Direct Call Pipeline — get-reply-run.ts
+      </div>
+      <div class="pipe">
+        <div class="pipe-nd">
+          <div>warroom-briefing</div>
+          <div class="sm">作戰簡報 / 5 min cache</div>
+        </div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-nd">
+          <div>narrative-guide</div>
+          <div class="sm">語場敘事 / 10 min cache</div>
+        </div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-nd">
+          <div>proactive-recall</div>
+          <div class="sm">主動回憶 / 3 min cache</div>
+        </div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-nd">
+          <div>context-atoms</div>
+          <div class="sm">語義檢索 / 3 min cache</div>
+        </div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-nd" style="border-color: #e2e8f033; color: var(--bright)">
+          <div>message-body</div>
+          <div class="sm">使用者訊息 / user message</div>
+        </div>
+      </div>
+      <div class="pipe-note">
+        4 個 builder 直接呼叫 Time Tunnel query.js — 不經過事件系統<br />All 4 builders call
+        query.js directly — no event bus needed
+      </div>
+    </div>
+
+    <!-- ════════════ DIAGNOSIS ════════════ -->
+    <div class="diag-sec">
+      <div class="diag-title">
+        <span class="zh">修復紀錄</span>
+        Fix Log — All Nerves Connected
+      </div>
+      <div class="diag-grid">
+        <div class="dg-card" style="border-color: #00d68f44">
+          <h3 style="color: var(--green)">FIXED context-atoms 索引器</h3>
+          <div class="zh-desc">
+            HOOK.md 監聽事件 <code>gateway:start</code> → <code>gateway:startup</code><br />
+            對齊 server-startup.ts 實際發射的事件名。
+          </div>
+          <div class="en-desc">
+            Aligned HOOK.md event name to match actual trigger.<br />
+            Commit: <code>f9754178b</code>
+          </div>
+        </div>
+
+        <div class="dg-card" style="border-color: #00d68f44">
+          <h3 style="color: var(--green)">FIXED error-recovery 觸發函式</h3>
+          <div class="zh-desc">
+            在 server-channels.ts 和 server-node-events.ts<br />
+            新增 <code>gateway:error</code> 和 <code>agent:error</code> 觸發點。
+          </div>
+          <div class="en-desc">
+            Added triggers in channel crash + agent failure catch blocks.<br />
+            Commit: <code>f9754178b</code>
+          </div>
+        </div>
+
+        <div class="dg-card" style="border-color: #00d68f44">
+          <h3 style="color: var(--green)">FIXED session:start 事件</h3>
+          <div class="zh-desc">
+            在 commands-core.ts 的 <code>/new</code> 指令後<br />
+            發射 <code>session:start</code>，context-atoms 可在新 session 重建索引。
+          </div>
+          <div class="en-desc">
+            Fire session:start after /new command in commands-core.ts.<br />
+            Commit: <code>f9754178b</code>
+          </div>
+        </div>
+
+        <div class="dg-card" style="border-color: #00d68f44">
+          <h3 style="color: var(--green)">FIXED group-context + line-dual-track 命名空間</h3>
+          <div class="zh-desc">
+            group-context: <code>moltbot</code> → <code>openclaw</code><br />
+            line-dual-track: 補上遺失的 YAML frontmatter
+          </div>
+          <div class="en-desc">
+            Fixed metadata namespace + added missing frontmatter.<br />
+            Commit: <code>4ba3f4263</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ TIME TUNNEL USAGE ════════════ -->
+    <div class="usage-sec">
+      <div class="usage-title">
+        <span class="zh">Time Tunnel query.js — 函式使用率</span>
+        Export Usage
+      </div>
+
+      <div class="ubar">
+        <div class="lbl">實際被呼叫 Used</div>
+        <div class="track"><div class="fill g" style="width: 32%"></div></div>
+        <div class="val" style="color: var(--green)">27 / 84</div>
+      </div>
+      <div class="ubar">
+        <div class="lbl">從未呼叫 Unused</div>
+        <div class="track"><div class="fill r" style="width: 68%"></div></div>
+        <div class="val" style="color: var(--red)">57 / 84</div>
+      </div>
+
+      <div class="fn-list">
+        Live:<code>search</code><code>searchSemantic</code><code>searchKnowledgeVec</code
+        ><code>checkReminders</code><code>getChatMessages</code><code>retrieveContextAtoms</code
+        ><code>indexContextAtoms</code><code>getContextAtomStats</code
+        ><code>getCrossChannelContext</code><code>getConversationState</code><code>quickJudge</code
+        ><code>judgeConversation</code><code>recordThought</code><code>recordBotReply</code
+        ><code>recordFeedbackJudgment</code><code>recordReward</code><code>learnFromMessage</code
+        ><code>runIntelligenceCycle</code><code>runLearningLoop</code><code>embedMessage</code
+        ><code>batchEmbedHistorical</code><code>getAgentFieldPresence</code>
+      </div>
+    </div>
+
+    <div class="ftr">
+      Generated 2026-02-06 — Nervous System Topology v3 / 神經系統拓撲 v3<br />
+      All nerves connected. Commits: f9754178b, 4ba3f4263<br />
+      Source: src/hooks/internal-hooks.ts, src/gateway/server-startup.ts, workspace/hooks/*/HOOK.md
+    </div>
+
+    <!-- ════════════ WIRING SCRIPT ════════════ -->
+    <script>
+      // Connection definitions: [source data-src, event data-evt, hook data-hk, status]
+      const WIRES = [
+        // message:received (7 hooks)
+        ["msg-in", "message:received", "time-tunnel", "g"],
+        ["msg-in", "message:received", "media-ingestion", "g"],
+        ["msg-in", "message:received", "graceful-shutdown", "g"],
+        ["msg-in", "message:received", "message-mirror", "g"],
+        ["msg-in", "message:received", "learning-engine", "g"],
+        ["msg-in", "message:received", "feedback-tracker", "g"],
+        ["msg-in", "message:received", "video-processor", "g"],
+
+        // message:sent (3 hooks)
+        ["msg-out", "message:sent", "time-tunnel", "g"],
+        ["msg-out", "message:sent", "graceful-shutdown", "g"],
+        ["msg-out", "message:sent", "feedback-tracker", "g"],
+
+        // model events
+        ["model-sel", "model:select", "smart-router", "g"],
+        ["model-fail", "model:failover", "failover-monitor", "g"],
+        ["model-done", "model:complete", "cost-tracker", "g"],
+
+        // command
+        ["cmd-new", "command:new", "memory-guardian", "g"],
+
+        // agent
+        ["bootstrap", "agent:bootstrap", "group-context", "g"],
+
+        // gateway lifecycle
+        ["gw-start", "gateway:startup", "context-atoms-idx", "g"],
+        ["gw-err", "gateway:error", "error-recovery", "g"],
+        ["gw-err", "agent:error", "error-recovery", "g"],
+        ["sess-start", "session:start", "context-atoms-idx", "g"],
+
+        // line-dual-track
+        ["msg-in", "message:received", "line-dual-track", "g"],
+      ];
+
+      function getCenter(el) {
+        const r = el.getBoundingClientRect();
+        const wr = document.getElementById("topo-wrap") || el.closest(".topo-wrap");
+        const base = wr ? wr.getBoundingClientRect() : { left: 0, top: 0 };
+        return {
+          x: r.left + r.width / 2 - base.left,
+          y: r.top + r.height / 2 - base.top,
+        };
+      }
+
+      function getRight(el, base) {
+        const r = el.getBoundingClientRect();
+        return { x: r.right - base.left, y: r.top + r.height / 2 - base.top };
+      }
+
+      function getLeft(el, base) {
+        const r = el.getBoundingClientRect();
+        return { x: r.left - base.left, y: r.top + r.height / 2 - base.top };
+      }
+
+      function drawWires() {
+        const svg = document.getElementById("wires");
+        const wrap = document.querySelector(".topo-wrap");
+        const base = wrap.getBoundingClientRect();
+
+        // Size SVG to match container
+        svg.setAttribute("width", base.width);
+        svg.setAttribute("height", base.height);
+        svg.setAttribute("viewBox", `0 0 ${base.width} ${base.height}`);
+        svg.innerHTML = "";
+
+        for (const [srcKey, evtKey, hkKey, status] of WIRES) {
+          const srcEl = srcKey ? document.querySelector(`[data-src="${srcKey}"]`) : null;
+          const evtEl = document.querySelector(`[data-evt="${evtKey}"]`);
+          const hkEl = hkKey ? document.querySelector(`[data-hk="${hkKey}"]`) : null;
+
+          if (!evtEl) continue;
+
+          const color = status === "g" ? "#00d68f" : status === "o" ? "#ff9f43" : "#ff4757";
+          const dash = status === "g" ? "" : status === "o" ? "6,3" : "4,4";
+          const opacity = status === "g" ? 0.18 : 0.15;
+          const width = status === "g" ? 1.2 : 1;
+
+          // Source → Event
+          if (srcEl) {
+            const s = getRight(srcEl, base);
+            const e = getLeft(evtEl, base);
+            const cpx = (s.x + e.x) / 2;
+            const d = `M${s.x},${s.y} C${cpx},${s.y} ${cpx},${e.y} ${e.x},${e.y}`;
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", d);
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", color);
+            path.setAttribute("stroke-width", width);
+            if (dash) path.setAttribute("stroke-dasharray", dash);
+            path.setAttribute("opacity", opacity);
+            path.classList.add("wire");
+            path.dataset.src = srcKey;
+            path.dataset.evt = evtKey;
+            if (hkKey) path.dataset.hk = hkKey;
+            svg.appendChild(path);
+          }
+
+          // Event → Hook
+          if (hkEl) {
+            const s = getRight(evtEl, base);
+            const e = getLeft(hkEl, base);
+            const cpx = (s.x + e.x) / 2;
+            const d = `M${s.x},${s.y} C${cpx},${s.y} ${cpx},${e.y} ${e.x},${e.y}`;
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", d);
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", color);
+            path.setAttribute("stroke-width", width);
+            if (dash) path.setAttribute("stroke-dasharray", dash);
+            path.setAttribute("opacity", opacity);
+            path.classList.add("wire");
+            if (srcKey) path.dataset.src = srcKey;
+            path.dataset.evt = evtKey;
+            path.dataset.hk = hkKey;
+            svg.appendChild(path);
+          }
+        }
+      }
+
+      // ── Hover highlight ──
+      function setupHover() {
+        const allNodes = document.querySelectorAll(".nd");
+        const allWires = document.querySelectorAll(".wire");
+
+        function highlight(filterFn) {
+          allNodes.forEach((n) => n.classList.add("dim"));
+          allWires.forEach((w) => w.classList.add("dim"));
+
+          allNodes.forEach((n) => {
+            if (filterFn(n)) {
+              n.classList.remove("dim");
+              n.classList.add("hi");
+            }
+          });
+          allWires.forEach((w) => {
+            if (filterFn(w)) {
+              w.classList.remove("dim");
+              w.classList.add("hi");
+            }
+          });
+        }
+
+        function clearAll() {
+          allNodes.forEach((n) => {
+            n.classList.remove("dim", "hi");
+          });
+          allWires.forEach((w) => {
+            w.classList.remove("dim", "hi");
+          });
+        }
+
+        allNodes.forEach((node) => {
+          node.addEventListener("mouseenter", () => {
+            const src = node.dataset.src;
+            const evt = node.dataset.evt;
+            const hk = node.dataset.hk;
+            const hkEvts = node.dataset.evts ? node.dataset.evts.split(",") : [];
+
+            highlight((el) => {
+              // Match the hovered node itself
+              if (el === node) return true;
+
+              // For source nodes
+              if (src) {
+                if (el.dataset && el.dataset.src === src) return true;
+                // Find connected events and hooks
+                for (const w of WIRES) {
+                  if (w[0] === src) {
+                    if (el.dataset.evt === w[1]) return true;
+                    if (el.dataset.hk === w[2]) return true;
+                  }
+                }
+              }
+
+              // For event nodes
+              if (evt) {
+                if (el.dataset && el.dataset.evt === evt) return true;
+                for (const w of WIRES) {
+                  if (w[1] === evt) {
+                    if (el.dataset.src === w[0]) return true;
+                    if (el.dataset.hk === w[2]) return true;
+                  }
+                }
+              }
+
+              // For hook nodes
+              if (hk) {
+                if (el.dataset && el.dataset.hk === hk) return true;
+                for (const w of WIRES) {
+                  if (w[2] === hk) {
+                    if (el.dataset.src === w[0]) return true;
+                    if (el.dataset.evt === w[1]) return true;
+                  }
+                }
+                // Also highlight events this hook listens to
+                for (const e of hkEvts) {
+                  if (el.dataset.evt === e) return true;
+                }
+              }
+
+              return false;
+            });
+          });
+
+          node.addEventListener("mouseleave", clearAll);
+        });
+      }
+
+      // Draw on load + resize
+      window.addEventListener("load", () => {
+        drawWires();
+        setupHover();
+      });
+      window.addEventListener("resize", drawWires);
+    </script>
+  </body>
+</html>
