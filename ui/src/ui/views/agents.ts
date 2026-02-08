@@ -448,7 +448,12 @@ function buildModelOptions(configForm: Record<string, unknown> | null, current?:
       <option value="" disabled>No configured models</option>
     `;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) =>
+      html`<option value=${option.value} ?selected=${option.value === current}>
+        ${option.label}
+      </option>`,
+  );
 }
 
 type CompiledPattern =
@@ -877,7 +882,6 @@ function renderAgentOverview(params: {
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${effectivePrimary ?? ""}
               ?disabled=${!configForm || configLoading || configSaving}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
@@ -886,7 +890,7 @@ function renderAgentOverview(params: {
                 isDefault
                   ? nothing
                   : html`
-                      <option value="">
+                      <option value="" ?selected=${!effectivePrimary}>
                         ${
                           defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"
                         }
