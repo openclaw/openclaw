@@ -67,6 +67,8 @@ export type MediaUnderstandingModelConfig = {
   profile?: string;
   /** Preferred profile id if multiple are available. */
   preferredProfile?: string;
+  /** Extra environment variables merged into process.env for CLI entries. */
+  env?: Record<string, string>;
 };
 
 export type MediaUnderstandingConfig = {

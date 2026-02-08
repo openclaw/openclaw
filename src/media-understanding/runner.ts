@@ -321,6 +321,8 @@ async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig
       "False",
       "{{MediaPath}}",
     ],
+    // Suppress noisy CUDA/GPU probe errors when GPU is unavailable (e.g. WSL2)
+    env: { CUDA_VISIBLE_DEVICES: "" },
   };
 }
 
@@ -1045,6 +1047,8 @@ async function runCliEntry(params: {
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      // Merge entry-level env vars (e.g. CUDA_VISIBLE_DEVICES for whisper)
+      ...(entry.env ? { env: { ...process.env, ...entry.env } } : {}),
     });
     const resolved = await resolveCliOutput({
       command,
