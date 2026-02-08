@@ -195,7 +195,7 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-function shouldCapture(text: string): boolean {
+export function shouldCapture(text: string): boolean {
   if (text.length < 10 || text.length > 500) {
     return false;
   }
@@ -219,7 +219,7 @@ function shouldCapture(text: string): boolean {
   return MEMORY_TRIGGERS.some((r) => r.test(text));
 }
 
-function detectCategory(text: string): MemoryCategory {
+export function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
