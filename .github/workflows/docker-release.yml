@@ -12,14 +12,15 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Build amd64 image
+  # Build and scan amd64 image
   build-amd64:
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
+      security-events: write
     outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
+      image-digest: ${{ steps.push.outputs.digest }}
       image-metadata: ${{ steps.meta.outputs.json }}
     steps:
       - name: Checkout
@@ -48,8 +49,52 @@ jobs:
             type=ref,event=branch,suffix=-amd64
             type=ref,event=branch,suffix=-arm64
 
-      - name: Build and push amd64 image
-        id: build
+      # Step 1: Build image to OCI tarball for scanning (no push yet)
+      # Exports to local tar so we can scan before anything reaches the registry
+      - name: Build amd64 image (OCI tarball)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=oci,dest=/tmp/image-amd64.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # Step 2: Cache Trivy vulnerability database
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: /tmp/trivy-cache
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
+
+      # Step 3: Scan tarball for vulnerabilities before push
+      # Scans amd64 only - vulnerabilities are OS/package level, shared across architectures
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          input: /tmp/image-amd64.tar
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          scanners: "vuln,secret"
+          cache-dir: /tmp/trivy-cache
+
+      # Step 4: Upload scan results to GitHub Security tab (only if file exists)
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      # Step 5: Push image only if scan passed
+      # Rebuilds from GHA cache, so this is fast
+      - name: Push amd64 image
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -61,7 +106,7 @@ jobs:
           provenance: false
           push: true
 
-  # Build arm64 image
+  # Build arm64 image (not scanned - vulnerabilities are shared across architectures)
   build-arm64:
     runs-on: ubuntu-24.04-arm
     permissions:
