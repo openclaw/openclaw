@@ -381,6 +381,22 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isRateLimitErrorMessage(raw)) {
+    return (
+      "Rate limit exceeded: Your API key has hit its usage limit. " +
+      "Wait for the limit to reset, upgrade your plan, or add more credits. " +
+      "Check your provider's dashboard for details."
+    );
+  }
+
+  if (isBillingErrorMessage(raw)) {
+    return (
+      "Billing error: Your API credits may be exhausted or payment is required. " +
+      "Please check your provider's billing dashboard and add credits or update your payment method. " +
+      "No need to reinstall OpenClaw - just top up your account!"
+    );
+  }
+
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
@@ -433,7 +449,21 @@ export function sanitizeUserFacingText(text: string): string {
   }
 
   if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+    if (isRateLimitErrorMessage(trimmed)) {
+      return (
+        "Rate limit exceeded: Your API key has hit its usage limit. " +
+        "Wait for the limit to reset, upgrade your plan, or add more credits. " +
+        "Check your provider's dashboard for details."
+      );
+    }
+    if (isBillingErrorMessage(trimmed)) {
+      return (
+        "Billing error: Your API credits may be exhausted or payment is required. " +
+        "Please check your provider's billing dashboard and add credits or update your payment method. " +
+        "No need to reinstall OpenClaw - just top up your account!"
+      );
+    }
+    if (isOverloadedErrorMessage(trimmed)) {
       return "The AI service is temporarily overloaded. Please try again in a moment.";
     }
     if (isTimeoutErrorMessage(trimmed)) {
