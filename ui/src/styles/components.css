@@ -1587,6 +1587,26 @@
   }
 }
 
+@media (max-width: 480px) {
+  .chat-compose__row {
+    flex-direction: column;
+  }
+
+  .chat-compose__actions {
+    gap: 4px;
+    justify-content: flex-end;
+  }
+
+  .chat-compose__actions .btn {
+    padding: 4px 8px;
+    font-size: 13px;
+  }
+
+  .chat-compose__actions .btn-kbd {
+    display: none;
+  }
+}
+
 /* ===========================================
    QR Code
    =========================================== */
@@ -2103,4 +2123,24 @@
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
+}
+
+/* Chat controls label input */
+.chat-controls__label {
+  width: 120px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.chat-controls__label:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.chat-controls__label::placeholder {
+  color: var(--muted);
 }

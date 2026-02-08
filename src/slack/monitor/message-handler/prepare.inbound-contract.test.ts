@@ -234,5 +234,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
+    expect(prepared!.ctxPayload.SessionKey).toBe("agent:main:main:thread:1.000");
   });
 });

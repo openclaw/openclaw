@@ -1127,6 +1127,26 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // Delete session (disabled for main session)
+                isMainSession:
+                  state.sessionKey === "main" ||
+                  parseAgentSessionKey(state.sessionKey)?.rest === "main",
+                onDelete: async () => {
+                  const { deleteSession } = await import("./controllers/sessions.ts");
+                  await deleteSession(
+                    state as Parameters<typeof deleteSession>[0],
+                    state.sessionKey,
+                  );
+                  // Switch to main session after deletion
+                  const mainKey = state.sessionsResult?.mainSessionKey ?? "main";
+                  state.sessionKey = mainKey;
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey: mainKey,
+                    lastActiveSessionKey: mainKey,
+                  });
+                  void loadChatHistory(state as unknown as ChatState);
+                },
               })
             : nothing
         }

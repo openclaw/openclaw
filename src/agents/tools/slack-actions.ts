@@ -4,7 +4,9 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
   deleteSlackMessage,
   editSlackMessage,
+  getSlackChannelInfo,
   getSlackMemberInfo,
+  listSlackChannels,
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
@@ -307,6 +309,29 @@ export async function handleSlackAction(
     }
     const emojis = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (action === "channelInfo") {
+    if (!isActionEnabled("channelInfo")) {
+      throw new Error("Slack channel info is disabled.");
+    }
+    const channelId = resolveChannelId();
+    const info = readOpts
+      ? await getSlackChannelInfo(channelId, readOpts)
+      : await getSlackChannelInfo(channelId);
+    return jsonResult({ ok: true, info });
+  }
+
+  if (action === "channelList") {
+    if (!isActionEnabled("channelInfo")) {
+      throw new Error("Slack channel list is disabled.");
+    }
+    const limitRaw = params.limit;
+    const limit = typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const list = readOpts
+      ? await listSlackChannels({ ...readOpts, limit })
+      : await listSlackChannels({ limit });
+    return jsonResult({ ok: true, channels: list });
   }
 
   throw new Error(`Unknown action: ${action}`);

@@ -54,6 +54,10 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       if (isActionEnabled("emojiList")) {
         actions.add("emoji-list");
       }
+      if (isActionEnabled("channelInfo")) {
+        actions.add("channel-info");
+        actions.add("channel-list");
+      }
       return Array.from(actions);
     },
     extractToolSend: ({ args }): ChannelToolSend | null => {
@@ -212,6 +216,25 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       if (action === "emoji-list") {
         return await handleSlackAction(
           { action: "emojiList", accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      if (action === "channel-info") {
+        return await handleSlackAction(
+          {
+            action: "channelInfo",
+            channelId: resolveChannelId(),
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "channel-list") {
+        const limit = readNumberParam(params, "limit", { integer: true });
+        return await handleSlackAction(
+          { action: "channelList", limit, accountId: accountId ?? undefined },
           cfg,
         );
       }

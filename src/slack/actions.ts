@@ -253,6 +253,58 @@ export async function unpinSlackMessage(
   await client.pins.remove({ channel: channelId, timestamp: messageId });
 }
 
+export async function getSlackChannelInfo(channelId: string, opts: SlackActionClientOpts = {}) {
+  const client = await getClient(opts);
+  const result = await client.conversations.info({ channel: channelId });
+  if (!result.channel) {
+    throw new Error(`Channel not found: ${channelId}`);
+  }
+  const ch = result.channel;
+  return {
+    id: ch.id,
+    name: ch.name,
+    topic: ch.topic?.value,
+    purpose: ch.purpose?.value,
+    isArchived: ch.is_archived,
+    isPrivate: ch.is_private,
+    memberCount: ch.num_members,
+    created: ch.created,
+  };
+}
+
+export async function listSlackChannels(
+  opts: SlackActionClientOpts & { types?: string; limit?: number } = {},
+) {
+  const client = await getClient(opts);
+  const maxChannels = opts.limit ?? 200;
+  const pageSize = Math.min(maxChannels, 200);
+  const allChannels: NonNullable<
+    Awaited<ReturnType<typeof client.conversations.list>>["channels"]
+  > = [];
+  let cursor: string | undefined;
+
+  do {
+    const result = await client.conversations.list({
+      types: opts.types ?? "public_channel,private_channel",
+      limit: pageSize,
+      exclude_archived: true,
+      cursor,
+    });
+    allChannels.push(...(result.channels ?? []));
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor && allChannels.length < maxChannels);
+
+  return allChannels.slice(0, maxChannels).map((ch) => ({
+    id: ch.id,
+    name: ch.name,
+    topic: ch.topic?.value,
+    purpose: ch.purpose?.value,
+    isArchived: ch.is_archived,
+    isPrivate: ch.is_private,
+    memberCount: ch.num_members,
+  }));
+}
+
 export async function listSlackPins(
   channelId: string,
   opts: SlackActionClientOpts = {},

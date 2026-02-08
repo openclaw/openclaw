@@ -68,6 +68,9 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Delete session
+  isMainSession?: boolean;
+  onDelete?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -263,7 +266,16 @@ export function renderChat(props: ChatProps) {
   `;
 
   return html`
-    <section class="card chat">
+    <section
+      class="card chat"
+      tabindex="-1"
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Escape" && canAbort && props.onAbort) {
+          e.preventDefault();
+          props.onAbort();
+        }
+      }}
+    >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
@@ -409,8 +421,32 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected || (!canAbort && props.sending)}
               @click=${canAbort ? props.onAbort : props.onNewSession}
             >
-              ${canAbort ? "Stop" : "New session"}
+              ${canAbort ? "Stop" : "New session"}${
+                canAbort
+                  ? html`
+                      <kbd class="btn-kbd">Esc</kbd>
+                    `
+                  : nothing
+              }
             </button>
+            ${
+              props.onDelete
+                ? html`
+                  <button
+                    class="btn"
+                    ?disabled=${!props.connected || isBusy || props.isMainSession}
+                    @click=${() => {
+                      if (confirm(`Delete session "${props.sessionKey}"?`)) {
+                        props.onDelete!();
+                      }
+                    }}
+                    title=${props.isMainSession ? "Cannot delete main session" : "Delete this session"}
+                  >
+                    🗑
+                  </button>
+                `
+                : nothing
+            }
             <button
               class="btn primary"
               ?disabled=${!props.connected}

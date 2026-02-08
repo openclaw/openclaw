@@ -8,6 +8,7 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { patchSession } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
@@ -46,6 +47,8 @@ export function renderChatControls(state: AppViewState) {
     state.sessionsResult,
     mainSessionKey,
   );
+  const activeSession = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const sessionLabel = activeSession?.label ?? "";
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -123,6 +126,20 @@ export function renderChatControls(state: AppViewState) {
           )}
         </select>
       </label>
+      <input
+        type="text"
+        class="chat-controls__label"
+        .value=${sessionLabel}
+        ?disabled=${!state.connected}
+        placeholder="Label"
+        title="Session label"
+        @change=${(e: Event) => {
+          const value = (e.target as HTMLInputElement).value.trim();
+          void patchSession(state as Parameters<typeof patchSession>[0], state.sessionKey, {
+            label: value || null,
+          });
+        }}
+      />
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
