@@ -278,7 +278,7 @@ async function runImagePrompt(params: {
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
         apiKey,
-        maxTokens: 512,
+        maxTokens: 4096,
       });
       const text = coerceImageAssistantText({
         message,
