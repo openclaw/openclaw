@@ -7,7 +7,7 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { appendCdpPath } from "./cdp.helpers.js";
+import { appendCdpPath, withCdpSocket } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
@@ -160,6 +160,33 @@ export async function isChromeCdpReady(
   return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
 }
 
+/**
+ * Enable downloads in Chrome by calling Browser.setDownloadBehavior via CDP.
+ * This allows Chrome to download files to the system's Downloads folder.
+ */
+async function enableChromeDownloads(cdpUrl: string): Promise<void> {
+  try {
+    const wsUrl = await getChromeWebSocketUrl(cdpUrl, 1500);
+    if (!wsUrl) {
+      log.warn("Could not enable downloads: CDP WebSocket URL not available");
+      return;
+    }
+
+    await withCdpSocket(wsUrl, async (send) => {
+      const downloadsPath = path.join(os.homedir(), "Downloads");
+      await send("Browser.setDownloadBehavior", {
+        behavior: "allow",
+        downloadPath: downloadsPath,
+        eventsEnabled: true,
+      });
+      log.debug(`Downloads enabled for Chrome (path: ${downloadsPath})`);
+    });
+  } catch (err) {
+    // Non-fatal: log warning but don't fail the browser launch
+    log.warn(`Failed to enable downloads: ${String(err)}`);
+  }
+}
+
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -296,6 +323,9 @@ export async function launchOpenClawChrome(
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
     );
   }
+
+  // Enable downloads after Chrome is ready
+  await enableChromeDownloads(profile.cdpUrl);
 
   const pid = proc.pid ?? -1;
   log.info(
