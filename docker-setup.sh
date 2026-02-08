@@ -123,13 +123,23 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+array_contains() {
+  local needle="$1"
+  shift
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
 upsert_env() {
   local file="$1"
   shift
   local -a keys=("$@")
   local tmp
   tmp="$(mktemp)"
-  declare -A seen=()
+  
+  local -a seen=()
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -137,8 +147,8 @@ upsert_env() {
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen["$k"]=1
+          printf '%s=%s\n' "$k" "${!k}" >>"$tmp"
+          seen+=("$k")
           replaced=true
           break
         fi
@@ -150,8 +160,8 @@ upsert_env() {
   fi
 
   for k in "${keys[@]}"; do
-    if [[ -z "${seen[$k]:-}" ]]; then
-      printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+    if ! array_contains "$k" "${seen[@]}"; then
+      printf '%s=%s\n' "$k" "${!k}" >>"$tmp"
     fi
   done
 
