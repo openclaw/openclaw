@@ -264,4 +264,124 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(r2.toolCallId).toBe(b.id);
     });
   });
+
+  describe("anthropic mode (Claude tool_use.id pattern)", () => {
+    it("preserves underscores and hyphens but strips other characters", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_abc|item:123", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc|item:123",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      // Anthropic mode preserves underscores but strips pipes and colons
+      expect(toolCall.id).toBe("call_abcitem123");
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "anthropic")).toBe(true);
+
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result.toolCallId).toBe(toolCall.id);
+    });
+
+    it("handles Kimi K2.5 style IDs when switching to Claude", () => {
+      // Kimi generates IDs like "call:abc|fc:123" which Claude rejects
+      const input = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "kimi:call|fc_123", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "kimi:call|fc_123",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      // Should strip colons and pipes but preserve underscores
+      expect(toolCall.id).toBe("kimicallfc_123");
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "anthropic")).toBe(true);
+
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result.toolCallId).toBe(toolCall.id);
+    });
+
+    it("is a no-op for valid Claude-style IDs", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "toolu_01XFDUDYJgAACzvnptvVoYEL", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "toolu_01XFDUDYJgAACzvnptvVoYEL",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      // Should be unchanged since it's already valid
+      expect(out).toBe(input);
+    });
+
+    it("avoids collisions with underscore suffixes", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call_a|b", name: "read", arguments: {} },
+            { type: "toolCall", id: "call_a:b", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_a|b",
+          toolName: "read",
+          content: [{ type: "text", text: "one" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_a:b",
+          toolName: "read",
+          content: [{ type: "text", text: "two" }],
+        },
+      ] satisfies AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "anthropic");
+      expect(out).not.toBe(input);
+
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const a = assistant.content?.[0] as { id?: string };
+      const b = assistant.content?.[1] as { id?: string };
+      expect(typeof a.id).toBe("string");
+      expect(typeof b.id).toBe("string");
+      expect(a.id).not.toBe(b.id);
+      // Both should match Claude's pattern ^[a-zA-Z0-9_-]+$
+      expect(isValidCloudCodeAssistToolId(a.id as string, "anthropic")).toBe(true);
+      expect(isValidCloudCodeAssistToolId(b.id as string, "anthropic")).toBe(true);
+
+      const r1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      const r2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(r1.toolCallId).toBe(a.id);
+      expect(r2.toolCallId).toBe(b.id);
+    });
+  });
 });
