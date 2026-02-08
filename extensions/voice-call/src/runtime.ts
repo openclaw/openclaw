@@ -118,6 +118,21 @@ export async function createVoiceCallRuntime(params: {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
+  // Guard against skipSignatureVerification in production
+  if (config.skipSignatureVerification) {
+    const nodeEnv = process.env.NODE_ENV?.toLowerCase();
+    if (nodeEnv === "production") {
+      throw new Error(
+        "skipSignatureVerification cannot be enabled in production. " +
+          'Set NODE_ENV to "development" or remove this setting.',
+      );
+    }
+    log.warn(
+      "[voice-call] WARNING: Webhook signature verification is DISABLED. " +
+        "This is unsafe for production use.",
+    );
+  }
+
   const provider = resolveProvider(config);
   const manager = new CallManager(config);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
