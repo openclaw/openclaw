@@ -4,6 +4,7 @@
  */
 
 import type { ModelCatalogEntry } from "./model-catalog.js";
+import { inferModelCapabilities } from "./capability-inference.js";
 
 export type ModelCapability = "coding" | "reasoning" | "vision" | "general" | "fast" | "creative";
 
@@ -561,15 +562,20 @@ export function getModelCapabilities(modelId: string): ModelCapabilities {
     }
   }
 
+  // If no registry match, use pattern-based inference
+  if (!base) {
+    return inferModelCapabilities(modelId);
+  }
+
   return {
-    coding: base?.coding ?? false,
-    reasoning: base?.reasoning ?? false,
-    vision: base?.vision ?? false,
-    general: base?.general ?? true,
-    fast: base?.fast ?? false,
-    creative: base?.creative ?? false,
-    performanceTier: base?.performanceTier ?? "balanced",
-    costTier: base?.costTier ?? "moderate",
+    coding: base.coding ?? false,
+    reasoning: base.reasoning ?? false,
+    vision: base.vision ?? false,
+    general: base.general ?? true,
+    fast: base.fast ?? false,
+    creative: base.creative ?? false,
+    performanceTier: base.performanceTier ?? "balanced",
+    costTier: base.costTier ?? "moderate",
   };
 }
 
@@ -578,13 +584,31 @@ export function getModelCapabilities(modelId: string): ModelCapabilities {
  * Uses catalog's reasoning and input fields when available.
  */
 export function getModelCapabilitiesFromCatalog(entry: ModelCatalogEntry): ModelCapabilities {
-  const base = getModelCapabilities(entry.id);
-  return {
-    ...base,
-    // Override with catalog data when available
-    reasoning: entry.reasoning ?? base.reasoning,
-    vision: entry.input?.includes("image") ?? base.vision,
-  };
+  const normalized = entry.id.trim().toLowerCase();
+
+  // Check if model is in the hardcoded registry
+  let inRegistry = Boolean(MODEL_CAPABILITIES_REGISTRY[entry.id]);
+  if (!inRegistry) {
+    for (const key of Object.keys(MODEL_CAPABILITIES_REGISTRY)) {
+      if (key.toLowerCase() === normalized || normalized.startsWith(key.toLowerCase())) {
+        inRegistry = true;
+        break;
+      }
+    }
+  }
+
+  // For registry models, use registry + catalog overrides
+  if (inRegistry) {
+    const base = getModelCapabilities(entry.id);
+    return {
+      ...base,
+      reasoning: entry.reasoning ?? base.reasoning,
+      vision: entry.input?.includes("image") ?? base.vision,
+    };
+  }
+
+  // For unknown models, infer from patterns + catalog metadata
+  return inferModelCapabilities(entry.id, entry);
 }
 
 /**
