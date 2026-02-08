@@ -336,8 +336,10 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave" or "perplexity"). */
-      provider?: "brave" | "perplexity";
+      /** Search provider ("brave", "perplexity", or "serper"). */
+      provider?: "brave" | "perplexity" | "serper";
+      /** Fallback provider to use when primary fails (optional). */
+      fallback?: "brave" | "perplexity" | "serper";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -354,6 +356,11 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "perplexity/sonar-pro"). */
         model?: string;
+      };
+      /** Serper-specific configuration (used when provider="serper"). */
+      serper?: {
+        /** API key for Serper (defaults to SERPER_API_KEY env var). */
+        apiKey?: string;
       };
     };
     fetch?: {

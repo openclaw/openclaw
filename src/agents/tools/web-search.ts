@@ -5,28 +5,25 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
+  createProvider,
+  type WebSearchOptions,
+  type WebSearchProvider,
+  type SearchProviderType,
+} from "./web-search-providers.js";
+import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
-  readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const _SEARCH_PROVIDERS = ["brave", "perplexity", "serper"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
-
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
-const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
-const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
-const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
-const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -71,38 +68,6 @@ type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer
     : undefined
   : undefined;
 
-type BraveSearchResult = {
-  title?: string;
-  url?: string;
-  description?: string;
-  age?: string;
-};
-
-type BraveSearchResponse = {
-  web?: {
-    results?: BraveSearchResult[];
-  };
-};
-
-type PerplexityConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-};
-
-type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
-
-type PerplexitySearchResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
-  }>;
-  citations?: string[];
-};
-
-type PerplexityBaseUrlHint = "direct" | "openrouter";
-
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
@@ -121,30 +86,7 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
   return true;
 }
 
-function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
-  const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
-  const fromEnv = (process.env.BRAVE_API_KEY ?? "").trim();
-  return fromConfig || fromEnv || undefined;
-}
-
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
-  if (provider === "perplexity") {
-    return {
-      error: "missing_perplexity_api_key",
-      message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-  return {
-    error: "missing_brave_api_key",
-    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.openclaw.ai/tools/web",
-  };
-}
-
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(search?: WebSearchConfig): SearchProviderType {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
@@ -152,99 +94,27 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "perplexity") {
     return "perplexity";
   }
+  if (raw === "serper") {
+    return "serper";
+  }
   if (raw === "brave") {
     return "brave";
   }
   return "brave";
 }
 
-function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
-  const perplexity = "perplexity" in search ? search.perplexity : undefined;
-  if (!perplexity || typeof perplexity !== "object") {
-    return {};
-  }
-  return perplexity as PerplexityConfig;
-}
-
-function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
-  apiKey?: string;
-  source: PerplexityApiKeySource;
-} {
-  const fromConfig = normalizeApiKey(perplexity?.apiKey);
-  if (fromConfig) {
-    return { apiKey: fromConfig, source: "config" };
-  }
-
-  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
-  if (fromEnvPerplexity) {
-    return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
-  }
-
-  const fromEnvOpenRouter = normalizeApiKey(process.env.OPENROUTER_API_KEY);
-  if (fromEnvOpenRouter) {
-    return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
-  }
-
-  return { apiKey: undefined, source: "none" };
-}
-
-function normalizeApiKey(key: unknown): string {
-  return typeof key === "string" ? key.trim() : "";
-}
-
-function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
-  if (!apiKey) {
+function resolveFallbackProvider(search?: WebSearchConfig): SearchProviderType | undefined {
+  const raw =
+    search && "fallback" in search && typeof search.fallback === "string"
+      ? search.fallback.trim().toLowerCase()
+      : "";
+  if (!raw) {
     return undefined;
   }
-  const normalized = apiKey.toLowerCase();
-  if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "direct";
-  }
-  if (OPENROUTER_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return "openrouter";
+  if (raw === "perplexity" || raw === "serper" || raw === "brave") {
+    return raw as SearchProviderType;
   }
   return undefined;
-}
-
-function resolvePerplexityBaseUrl(
-  perplexity?: PerplexityConfig,
-  apiKeySource: PerplexityApiKeySource = "none",
-  apiKey?: string,
-): string {
-  const fromConfig =
-    perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
-      ? perplexity.baseUrl.trim()
-      : "";
-  if (fromConfig) {
-    return fromConfig;
-  }
-  if (apiKeySource === "perplexity_env") {
-    return PERPLEXITY_DIRECT_BASE_URL;
-  }
-  if (apiKeySource === "openrouter_env") {
-    return DEFAULT_PERPLEXITY_BASE_URL;
-  }
-  if (apiKeySource === "config") {
-    const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
-    if (inferred === "direct") {
-      return PERPLEXITY_DIRECT_BASE_URL;
-    }
-    if (inferred === "openrouter") {
-      return DEFAULT_PERPLEXITY_BASE_URL;
-    }
-  }
-  return DEFAULT_PERPLEXITY_BASE_URL;
-}
-
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
-  const fromConfig =
-    perplexity && "model" in perplexity && typeof perplexity.model === "string"
-      ? perplexity.model.trim()
-      : "";
-  return fromConfig || DEFAULT_PERPLEXITY_MODEL;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -298,164 +168,147 @@ function isValidIsoDate(value: string): boolean {
   );
 }
 
-function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
+function _missingSearchKeyPayload(provider: SearchProviderType): Record<string, unknown> {
+  if (provider === "perplexity") {
+    return {
+      error: "missing_perplexity_api_key",
+      message:
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
   }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
+  if (provider === "serper") {
+    return {
+      error: "missing_serper_api_key",
+      message:
+        "web_search (serper) needs an API key. Set SERPER_API_KEY in the Gateway environment, or configure tools.web.search.serper.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
   }
+  return {
+    error: "missing_brave_api_key",
+    message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
 }
 
-async function runPerplexitySearch(params: {
-  query: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutSeconds: number;
-}): Promise<{ content: string; citations: string[] }> {
-  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw Web Search",
-    },
-    body: JSON.stringify({
-      model: params.model,
-      messages: [
-        {
-          role: "user",
-          content: params.query,
-        },
-      ],
-    }),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  if (!res.ok) {
-    const detail = await readResponseText(res);
-    throw new Error(`Perplexity API error (${res.status}): ${detail || res.statusText}`);
-  }
-
-  const data = (await res.json()) as PerplexitySearchResponse;
-  const content = data.choices?.[0]?.message?.content ?? "No response";
-  const citations = data.citations ?? [];
-
-  return { content, citations };
+function extractProviderConfig(search: WebSearchConfig | undefined) {
+  return {
+    brave: search && "apiKey" in search ? { apiKey: search.apiKey } : undefined,
+    perplexity: search && "perplexity" in search ? search.perplexity : undefined,
+    serper: search && "serper" in search ? search.serper : undefined,
+  };
 }
 
-async function runWebSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
-  country?: string;
-  search_lang?: string;
-  ui_lang?: string;
-  freshness?: string;
-  perplexityBaseUrl?: string;
-  perplexityModel?: string;
-}): Promise<Record<string, unknown>> {
-  const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
-  );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+/**
+ * Wrap search result content with web content security wrapper.
+ */
+function wrapSearchResult(result: Record<string, unknown>): Record<string, unknown> {
+  // Wrap Perplexity content
+  if ("content" in result && typeof result.content === "string") {
+    return { ...result, content: wrapWebContent(result.content) };
+  }
+
+  // Wrap structured results (Brave/Serper)
+  if ("results" in result && Array.isArray(result.results)) {
+    return {
+      ...result,
+      results: result.results.map((entry: unknown) => {
+        if (typeof entry === "object" && entry !== null) {
+          const wrapped: Record<string, unknown> = {};
+          if ("title" in entry && typeof entry.title === "string") {
+            wrapped.title = wrapWebContent(entry.title, "web_search");
+          } else {
+            wrapped.title = "";
+          }
+          if ("description" in entry && typeof entry.description === "string") {
+            wrapped.description = wrapWebContent(entry.description, "web_search");
+          } else {
+            wrapped.description = "";
+          }
+          // Copy other fields
+          if ("url" in entry) {
+            wrapped.url = entry.url;
+          }
+          if ("published" in entry) {
+            wrapped.published = entry.published;
+          }
+          if ("siteName" in entry) {
+            wrapped.siteName = entry.siteName;
+          }
+          return wrapped;
+        }
+        return entry;
+      }),
+    };
+  }
+
+  return result;
+}
+
+async function runWebSearchWithFallback(
+  provider: WebSearchProvider,
+  fallbackProvider: WebSearchProvider | undefined,
+  options: WebSearchOptions,
+): Promise<Record<string, unknown>> {
+  // Build cache key (fallback provider info will be added later if actually used)
+  const baseCacheKey = `${provider.type}:${options.query}:${options.count}:${options.country || "default"}:${options.search_lang || "default"}:${options.ui_lang || "default"}:${options.freshness || "default"}`;
+  const primaryCacheKey = normalizeCacheKey(baseCacheKey);
+
+  const cached = readCache(SEARCH_CACHE, primaryCacheKey);
   if (cached) {
     return { ...cached.value, cached: true };
   }
 
   const start = Date.now();
 
-  if (params.provider === "perplexity") {
-    const { content, citations } = await runPerplexitySearch({
-      query: params.query,
-      apiKey: params.apiKey,
-      baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
-      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
-      timeoutSeconds: params.timeoutSeconds,
-    });
+  // Calculate timeouts: 70% for primary, 30% for fallback
+  const primaryTimeoutSeconds = Math.max(1, Math.floor(options.timeoutSeconds * 0.7));
+  const fallbackTimeoutSeconds = Math.max(1, Math.floor(options.timeoutSeconds * 0.3));
 
-    const payload = {
-      query: params.query,
-      provider: params.provider,
-      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
-      tookMs: Date.now() - start,
-      content: wrapWebContent(content),
-      citations,
-    };
-    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  }
+  // Try primary provider with reduced timeout
+  try {
+    const primaryOptions = { ...options, timeoutSeconds: primaryTimeoutSeconds };
+    const result = await provider.search(primaryOptions);
+    const payload = { ...result, tookMs: Date.now() - start };
+    writeCache(SEARCH_CACHE, primaryCacheKey, payload, options.cacheTtlMs);
+    return wrapSearchResult(payload);
+  } catch (primaryError) {
+    // If no fallback, re-throw
+    if (!fallbackProvider) {
+      throw primaryError;
+    }
 
-  if (params.provider !== "brave") {
-    throw new Error("Unsupported web search provider.");
-  }
+    // Build fallback cache key including fallback provider info
+    const fallbackCacheKey = normalizeCacheKey(
+      `${provider.type}:${fallbackProvider.type}:${baseCacheKey}`,
+    );
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
-  url.searchParams.set("q", params.query);
-  url.searchParams.set("count", String(params.count));
-  if (params.country) {
-    url.searchParams.set("country", params.country);
-  }
-  if (params.search_lang) {
-    url.searchParams.set("search_lang", params.search_lang);
-  }
-  if (params.ui_lang) {
-    url.searchParams.set("ui_lang", params.ui_lang);
-  }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  }
+    // Check cache again with fallback key
+    const fallbackCached = readCache(SEARCH_CACHE, fallbackCacheKey);
+    if (fallbackCached) {
+      return { ...fallbackCached.value, cached: true };
+    }
 
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
-    },
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  if (!res.ok) {
-    const detail = await readResponseText(res);
-    throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+    // Try fallback provider with remaining timeout
+    try {
+      const fallbackOptions = { ...options, timeoutSeconds: fallbackTimeoutSeconds };
+      const fallbackResult = await fallbackProvider.search(fallbackOptions);
+      const payload = {
+        ...fallbackResult,
+        provider: fallbackProvider.type,
+        fallbackFrom: provider.type,
+        tookMs: Date.now() - start,
+      };
+      writeCache(SEARCH_CACHE, fallbackCacheKey, payload, options.cacheTtlMs);
+      return wrapSearchResult(payload);
+    } catch (fallbackError) {
+      // Combine both errors, preserving the fallback error as the cause
+      const errorMessage = `Primary provider (${provider.type}) failed: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}; Fallback provider (${fallbackProvider.type}) also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`;
+      const combinedError = new Error(errorMessage, { cause: fallbackError });
+      throw combinedError;
+    }
   }
-
-  const data = (await res.json()) as BraveSearchResponse;
-  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  const mapped = results.map((entry) => {
-    const description = entry.description ?? "";
-    const title = entry.title ?? "";
-    const url = entry.url ?? "";
-    const rawSiteName = resolveSiteName(url);
-    return {
-      title: title ? wrapWebContent(title, "web_search") : "",
-      url, // Keep raw for tool chaining
-      description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
-      siteName: rawSiteName || undefined,
-    };
-  });
-
-  const payload = {
-    query: params.query,
-    provider: params.provider,
-    count: mapped.length,
-    tookMs: Date.now() - start,
-    results: mapped,
-  };
-  writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-  return payload;
 }
 
 export function createWebSearchTool(options?: {
@@ -467,13 +320,80 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
-  const perplexityConfig = resolvePerplexityConfig(search);
+  const providerType = resolveSearchProvider(search);
+  const fallbackType = resolveFallbackProvider(search);
+
+  // Build provider config
+  const providerConfig = extractProviderConfig(search);
+
+  // Create providers
+  let primaryProvider: WebSearchProvider | undefined;
+  let fallbackProvider: WebSearchProvider | undefined;
+  let fallbackInitError: Error | undefined;
+
+  try {
+    primaryProvider = createProvider(providerType, providerConfig);
+  } catch (e) {
+    // Provider creation failed (likely missing API key)
+    // If there's a fallback, try it instead
+    if (fallbackType) {
+      try {
+        primaryProvider = createProvider(fallbackType, providerConfig);
+        // Swap: fallback becomes primary
+        fallbackProvider = undefined;
+      } catch (fallbackError) {
+        // Both failed
+        return {
+          label: "Web Search",
+          name: "web_search",
+          description:
+            "Search the web using configured provider with fallback support. (Currently misconfigured - see error)",
+          parameters: WebSearchSchema,
+          execute: async () => {
+            return jsonResult({
+              error: "provider_initialization_failed",
+              message: `Failed to initialize primary provider (${providerType}): ${e instanceof Error ? e.message : String(e)}. Fallback provider (${fallbackType}) also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+            });
+          },
+        };
+      }
+    } else {
+      return {
+        label: "Web Search",
+        name: "web_search",
+        description: "Search the web. (Currently misconfigured - see error)",
+        parameters: WebSearchSchema,
+        execute: async () => {
+          return jsonResult({
+            error: "provider_initialization_failed",
+            message: `Failed to initialize provider (${providerType}): ${e instanceof Error ? e.message : String(e)}`,
+          });
+        },
+      };
+    }
+  }
+
+  // Create fallback provider if configured
+  if (fallbackType && primaryProvider) {
+    try {
+      fallbackProvider = createProvider(fallbackType, providerConfig);
+    } catch (e) {
+      // Fallback creation failed - record error for surfacing in tool description/payload
+      fallbackInitError = e instanceof Error ? e : new Error(String(e));
+      fallbackProvider = undefined;
+    }
+  }
 
   const description =
-    provider === "perplexity"
+    providerType === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : providerType === "serper"
+        ? "Search the web using Serper (Google Search API). Returns titles, URLs, and snippets for fast research."
+        : fallbackProvider
+          ? `Search the web using ${providerType} with ${fallbackType} fallback. Supports region-specific and localized search. Returns titles, URLs, and snippets for fast research.`
+          : fallbackInitError
+            ? `Search the web using ${providerType}. (Warning: Fallback provider ${fallbackType} failed to initialize: ${fallbackInitError.message}) Supports region-specific and localized search. Returns titles, URLs, and snippets for fast research.`
+            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -481,14 +401,13 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
-      const perplexityAuth =
-        provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
-      const apiKey =
-        provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
-
-      if (!apiKey) {
-        return jsonResult(missingSearchKeyPayload(provider));
+      if (!primaryProvider) {
+        return jsonResult({
+          error: "no_provider",
+          message: "No search provider configured.",
+        });
       }
+
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
@@ -497,13 +416,16 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave") {
+
+      // Freshness only supported by Brave
+      if (rawFreshness && providerType !== "brave" && (!fallbackType || fallbackType !== "brave")) {
         return jsonResult({
           error: "unsupported_freshness",
           message: "freshness is only supported by the Brave web_search provider.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
+
       const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
       if (rawFreshness && !freshness) {
         return jsonResult({
@@ -513,31 +435,39 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      const result = await runWebSearch({
-        query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        provider,
-        country,
-        search_lang,
-        ui_lang,
-        freshness,
-        perplexityBaseUrl: resolvePerplexityBaseUrl(
-          perplexityConfig,
-          perplexityAuth?.source,
-          perplexityAuth?.apiKey,
-        ),
-        perplexityModel: resolvePerplexityModel(perplexityConfig),
-      });
-      return jsonResult(result);
+
+      try {
+        const result = await runWebSearchWithFallback(primaryProvider, fallbackProvider, {
+          query,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+          cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+          country,
+          search_lang,
+          ui_lang,
+          freshness,
+        });
+        // Include fallback initialization warning if present
+        if (fallbackInitError && typeof result === "object" && result !== null) {
+          return jsonResult({
+            ...result,
+            fallbackWarning: `Fallback provider ${fallbackType} failed to initialize: ${fallbackInitError.message}`,
+          });
+        }
+        return jsonResult(result);
+      } catch (error) {
+        return jsonResult({
+          error: "search_failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
   };
 }
 
 export const __testing = {
-  inferPerplexityBaseUrlFromApiKey,
-  resolvePerplexityBaseUrl,
   normalizeFreshness,
+  extractProviderConfig,
+  resolveSearchProvider,
+  resolveFallbackProvider,
 } as const;

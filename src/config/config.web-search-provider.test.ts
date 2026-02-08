@@ -21,4 +21,62 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts serper provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "serper",
+            serper: {
+              apiKey: "test-serper-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts serper as fallback provider", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+            fallback: "serper",
+            apiKey: "test-brave-key",
+            serper: {
+              apiKey: "test-serper-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts brave as fallback provider", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "serper",
+            fallback: "brave",
+            serper: {
+              apiKey: "test-serper-key",
+            },
+            apiKey: "test-brave-key",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
