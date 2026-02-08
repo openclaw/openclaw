@@ -17,7 +17,43 @@ function formatMediaAttachedLine(params: {
   return `${prefix}${params.path}${typePart}${urlPart}]`;
 }
 
+// Common audio file extensions for transcription detection
+const AUDIO_EXTENSIONS = new Set([
+  ".ogg",
+  ".opus",
+  ".mp3",
+  ".m4a",
+  ".wav",
+  ".webm",
+  ".flac",
+  ".aac",
+  ".wma",
+  ".aiff",
+  ".alac",
+  ".oga",
+]);
+
+function isAudioPath(path: string | undefined): boolean {
+  if (!path) {
+    return false;
+  }
+  const lower = path.toLowerCase();
+  for (const ext of AUDIO_EXTENSIONS) {
+    if (lower.endsWith(ext)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Check if audio transcription succeeded - if so, we can strip the raw audio attachment
+  // to save context tokens (the transcript is already in ctx.Transcript or [Audio] block)
+  const hasAudioTranscription =
+    (Array.isArray(ctx.MediaUnderstanding) &&
+      ctx.MediaUnderstanding.some((o) => o.kind === "audio.transcription")) ||
+    Boolean(ctx.Transcript?.trim());
+
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const suppressed = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
@@ -64,7 +100,21 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       url: urls?.[index] ?? ctx.MediaUrl,
       index,
     }))
-    .filter((entry) => !suppressed.has(entry.index));
+    .filter((entry) => {
+      if (suppressed.has(entry.index)) {
+        return false;
+      }
+      // Strip audio attachments when transcription succeeded - the transcript is already
+      // available in the context, raw audio binary would only waste tokens (issue #4197)
+      // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
+      // which could misclassify non-audio attachments (greptile review feedback)
+      const hasPerEntryType = types !== undefined;
+      const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
+      if (hasAudioTranscription && (isAudioPath(entry.path) || isAudioByMime)) {
+        return false;
+      }
+      return true;
+    });
   if (entries.length === 0) {
     return undefined;
   }

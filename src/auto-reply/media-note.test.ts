@@ -106,4 +106,52 @@ describe("buildInboundMediaNote", () => {
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
   });
+
+  it("strips audio attachments when transcription succeeded via MediaUnderstanding (issue #4197)", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
+      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
+      MediaTypes: ["audio/ogg", "image/png"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Hello world",
+          provider: "whisper",
+        },
+      ],
+    });
+    // Audio attachment should be stripped (already transcribed), image should remain
+    expect(note).toBe(
+      "[media attached: /tmp/image.png (image/png) | https://example.com/image.png]",
+    );
+  });
+
+  it("strips audio attachments when Transcript is present (issue #4197)", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice.opus"],
+      MediaTypes: ["audio/opus"],
+      Transcript: "Hello world from Whisper",
+    });
+    // Audio should be stripped when transcript is available
+    expect(note).toBeUndefined();
+  });
+
+  it("strips audio by extension even without mime type (issue #4197)", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice_message.ogg", "/tmp/document.pdf"],
+      Transcript: "Transcribed audio content",
+    });
+    // Only PDF should remain, audio stripped by extension
+    expect(note).toBe("[media attached: /tmp/document.pdf]");
+  });
+
+  it("keeps audio attachments when no transcription available", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg"],
+    });
+    // No transcription = keep audio attachment as fallback
+    expect(note).toBe("[media attached: /tmp/voice.ogg (audio/ogg)]");
+  });
 });
