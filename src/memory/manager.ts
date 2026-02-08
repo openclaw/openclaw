@@ -25,6 +25,7 @@ import {
   OPENAI_BATCH_ENDPOINT,
   type OpenAiBatchRequest,
   runOpenAiEmbeddingBatches,
+  sanitizeCustomId,
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
@@ -1985,9 +1986,11 @@ export class MemoryIndexManager implements MemorySearchManager {
     const mapping = new Map<string, { index: number; hash: string }>();
     for (const item of missing) {
       const chunk = item.chunk;
-      const customId = hashText(
+      const rawId = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${item.index}`,
       );
+      // Sanitize custom_id to match OpenAI's required pattern: ^[a-zA-Z0-9_-]+$
+      const customId = sanitizeCustomId(rawId);
       mapping.set(customId, { index: item.index, hash: chunk.hash });
       requests.push({
         custom_id: customId,

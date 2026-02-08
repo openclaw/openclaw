@@ -2,6 +2,14 @@ import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { retryAsync } from "../infra/retry.js";
 import { hashText } from "./internal.js";
 
+/**
+ * Sanitize custom_id to match OpenAI's required pattern: ^[a-zA-Z0-9_-]+$
+ * Replaces any invalid characters with underscores.
+ */
+export function sanitizeCustomId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export type OpenAiBatchRequest = {
   custom_id: string;
   method: "POST";
@@ -72,7 +80,15 @@ async function submitOpenAiBatch(params: {
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
   const baseUrl = getOpenAiBaseUrl(params.openAi);
-  const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
+  // Sanitize custom_id to ensure it matches OpenAI's required pattern
+  const jsonl = params.requests
+    .map((request) =>
+      JSON.stringify({
+        ...request,
+        custom_id: sanitizeCustomId(request.custom_id),
+      }),
+    )
+    .join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
   form.append(
