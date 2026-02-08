@@ -66,22 +66,26 @@ export function resolveControlUiRepoRoot(
 }
 
 export async function resolveControlUiDistIndexPath(
-  argv1: string | undefined = process.argv[1],
+  opts: string | { argv1?: string; moduleUrl?: string; cwd?: string } = process.argv[1],
 ): Promise<string | null> {
-  if (!argv1) {
-    return null;
-  }
-  const normalized = path.resolve(argv1);
+  const argv1 = typeof opts === "string" ? opts : opts.argv1;
+  const normalized = argv1 ? path.resolve(argv1) : null;
 
   // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
-  const distDir = path.dirname(normalized);
-  if (path.basename(distDir) === "dist") {
-    return path.join(distDir, "control-ui", "index.html");
+  if (normalized) {
+    const distDir = path.dirname(normalized);
+    if (path.basename(distDir) === "dist") {
+      return path.join(distDir, "control-ui", "index.html");
+    }
   }
 
-  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
-  if (packageRoot) {
-    return path.join(packageRoot, "dist", "control-ui", "index.html");
+  const packageRoot = await resolveOpenClawPackageRoot({
+    argv1: normalized ?? undefined,
+    moduleUrl: typeof opts === "string" ? undefined : opts.moduleUrl,
+    cwd: typeof opts === "string" ? undefined : opts.cwd,
+  });
+  if (!packageRoot) {
+    return null;
   }
 
   // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
@@ -216,9 +220,12 @@ export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },
 ): Promise<EnsureControlUiAssetsResult> {
-  const health = await resolveControlUiDistIndexHealth({ argv1: process.argv[1] });
-  const indexFromDist = health.indexPath;
-  if (health.exists) {
+  const indexFromDist = await resolveControlUiDistIndexPath({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (indexFromDist && fs.existsSync(indexFromDist)) {
     return { ok: true, built: false };
   }
 
