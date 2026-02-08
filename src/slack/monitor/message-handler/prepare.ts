@@ -45,6 +45,58 @@ import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import type { SlackAttachment } from "../../types.js";
+
+/**
+ * Extract text content from Slack message attachments.
+ * Handles forwarded messages, unfurled links, and other attachment types.
+ */
+function extractAttachmentText(attachments: SlackAttachment[] | undefined): string {
+  if (!attachments || attachments.length === 0) return "";
+
+  const parts: string[] = [];
+  for (const attachment of attachments) {
+    // For forwarded/shared messages, prefer the text field
+    if (attachment.is_msg_unfurl || attachment.is_share) {
+      const attachmentText = attachment.text?.trim();
+      if (attachmentText) {
+        const author = attachment.author_name ? `[Forwarded from ${attachment.author_name}] ` : "[Forwarded message] ";
+        parts.push(`${author}${attachmentText}`);
+        continue;
+      }
+      // Fallback to message_blocks if text is empty
+      if (attachment.message_blocks) {
+        for (const block of attachment.message_blocks) {
+          const blockElements = block.message?.blocks;
+          if (blockElements) {
+            for (const element of blockElements) {
+              if (element.type === "rich_text" && element.elements) {
+                for (const section of element.elements) {
+                  if (section.elements) {
+                    for (const item of section.elements) {
+                      if (item.text) {
+                        const author = attachment.author_name ? `[Forwarded from ${attachment.author_name}] ` : "[Forwarded message] ";
+                        parts.push(`${author}${item.text}`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      // For other attachments, use text or fallback
+      const content = attachment.text?.trim() || attachment.fallback?.trim();
+      if (content) {
+        parts.push(content);
+      }
+    }
+  }
+
+  return parts.join("\n\n");
+}
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -336,7 +388,15 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
+
+  // Extract text from attachments (forwarded messages, unfurls, etc.)
+  const attachmentText = extractAttachmentText(message.attachments);
+  const mainText = (message.text ?? "").trim();
+  const rawBody = mainText
+    ? attachmentText
+      ? `${mainText}\n\n${attachmentText}`
+      : mainText
+    : attachmentText || media?.placeholder || "";
   if (!rawBody) {
     return null;
   }

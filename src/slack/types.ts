@@ -7,6 +7,31 @@ export type SlackFile = {
   url_private_download?: string;
 };
 
+export type SlackAttachment = {
+  fallback?: string;
+  text?: string;
+  pretext?: string;
+  author_name?: string;
+  title?: string;
+  from_url?: string;
+  is_msg_unfurl?: boolean;
+  is_share?: boolean;
+  message_blocks?: Array<{
+    message?: {
+      blocks?: Array<{
+        type: string;
+        elements?: Array<{
+          type: string;
+          elements?: Array<{
+            type: string;
+            text?: string;
+          }>;
+        }>;
+      }>;
+    };
+  }>;
+};
+
 export type SlackMessageEvent = {
   type: "message";
   user?: string;
@@ -21,6 +46,7 @@ export type SlackMessageEvent = {
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
   files?: SlackFile[];
+  attachments?: SlackAttachment[];
 };
 
 export type SlackAppMentionEvent = {
