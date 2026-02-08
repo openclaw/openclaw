@@ -62,6 +62,30 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_missing_config");
   });
 
+  it("rate limits repeated failed auth attempts", async () => {
+    const req = {
+      socket: { remoteAddress: "203.0.113.10" },
+      headers: {},
+    } as never;
+    const auth = { mode: "token", token: "secret", allowTailscale: false };
+
+    const first = await authorizeGatewayConnect({
+      auth,
+      connectAuth: { token: "wrong" },
+      req,
+    });
+    expect(first.ok).toBe(false);
+    expect(first.reason).toBe("token_mismatch");
+
+    const second = await authorizeGatewayConnect({
+      auth,
+      connectAuth: { token: "wrong" },
+      req,
+    });
+    expect(second.ok).toBe(false);
+    expect(second.reason).toBe("rate_limited");
+  });
+
   it("treats local tailscale serve hostnames as direct", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },

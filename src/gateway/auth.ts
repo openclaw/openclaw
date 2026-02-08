@@ -17,6 +17,7 @@ export type GatewayAuthResult = {
   method?: "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
+  retryAfterMs?: number;
 };
 
 type ConnectAuth = {
@@ -31,6 +32,80 @@ type TailscaleUser = {
 };
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+
+type AuthRateLimitState = {
+  count: number;
+  lastAttemptMs: number;
+  blockedUntilMs: number;
+};
+
+const AUTH_RATE_LIMIT_BASE_MS = 1000;
+const AUTH_RATE_LIMIT_MAX_MS = 30_000;
+const AUTH_RATE_LIMIT_RESET_MS = 10 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX_ENTRIES = 5000;
+const authRateLimitState = new Map<string, AuthRateLimitState>();
+
+function computeAuthBackoffMs(count: number): number {
+  const exponent = Math.max(0, count - 1);
+  return Math.min(AUTH_RATE_LIMIT_MAX_MS, AUTH_RATE_LIMIT_BASE_MS * 2 ** exponent);
+}
+
+function pruneAuthRateLimitState(now: number): void {
+  if (authRateLimitState.size <= AUTH_RATE_LIMIT_MAX_ENTRIES) {
+    return;
+  }
+  for (const [key, state] of authRateLimitState) {
+    if (now - state.lastAttemptMs > AUTH_RATE_LIMIT_RESET_MS) {
+      authRateLimitState.delete(key);
+    }
+  }
+}
+
+function resolveAuthRateLimitKey(req?: IncomingMessage, trustedProxies?: string[]): string | null {
+  const clientIp = resolveRequestClientIp(req, trustedProxies);
+  return clientIp ? clientIp : null;
+}
+
+function checkAuthRateLimit(key: string, now: number): { allowed: boolean; retryAfterMs?: number } {
+  const state = authRateLimitState.get(key);
+  if (!state) {
+    return { allowed: true };
+  }
+  if (now - state.lastAttemptMs > AUTH_RATE_LIMIT_RESET_MS) {
+    authRateLimitState.delete(key);
+    return { allowed: true };
+  }
+  if (now < state.blockedUntilMs) {
+    return { allowed: false, retryAfterMs: state.blockedUntilMs - now };
+  }
+  return { allowed: true };
+}
+
+function recordAuthFailure(key: string, now: number): number {
+  const prev = authRateLimitState.get(key);
+  if (prev && now - prev.lastAttemptMs <= AUTH_RATE_LIMIT_RESET_MS) {
+    const count = prev.count + 1;
+    const backoffMs = computeAuthBackoffMs(count);
+    authRateLimitState.set(key, {
+      count,
+      lastAttemptMs: now,
+      blockedUntilMs: now + backoffMs,
+    });
+    return backoffMs;
+  }
+  const backoffMs = computeAuthBackoffMs(1);
+  authRateLimitState.set(key, {
+    count: 1,
+    lastAttemptMs: now,
+    blockedUntilMs: now + backoffMs,
+  });
+  pruneAuthRateLimitState(now);
+  return backoffMs;
+}
+
+function clearAuthFailures(key: string): void {
+  authRateLimitState.delete(key);
+}
 
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) {
@@ -245,6 +320,7 @@ export async function authorizeGatewayConnect(params: {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const rateLimitKey = resolveAuthRateLimitKey(req, trustedProxies);
 
   if (auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
@@ -252,6 +328,9 @@ export async function authorizeGatewayConnect(params: {
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      if (rateLimitKey) {
+        clearAuthFailures(rateLimitKey);
+      }
       return {
         ok: true,
         method: "tailscale",
@@ -260,15 +339,32 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
+  if ((auth.mode === "token" || auth.mode === "password") && rateLimitKey) {
+    const now = Date.now();
+    const limit = checkAuthRateLimit(rateLimitKey, now);
+    if (!limit.allowed) {
+      return { ok: false, reason: "rate_limited", retryAfterMs: limit.retryAfterMs };
+    }
+  }
+
   if (auth.mode === "token") {
     if (!auth.token) {
       return { ok: false, reason: "token_missing_config" };
     }
     if (!connectAuth?.token) {
+      if (rateLimitKey) {
+        recordAuthFailure(rateLimitKey, Date.now());
+      }
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
+      if (rateLimitKey) {
+        recordAuthFailure(rateLimitKey, Date.now());
+      }
       return { ok: false, reason: "token_mismatch" };
+    }
+    if (rateLimitKey) {
+      clearAuthFailures(rateLimitKey);
     }
     return { ok: true, method: "token" };
   }
@@ -279,10 +375,19 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing_config" };
     }
     if (!password) {
+      if (rateLimitKey) {
+        recordAuthFailure(rateLimitKey, Date.now());
+      }
       return { ok: false, reason: "password_missing" };
     }
     if (!safeEqual(password, auth.password)) {
+      if (rateLimitKey) {
+        recordAuthFailure(rateLimitKey, Date.now());
+      }
       return { ok: false, reason: "password_mismatch" };
+    }
+    if (rateLimitKey) {
+      clearAuthFailures(rateLimitKey);
     }
     return { ok: true, method: "password" };
   }
