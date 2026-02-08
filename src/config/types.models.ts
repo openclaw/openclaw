@@ -10,6 +10,8 @@ export type ModelCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
+  /** OpenAI-compat reasoning parameter format (e.g. Qwen uses enable_thinking). */
+  thinkingFormat?: "openai" | "zai" | "qwen";
   maxTokensField?: "max_completion_tokens" | "max_tokens";
 };
 
