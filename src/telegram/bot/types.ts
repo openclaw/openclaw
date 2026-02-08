@@ -27,3 +27,17 @@ export interface StickerMetadata {
   /** Cached description from previous vision processing (skip re-processing if present). */
   cachedDescription?: string;
 }
+
+/** Telegram animation (GIF) metadata for context enrichment. */
+export interface AnimationMetadata {
+  /** Original file name (may contain search terms or title). */
+  fileName?: string;
+  /** Telegram file_id for sending the animation back. */
+  fileId?: string;
+  /** Stable file_unique_id for cache deduplication. */
+  fileUniqueId?: string;
+  /** MIME type of the animation. */
+  mimeType?: string;
+  /** Duration in seconds. */
+  duration?: number;
+}

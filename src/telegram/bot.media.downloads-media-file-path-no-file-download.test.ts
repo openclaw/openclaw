@@ -601,7 +601,7 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated stickers (TGS format)",
+    "passes metadata for animated stickers (TGS format, no file download)",
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
@@ -651,8 +651,11 @@ describe("telegram stickers", () => {
 
       // Should not attempt to download animated stickers
       expect(fetchSpy).not.toHaveBeenCalled();
-      // Should still process the message (as text-only, no media)
-      expect(replySpy).not.toHaveBeenCalled(); // No text content, so no reply generated
+      // Should still process the message with metadata-only sticker context
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0][0].Body).toContain("[Sticker");
+      expect(replySpy.mock.calls[0][0].Body).toContain("😎");
+      expect(replySpy.mock.calls[0][0].Body).toContain("AnimatedPack");
       expect(runtimeError).not.toHaveBeenCalled();
 
       fetchSpy.mockRestore();
@@ -661,7 +664,7 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips video stickers (WEBM format)",
+    "passes metadata for video stickers (WEBM format, no file download)",
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
@@ -711,7 +714,11 @@ describe("telegram stickers", () => {
 
       // Should not attempt to download video stickers
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(replySpy).not.toHaveBeenCalled();
+      // Should still process the message with metadata-only sticker context
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0][0].Body).toContain("[Sticker");
+      expect(replySpy.mock.calls[0][0].Body).toContain("🎬");
+      expect(replySpy.mock.calls[0][0].Body).toContain("VideoPack");
       expect(runtimeError).not.toHaveBeenCalled();
 
       fetchSpy.mockRestore();

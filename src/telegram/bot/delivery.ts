@@ -3,7 +3,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
+import type { AnimationMetadata, StickerMetadata, TelegramContext } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -301,16 +301,30 @@ export async function resolveMedia(
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
+  animationMetadata?: AnimationMetadata;
 } | null> {
   const msg = ctx.message;
 
-  // Handle stickers separately - only static stickers (WEBP) are supported
+  // Handle stickers - static (WEBP) get full media, animated/video get metadata-only
   if (msg.sticker) {
     const sticker = msg.sticker;
-    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+    // For animated (TGS) and video (WEBM) stickers, return metadata-only (no image download)
+    // so the agent still receives emoji/setName context instead of silently dropping the message.
     if (sticker.is_animated || sticker.is_video) {
-      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-      return null;
+      logVerbose("telegram: animated/video sticker - returning metadata-only (no media download)");
+      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+      return {
+        path: "",
+        contentType: undefined,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji: sticker.emoji ?? cached?.emoji ?? undefined,
+          setName: sticker.set_name ?? cached?.setName ?? undefined,
+          fileId: sticker.file_id ?? cached?.fileId ?? undefined,
+          fileUniqueId: sticker.file_unique_id,
+          cachedDescription: cached?.description,
+        },
+      };
     }
     if (!sticker.file_id) {
       return null;
@@ -386,6 +400,57 @@ export async function resolveMedia(
       };
     } catch (err) {
       logVerbose(`telegram: failed to process sticker: ${String(err)}`);
+      return null;
+    }
+  }
+
+  // Handle animations (GIFs) separately to extract metadata
+  if (msg.animation) {
+    const anim = msg.animation;
+    if (!anim.file_id) {
+      return null;
+    }
+
+    try {
+      const file = await ctx.getFile();
+      if (!file.file_path) {
+        logVerbose("telegram: getFile returned no file_path for animation");
+        return null;
+      }
+      const fetchImpl = proxyFetch ?? globalThis.fetch;
+      if (!fetchImpl) {
+        logVerbose("telegram: fetch not available for animation download");
+        return null;
+      }
+      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+      const fetched = await fetchRemoteMedia({
+        url,
+        fetchImpl,
+        filePathHint: file.file_path,
+      });
+      const originalName = fetched.fileName ?? anim.file_name ?? file.file_path;
+      const saved = await saveMediaBuffer(
+        fetched.buffer,
+        fetched.contentType,
+        "inbound",
+        maxBytes,
+        originalName,
+      );
+
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:gif>",
+        animationMetadata: {
+          fileName: anim.file_name ?? undefined,
+          fileId: anim.file_id,
+          fileUniqueId: anim.file_unique_id,
+          mimeType: anim.mime_type ?? undefined,
+          duration: anim.duration ?? undefined,
+        },
+      };
+    } catch (err) {
+      logVerbose(`telegram: failed to process animation: ${String(err)}`);
       return null;
     }
   }
