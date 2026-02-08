@@ -12,6 +12,40 @@ import {
   type ModelRegistry,
 } from "../pi-model-discovery.js";
 
+/**
+ * Query Ollama's /api/show endpoint to detect model capabilities.
+ * Returns true if the model supports vision (image input).
+ */
+async function queryOllamaVisionCapability(
+  baseUrl: string | undefined,
+  modelId: string,
+): Promise<boolean> {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    // Convert v1 API URL to base Ollama URL (remove /v1 suffix)
+    const ollamaBase = baseUrl.replace(/\/v1\/?$/, "");
+    const showUrl = `${ollamaBase}/api/show`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(showUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelId }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      return false;
+    }
+    const data = (await res.json()) as { capabilities?: string[] };
+    return (data.capabilities ?? []).includes("vision");
+  } catch {
+    return false;
+  }
+}
+
 type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
 type InlineProviderConfig = {
   baseUrl?: string;
@@ -150,17 +184,17 @@ export function buildModelAliasLines(cfg?: OpenClawConfig) {
     .map((entry) => `- ${entry.alias}: ${entry.model}`);
 }
 
-export function resolveModel(
+export async function resolveModel(
   provider: string,
   modelId: string,
   agentDir?: string,
   cfg?: OpenClawConfig,
-): {
+): Promise<{
   model?: Model<Api>;
   error?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
-} {
+}> {
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
@@ -201,6 +235,11 @@ export function resolveModel(
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
+      // For Ollama models not explicitly listed in config, query /api/show to detect vision capability
+      const isOllama = normalizedProvider === "ollama";
+      const hasVision = isOllama
+        ? await queryOllamaVisionCapability(providerCfg?.baseUrl, modelId)
+        : false;
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
@@ -208,7 +247,7 @@ export function resolveModel(
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,
-        input: ["text"],
+        input: hasVision ? ["text", "image"] : ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
