@@ -81,18 +81,26 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  _options?: {
+    modelProvider?: string;
+    modelId?: string;
+  },
+): ToolDefinition[] {
   return tools.map((tool) => {
-    const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
+    const originalName = tool.name || "tool";
+    const exposedName = originalName;
+    const normalizedName = normalizeToolName(originalName);
     return {
-      name,
-      label: tool.label ?? name,
+      name: exposedName,
+      label: tool.label ?? originalName,
       description: tool.description ?? "",
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         try {
+          // Always execute using the original OpenClaw tool name
           return await tool.execute(toolCallId, params, signal, onUpdate);
         } catch (err) {
           if (signal?.aborted) {

@@ -29,6 +29,7 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { createGptOssHarmonyWrapper } from "../../harmony-stream-wrapper.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import {
@@ -456,6 +457,8 @@ export async function runEmbeddedAttempt(
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        modelProvider: params.provider,
+        modelId: params.modelId,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
@@ -537,6 +540,17 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // gpt-oss on Ollama: bypass Ollama's broken Harmony parser by
+      // moving tools from the API request into the system prompt and
+      // parsing tool calls from text output.
+      const harmonyWrapper = createGptOssHarmonyWrapper({
+        modelProvider: params.provider,
+        modelId: params.modelId,
+      });
+      if (harmonyWrapper) {
+        activeSession.agent.streamFn = harmonyWrapper(activeSession.agent.streamFn);
       }
 
       try {

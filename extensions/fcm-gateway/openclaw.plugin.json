@@ -1,0 +1,14 @@
+{
+  "id": "fcm-gateway",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://localhost:8000",
+        "description": "Base URL del FCM Gateway locale"
+      }
+    }
+  }
+}

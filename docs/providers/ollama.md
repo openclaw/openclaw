@@ -270,6 +270,35 @@ If you manually enabled streaming and experience this issue:
 1. Remove the `streaming: true` configuration from your Ollama model entries, or
 2. Explicitly set `streaming: false` for Ollama models (see [Streaming Configuration](#streaming-configuration))
 
+### gpt-oss tool calling limitations
+
+**gpt-oss models on Ollama have a known limitation**: they emit tool calls in Harmony format that Ollama's parser cannot correctly map to OpenAI format. This causes warnings in Ollama logs like:
+
+```
+harmony parser: no reverse mapping found for function name harmonyFunctionName=search
+```
+
+**OpenClaw automatically disables all tools for gpt-oss models on Ollama** to prevent these warnings and errors. When you use a gpt-oss model (e.g., `ollama/gpt-oss:20b`), you'll see a warning message indicating that tools have been automatically disabled.
+
+#### Override automatic tool disabling
+
+If you want to enable tools for gpt-oss despite the limitations (not recommended), you can override the automatic policy:
+
+```json5
+{
+  tools: {
+    byProvider: {
+      "ollama/gpt-oss:20b": {
+        // Override: allow all tools (may cause Ollama warnings)
+        allow: ["*"],
+      },
+    },
+  },
+}
+```
+
+**Note**: This will likely cause the same Ollama warnings and may result in tool calls not working correctly. It's recommended to use a different model for tool-heavy tasks, or wait for Ollama to fix the Harmony parser mapping issue.
+
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers

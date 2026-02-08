@@ -159,6 +159,21 @@ function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/**
+ * Checks if the model is gpt-oss running on Ollama.
+ * gpt-oss on Ollama emits Harmony-format tool calls that Ollama cannot map
+ * to OpenAI format, causing warnings. We disable tools automatically for this case.
+ */
+export function isGptOssOnOllama(params: { modelProvider?: string; modelId?: string }): boolean {
+  const provider = params.modelProvider?.trim().toLowerCase();
+  if (provider !== "ollama") {
+    return false;
+  }
+  const modelId = params.modelId?.trim().toLowerCase() ?? "";
+  // Support variants like "gpt-oss", "gpt-oss:20b", "gpt-oss:120b", etc.
+  return modelId.includes("gpt-oss");
+}
+
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupId?: string;
@@ -193,7 +208,11 @@ function resolveProviderToolPolicy(params: {
   modelId?: string;
 }): ToolPolicyConfig | undefined {
   const provider = params.modelProvider?.trim();
-  if (!provider || !params.byProvider) {
+  if (!provider) {
+    return undefined;
+  }
+
+  if (!params.byProvider) {
     return undefined;
   }
 
@@ -213,10 +232,17 @@ function resolveProviderToolPolicy(params: {
 
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = params.modelId?.trim().toLowerCase();
+  // Build full model ID: if modelId doesn't include "/", prepend provider
   const fullModelId =
     rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
+  // Also try with just the model name (without provider) in case user configured it that way
+  const modelNameOnly = rawModelId?.includes("/") ? rawModelId.split("/").pop() : rawModelId;
 
-  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
+  const candidates = [
+    ...(fullModelId ? [fullModelId] : []),
+    ...(modelNameOnly ? [modelNameOnly] : []),
+    normalizedProvider,
+  ];
 
   for (const key of candidates) {
     const match = lookup.get(key);
@@ -224,6 +250,7 @@ function resolveProviderToolPolicy(params: {
       return match;
     }
   }
+
   return undefined;
 }
 

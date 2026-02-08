@@ -212,6 +212,7 @@ export function createOpenClawCodingTools(options?: {
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
