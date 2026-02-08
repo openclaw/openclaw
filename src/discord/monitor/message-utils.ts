@@ -98,7 +98,7 @@ export async function resolveMediaList(
   message: Message,
   maxBytes: number,
 ): Promise<DiscordMediaInfo[]> {
-  const attachments = message.attachments ?? [];
+  const attachments = resolveMessageAttachments(message) ?? [];
   if (attachments.length === 0) {
     return [];
   }
@@ -166,13 +166,51 @@ function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): strin
   return `${tag} (${count} ${suffix})`;
 }
 
+/**
+ * Validates that a raw attachment object has the minimum required fields
+ * to be used as an APIAttachment (url, filename are required; content_type optional).
+ */
+function isValidAttachment(obj: unknown): obj is APIAttachment {
+  if (typeof obj !== "object" || obj === null) {
+    return false;
+  }
+  const record = obj as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.url === "string" &&
+    typeof record.filename === "string"
+  );
+}
+
+/**
+ * Resolves attachments from a Message, falling back to rawData if the Message
+ * is partial and the attachments getter returns undefined.
+ * Validates rawData attachments to ensure they have the required shape.
+ */
+function resolveMessageAttachments(message: Message): APIAttachment[] | undefined {
+  // First try the normal getter (already typed correctly)
+  const attachments = message.attachments;
+  if (attachments !== undefined) {
+    return attachments;
+  }
+  // Fallback to rawData for partial messages where the getter returns undefined
+  const rawData = (message as { rawData?: { attachments?: unknown[] } }).rawData;
+  const rawAttachments = rawData?.attachments;
+  if (!Array.isArray(rawAttachments)) {
+    return undefined;
+  }
+  // Validate each attachment has required fields before returning
+  const validAttachments = rawAttachments.filter(isValidAttachment);
+  return validAttachments.length > 0 ? validAttachments : undefined;
+}
+
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
   const baseText =
     message.content?.trim() ||
-    buildDiscordAttachmentPlaceholder(message.attachments) ||
+    buildDiscordAttachmentPlaceholder(resolveMessageAttachments(message)) ||
     message.embeds?.[0]?.description ||
     options?.fallbackText?.trim() ||
     "";
