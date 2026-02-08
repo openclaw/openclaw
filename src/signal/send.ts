@@ -164,7 +164,7 @@ export async function sendMessageSignal(
     const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes);
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
+    if (!message && kind && kind !== "unknown") {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
       messageFromPlaceholder = true;
