@@ -38,6 +38,7 @@ import {
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
+  createDiscordCommandArgFallbackSelectMenu,
   createDiscordNativeCommand,
 } from "./native-command.js";
 
@@ -476,6 +477,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const components = [
     createDiscordCommandArgFallbackButton({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      sessionPrefix,
+    }),
+    createDiscordCommandArgFallbackSelectMenu({
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,

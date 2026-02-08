@@ -3,13 +3,19 @@ import {
   ChannelType,
   Command,
   Row,
+  StringSelectMenu,
   type AutocompleteInteraction,
   type ButtonInteraction,
   type CommandInteraction,
   type CommandOptions,
   type ComponentData,
+  type StringSelectMenuInteraction,
 } from "@buape/carbon";
-import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
+import {
+  ApplicationCommandOptionType,
+  ButtonStyle,
+  type APISelectMenuOption,
+} from "discord-api-types/v10";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -32,6 +38,7 @@ import {
 } from "../../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { listThinkingLevels } from "../../auto-reply/thinking.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -373,6 +380,241 @@ export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgC
   return new DiscordCommandArgFallbackButton(params);
 }
 
+// ---------------------------------------------------------------------------
+// Select-menu based arg picker (used when choices exceed button threshold)
+// ---------------------------------------------------------------------------
+
+const DISCORD_COMMAND_ARG_SELECT_CUSTOM_ID_KEY = "cmdsel";
+
+/**
+ * Number of choices above which the picker uses a StringSelectMenu dropdown
+ * instead of individual buttons.  Discord allows at most 25 select options
+ * and 5 × 5 = 25 buttons, but dropdowns provide a cleaner UX for longer lists.
+ */
+const SELECT_MENU_CHOICE_THRESHOLD = 6;
+
+function buildDiscordSelectMenuCustomId(params: {
+  command: string;
+  arg: string;
+  userId: string;
+}): string {
+  return [
+    `${DISCORD_COMMAND_ARG_SELECT_CUSTOM_ID_KEY}:command=${encodeDiscordCommandArgValue(params.command)}`,
+    `arg=${encodeDiscordCommandArgValue(params.arg)}`,
+    `user=${encodeDiscordCommandArgValue(params.userId)}`,
+  ].join(";");
+}
+
+async function handleDiscordSelectMenuArgInteraction(
+  interaction: StringSelectMenuInteraction,
+  data: ComponentData,
+  ctx: DiscordCommandArgContext,
+) {
+  // Carbon's customIdParser already parses the *interaction's* customId
+  // (not the fallback component's) into the `data` object.
+  const coerce = (value: unknown) =>
+    typeof value === "string" || typeof value === "number" ? String(value) : "";
+  const parsedCommand = coerce(data.command);
+  const parsedArg = coerce(data.arg);
+  const parsedUser = coerce(data.user);
+  if (!parsedCommand || !parsedArg || !parsedUser) {
+    await safeDiscordInteractionCall("select menu update", () =>
+      interaction.update({
+        content: "Sorry, that selection is no longer available.",
+        components: [],
+      }),
+    );
+    return;
+  }
+  const parsed = { command: parsedCommand, arg: parsedArg, userId: parsedUser };
+  if (interaction.user?.id && interaction.user.id !== parsed.userId) {
+    await safeDiscordInteractionCall("select menu ack", () => interaction.acknowledge());
+    return;
+  }
+  const selected = interaction.values[0];
+  if (!selected) {
+    await safeDiscordInteractionCall("select menu ack", () => interaction.acknowledge());
+    return;
+  }
+  const commandDefinition =
+    findCommandByNativeName(parsed.command, "discord") ??
+    listChatCommands().find((entry) => entry.key === parsed.command);
+  if (!commandDefinition) {
+    await safeDiscordInteractionCall("select menu update", () =>
+      interaction.update({
+        content: "Sorry, that command is no longer available.",
+        components: [],
+      }),
+    );
+    return;
+  }
+  const updated = await safeDiscordInteractionCall("select menu update", () =>
+    interaction.update({
+      content: `✅ Selected ${selected}.`,
+      components: [],
+    }),
+  );
+  if (!updated) {
+    return;
+  }
+
+  const commandArgs = createCommandArgsWithValue({
+    argName: parsed.arg,
+    value: selected,
+  });
+  const commandArgsWithRaw: CommandArgs = {
+    ...commandArgs,
+    raw: serializeCommandArgs(commandDefinition, commandArgs),
+  };
+  const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+
+  await dispatchDiscordCommandInteraction({
+    interaction,
+    prompt,
+    command: commandDefinition,
+    commandArgs: commandArgsWithRaw,
+    cfg: ctx.cfg,
+    discordConfig: ctx.discordConfig,
+    accountId: ctx.accountId,
+    sessionPrefix: ctx.sessionPrefix,
+    preferFollowUp: true,
+  });
+
+  // Chain: after /model selection, offer a thinking-level picker.
+  if (parsed.command === "model" || parsed.command === "/model") {
+    try {
+      const slashIdx = selected.indexOf("/");
+      const provider = slashIdx > 0 ? selected.slice(0, slashIdx) : undefined;
+      const model = slashIdx > 0 ? selected.slice(slashIdx + 1) : selected;
+      const levels = listThinkingLevels(provider ?? null, model);
+      if (levels.length > 0) {
+        const thinkOptions: APISelectMenuOption[] = levels.slice(0, 25).map((level) => ({
+          label: level.charAt(0).toUpperCase() + level.slice(1),
+          value: level,
+          description: `Set thinking to ${level}`,
+        }));
+        const thinkCustomId = buildDiscordSelectMenuCustomId({
+          command: "think",
+          arg: "level",
+          userId: parsed.userId,
+        });
+        const thinkSelect = new DiscordCommandArgSelectMenu({
+          customId: thinkCustomId,
+          placeholder: "Select thinking level…",
+          options: thinkOptions,
+          ctx,
+          commandKey: "think",
+          argName: "level",
+        });
+        await safeDiscordInteractionCall("thinking follow-up", () =>
+          interaction.followUp({
+            content: `🧠 **Select thinking level** for ${selected}:`,
+            components: [new Row<StringSelectMenu>([thinkSelect])],
+            ephemeral: true,
+          }),
+        );
+      }
+    } catch {
+      // Non-critical — the model was already switched successfully.
+    }
+  }
+}
+
+class DiscordCommandArgSelectMenu extends StringSelectMenu {
+  customId: string;
+  placeholder: string;
+  options: APISelectMenuOption[];
+  private ctx: DiscordCommandArgContext;
+  private commandKey: string;
+  private argName: string;
+
+  constructor(params: {
+    customId: string;
+    placeholder: string;
+    options: APISelectMenuOption[];
+    ctx: DiscordCommandArgContext;
+    commandKey: string;
+    argName: string;
+  }) {
+    super();
+    this.customId = params.customId;
+    this.placeholder = params.placeholder;
+    this.options = params.options;
+    this.ctx = params.ctx;
+    this.commandKey = params.commandKey;
+    this.argName = params.argName;
+  }
+
+  async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+    await handleDiscordSelectMenuArgInteraction(interaction, data, this.ctx);
+  }
+}
+
+class DiscordCommandArgFallbackSelectMenu extends StringSelectMenu {
+  customId = `${DISCORD_COMMAND_ARG_SELECT_CUSTOM_ID_KEY}:seed=1`;
+  placeholder = "Select…";
+  options: APISelectMenuOption[] = [{ label: "–", value: "_" }];
+  private ctx: DiscordCommandArgContext;
+
+  constructor(ctx: DiscordCommandArgContext) {
+    super();
+    this.ctx = ctx;
+  }
+
+  async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+    await handleDiscordSelectMenuArgInteraction(interaction, data, this.ctx);
+  }
+}
+
+export function createDiscordCommandArgFallbackSelectMenu(
+  params: DiscordCommandArgContext,
+): StringSelectMenu {
+  return new DiscordCommandArgFallbackSelectMenu(params);
+}
+
+function buildDiscordCommandArgSelectMenuPayload(params: {
+  command: ChatCommandDefinition;
+  menu: {
+    arg: CommandArgDefinition;
+    choices: Array<{ value: string; label: string }>;
+    title?: string;
+  };
+  interaction: CommandInteraction;
+  cfg: ReturnType<typeof loadConfig>;
+  discordConfig: DiscordConfig;
+  accountId: string;
+  sessionPrefix: string;
+}): { content: string; components: Row<StringSelectMenu>[] } {
+  const { command, menu, interaction } = params;
+  const commandLabel = command.nativeName ?? command.key;
+  const userId = interaction.user?.id ?? "";
+  const selectOptions: APISelectMenuOption[] = menu.choices.slice(0, 25).map((choice) => ({
+    label: choice.label.length > 100 ? choice.label.slice(0, 97) + "…" : choice.label,
+    value: choice.value,
+  }));
+  const customId = buildDiscordSelectMenuCustomId({
+    command: commandLabel,
+    arg: menu.arg.name,
+    userId,
+  });
+  const selectMenu = new DiscordCommandArgSelectMenu({
+    customId,
+    placeholder: `Select ${menu.arg.description || menu.arg.name}…`,
+    options: selectOptions,
+    ctx: {
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      accountId: params.accountId,
+      sessionPrefix: params.sessionPrefix,
+    },
+    commandKey: commandLabel,
+    argName: menu.arg.name,
+  });
+  const content =
+    menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+  return { content, components: [new Row<StringSelectMenu>([selectMenu])] };
+}
+
 function buildDiscordCommandArgMenu(params: {
   command: ChatCommandDefinition;
   menu: {
@@ -488,7 +730,7 @@ export function createDiscordNativeCommand(params: {
 }
 
 async function dispatchDiscordCommandInteraction(params: {
-  interaction: CommandInteraction | ButtonInteraction;
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   prompt: string;
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
@@ -698,15 +940,26 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
   });
   if (menu) {
-    const menuPayload = buildDiscordCommandArgMenu({
-      command,
-      menu,
-      interaction: interaction as CommandInteraction,
-      cfg,
-      discordConfig,
-      accountId,
-      sessionPrefix,
-    });
+    const useSelectMenu = menu.choices.length > SELECT_MENU_CHOICE_THRESHOLD;
+    const menuPayload = useSelectMenu
+      ? buildDiscordCommandArgSelectMenuPayload({
+          command,
+          menu,
+          interaction: interaction as CommandInteraction,
+          cfg,
+          discordConfig,
+          accountId,
+          sessionPrefix,
+        })
+      : buildDiscordCommandArgMenu({
+          command,
+          menu,
+          interaction: interaction as CommandInteraction,
+          cfg,
+          discordConfig,
+          accountId,
+          sessionPrefix,
+        });
     if (preferFollowUp) {
       await safeDiscordInteractionCall("interaction follow-up", () =>
         interaction.followUp({
@@ -849,7 +1102,7 @@ async function dispatchDiscordCommandInteraction(params: {
 }
 
 async function deliverDiscordInteractionReply(params: {
-  interaction: CommandInteraction | ButtonInteraction;
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
   textLimit: number;
   maxLinesPerMessage?: number;

@@ -11,13 +11,20 @@ vi.mock("@buape/carbon", () => ({
     Default: 0,
   },
   Button: class {},
+  StringSelectMenu: class {},
   Command: class {},
   Client: class {},
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
   PresenceUpdateListener: class {},
-  Row: class {},
+  Row: class {
+    components: unknown[];
+
+    constructor(components: unknown[]) {
+      this.components = components;
+    }
+  },
 }));
 
 vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
@@ -96,5 +103,118 @@ describe("discord native commands", () => {
     expect(reply).toHaveBeenCalledTimes(1);
     expect(followUp).toHaveBeenCalledTimes(0);
     expect(reply.mock.calls[0]?.[0]?.content).toContain("final");
+  });
+
+  it("shows StringSelectMenu for /model when many choices exist", async () => {
+    const { ChannelType, StringSelectMenu } = await import("@buape/carbon");
+    const { createDiscordNativeCommand } = await import("./monitor.js");
+
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "anthropic/claude-sonnet-4-0": {},
+            "openai/gpt-4.1": {},
+            "openai/gpt-4.1-mini": {},
+            "openai/gpt-5.3-codex": {},
+            "google/gemini-2.5-pro": {},
+            "google/gemini-2.5-flash": {},
+          },
+          humanDelay: { mode: "off" },
+          workspace: "/tmp/openclaw",
+        },
+      },
+      session: { store: "/tmp/openclaw-sessions.json" },
+      discord: { dm: { enabled: true, policy: "open" } },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "model",
+        description: "Show or set the model.",
+        acceptsArgs: true,
+      },
+      cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+    });
+
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const followUp = vi.fn().mockResolvedValue(undefined);
+
+    await command.run({
+      user: { id: "u1", username: "Ada", globalName: "Ada" },
+      channel: { type: ChannelType.DM },
+      guild: null,
+      rawData: { id: "i2" },
+      options: { getString: vi.fn().mockReturnValue(null) },
+      reply,
+      followUp,
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledTimes(1);
+
+    const payload = reply.mock.calls[0]?.[0] as {
+      components?: Array<{ components?: unknown[] }>;
+    };
+    const first = payload.components?.[0]?.components?.[0];
+    expect(first).toBeInstanceOf(StringSelectMenu);
+  });
+
+  it("keeps button picker for /think (small choice set)", async () => {
+    const { Button, ChannelType } = await import("@buape/carbon");
+    const { createDiscordNativeCommand } = await import("./monitor.js");
+
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          humanDelay: { mode: "off" },
+          workspace: "/tmp/openclaw",
+        },
+      },
+      session: { store: "/tmp/openclaw-sessions.json" },
+      discord: { dm: { enabled: true, policy: "open" } },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "think",
+        description: "Set thinking level.",
+        acceptsArgs: true,
+      },
+      cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+    });
+
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const followUp = vi.fn().mockResolvedValue(undefined);
+
+    await command.run({
+      user: { id: "u1", username: "Ada", globalName: "Ada" },
+      channel: { type: ChannelType.DM },
+      guild: null,
+      rawData: { id: "i3" },
+      options: { getString: vi.fn().mockReturnValue(null) },
+      reply,
+      followUp,
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledTimes(1);
+
+    const payload = reply.mock.calls[0]?.[0] as {
+      components?: Array<{ components?: unknown[] }>;
+    };
+    const first = payload.components?.[0]?.components?.[0];
+    expect(first).toBeInstanceOf(Button);
   });
 });

@@ -512,17 +512,42 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "model",
           description: "Model id (provider/model or id)",
           type: "string",
+          choices: ({ cfg }) =>
+            Object.keys(cfg?.agents?.defaults?.models ?? {})
+              .map((key) => String(key))
+              .filter(Boolean)
+              .toSorted(),
         },
       ],
+      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "models",
       nativeName: "models",
       description: "List model providers or provider models.",
       textAlias: "/models",
-      argsParsing: "none",
-      acceptsArgs: true,
       category: "options",
+      args: [
+        {
+          name: "provider",
+          description: "Provider id",
+          type: "string",
+          choices: ({ cfg }) => {
+            const providers = new Set<string>();
+            for (const key of Object.keys(cfg?.agents?.defaults?.models ?? {})) {
+              const raw = String(key);
+              const slash = raw.indexOf("/");
+              if (slash > 0) {
+                providers.add(raw.slice(0, slash));
+              }
+            }
+            return [...providers].toSorted();
+          },
+        },
+      ],
+      argsMenu: "auto",
+      argsParsing: "positional",
+      acceptsArgs: true,
     }),
     defineChatCommand({
       key: "queue",
