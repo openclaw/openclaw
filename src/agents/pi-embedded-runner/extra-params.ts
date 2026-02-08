@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
@@ -153,4 +153,34 @@ export function applyExtraParamsToAgent(
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
+}
+
+/**
+ * Wrap a streamFn to inject `thinking: { type: "disabled" }` into the Anthropic
+ * API payload for reasoning-capable models when thinking is not enabled.
+ *
+ * Without this, some Anthropic-compatible providers (e.g. Synthetic/Kimi K2.5)
+ * default to emitting thinking as plain text in regular content blocks when the
+ * thinking parameter is absent, which leaks into user-visible output.
+ */
+export function createThinkingDisabledWrapper(baseStreamFn: StreamFn, model: Model<Api>): StreamFn {
+  if (!model.reasoning || model.api !== "anthropic-messages") {
+    return baseStreamFn;
+  }
+
+  log.debug("wrapping streamFn with thinking: disabled for anthropic-messages reasoning model");
+
+  return (mdl, context, options) => {
+    const nextOnPayload = (payload: unknown) => {
+      const p = payload as Record<string, unknown>;
+      if (!("thinking" in p)) {
+        p.thinking = { type: "disabled" };
+      }
+      options?.onPayload?.(payload);
+    };
+    return baseStreamFn(mdl, context, {
+      ...options,
+      onPayload: nextOnPayload,
+    });
+  };
 }

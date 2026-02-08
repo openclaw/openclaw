@@ -63,7 +63,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, createThinkingDisabledWrapper } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -524,6 +524,16 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Explicitly disable thinking for reasoning-capable models when thinking is off.
+      // Without this, providers like Synthetic/Kimi K2.5 emit thinking as plain text
+      // (no tags, no structured blocks) when the thinking parameter is absent.
+      if (params.thinkLevel === "off" && activeSession.agent.streamFn) {
+        activeSession.agent.streamFn = createThinkingDisabledWrapper(
+          activeSession.agent.streamFn,
+          params.model,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
