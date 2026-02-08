@@ -74,6 +74,75 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
+/**
+ * Audio file extensions where the textLike heuristic should be skipped.
+ * For these extensions, we rely on magic byte detection to avoid false positives.
+ */
+const AUDIO_MAGIC_CHECK_EXTENSIONS = new Set([
+  ".ogg",
+  ".opus",
+  ".mp3",
+  ".wav",
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".oga",
+  ".webm",
+  ".weba",
+]);
+
+/**
+ * Audio file magic byte signatures.
+ * If a buffer starts with any of these, it's actual audio binary, not text.
+ * Note: RIFF is handled separately (must verify WAVE at offset 8).
+ * Note: EBML removed - too generic, matches video MKV too.
+ */
+const AUDIO_MAGIC_SIGNATURES: Array<{ bytes: Buffer; name: string }> = [
+  { bytes: Buffer.from([0x4f, 0x67, 0x67, 0x53]), name: "OGG" }, // OggS
+  { bytes: Buffer.from([0x49, 0x44, 0x33]), name: "MP3-ID3" }, // ID3 tag
+  { bytes: Buffer.from([0xff, 0xfb]), name: "MP3" }, // MP3 frame sync
+  { bytes: Buffer.from([0xff, 0xfa]), name: "MP3" }, // MP3 frame sync
+  { bytes: Buffer.from([0xff, 0xf3]), name: "MP3" }, // MP3 frame sync
+  { bytes: Buffer.from([0xff, 0xf2]), name: "MP3" }, // MP3 frame sync
+  { bytes: Buffer.from([0x66, 0x4c, 0x61, 0x43]), name: "FLAC" }, // fLaC
+];
+
+/** RIFF+WAVE header for WAV files (RIFF at 0, WAVE at 8) */
+const RIFF_WAVE_HEADER = {
+  riff: Buffer.from([0x52, 0x49, 0x46, 0x46]), // "RIFF"
+  wave: Buffer.from([0x57, 0x41, 0x56, 0x45]), // "WAVE"
+};
+
+/**
+ * Checks if buffer starts with known audio magic bytes.
+ * Returns true if the buffer is actual audio binary.
+ */
+function hasAudioMagicBytes(buffer?: Buffer): boolean {
+  if (!buffer || buffer.length < 4) {
+    return false;
+  }
+
+  // Check for RIFF+WAVE (WAV files) - must have "WAVE" at offset 8
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).equals(RIFF_WAVE_HEADER.riff) &&
+    buffer.subarray(8, 12).equals(RIFF_WAVE_HEADER.wave)
+  ) {
+    return true;
+  }
+
+  // Check other signatures
+  for (const sig of AUDIO_MAGIC_SIGNATURES) {
+    if (
+      buffer.length >= sig.bytes.length &&
+      buffer.subarray(0, sig.bytes.length).equals(sig.bytes)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
   ">": "&gt;",
@@ -375,6 +444,21 @@ async function extractFileBlocks(params: {
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
+
+    // For files with audio extensions that contain actual audio binary (verified by magic bytes),
+    // skip them to prevent looksLikeUtf8Text() false positives on compressed audio data.
+    // This allows text files mislabeled with audio extensions (e.g., CSV saved as .mp3) to pass through.
+    const attachmentExt = path.extname(nameHint ?? "").toLowerCase();
+    if (
+      AUDIO_MAGIC_CHECK_EXTENSIONS.has(attachmentExt) &&
+      hasAudioMagicBytes(bufferResult?.buffer)
+    ) {
+      if (shouldLogVerbose()) {
+        logVerbose(`media: file attachment skipped (audio magic bytes) index=${attachment.index}`);
+      }
+      continue;
+    }
+
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
