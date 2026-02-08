@@ -8,6 +8,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveChannelToolSummaries } from "../../channels/tool-summaries.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
@@ -348,10 +349,18 @@ export async function resolveReplyDirectives(params: {
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
+  // Resolve verbose level with channel-specific toolSummaries fallback
+  // Priority: inline directive > session > agent config > channel toolSummaries config
+  const channelToolSummaries = resolveChannelToolSummaries({
+    cfg,
+    channel: sessionCtx.Provider ?? ctx.Provider,
+    accountId: sessionCtx.AccountId,
+  });
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    (agentCfg?.verboseDefault as VerboseLevel | undefined) ??
+    channelToolSummaries;
   const resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??

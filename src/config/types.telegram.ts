@@ -126,6 +126,13 @@ export type TelegramAccountConfig = {
    * - "extensive": agent can react liberally when appropriate
    */
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
+  /**
+   * Controls tool result summary messages (acknowledgments like "I've sent the message..."):
+   * - "on" (default): show tool summaries during processing
+   * - "off": disable tool summary messages entirely
+   * - "full": show tool summaries with full output
+   */
+  toolSummaries?: "off" | "on" | "full";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
