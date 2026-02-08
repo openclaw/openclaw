@@ -74,22 +74,23 @@ export class DiscordMessageListener extends MessageCreateListener {
     super();
   }
 
-  async handle(data: DiscordMessageEvent, client: Client) {
+  handle(data: DiscordMessageEvent, client: Client): void {
     const startedAt = Date.now();
-    const task = Promise.resolve(this.handler(data, client));
-    void task
-      .catch((err) => {
+    void (async () => {
+      try {
+        await this.handler(data, client);
+      } catch (err) {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
-      })
-      .finally(() => {
+      } finally {
         logSlowDiscordListener({
           logger: this.logger,
           listener: this.constructor.name,
           event: this.type,
           durationMs: Date.now() - startedAt,
         });
-      });
+      }
+    })();
   }
 }
 
@@ -107,27 +108,29 @@ export class DiscordReactionListener extends MessageReactionAddListener {
     super();
   }
 
-  async handle(data: DiscordReactionEvent, client: Client) {
+  handle(data: DiscordReactionEvent, client: Client): void {
     const startedAt = Date.now();
-    try {
-      await handleDiscordReactionEvent({
-        data,
-        client,
-        action: "added",
-        cfg: this.params.cfg,
-        accountId: this.params.accountId,
-        botUserId: this.params.botUserId,
-        guildEntries: this.params.guildEntries,
-        logger: this.params.logger,
-      });
-    } finally {
-      logSlowDiscordListener({
-        logger: this.params.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        durationMs: Date.now() - startedAt,
-      });
-    }
+    void (async () => {
+      try {
+        await handleDiscordReactionEvent({
+          data,
+          client,
+          action: "added",
+          cfg: this.params.cfg,
+          accountId: this.params.accountId,
+          botUserId: this.params.botUserId,
+          guildEntries: this.params.guildEntries,
+          logger: this.params.logger,
+        });
+      } finally {
+        logSlowDiscordListener({
+          logger: this.params.logger,
+          listener: this.constructor.name,
+          event: this.type,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    })();
   }
 }
 
@@ -145,27 +148,29 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
     super();
   }
 
-  async handle(data: DiscordReactionEvent, client: Client) {
+  handle(data: DiscordReactionEvent, client: Client): void {
     const startedAt = Date.now();
-    try {
-      await handleDiscordReactionEvent({
-        data,
-        client,
-        action: "removed",
-        cfg: this.params.cfg,
-        accountId: this.params.accountId,
-        botUserId: this.params.botUserId,
-        guildEntries: this.params.guildEntries,
-        logger: this.params.logger,
-      });
-    } finally {
-      logSlowDiscordListener({
-        logger: this.params.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        durationMs: Date.now() - startedAt,
-      });
-    }
+    void (async () => {
+      try {
+        await handleDiscordReactionEvent({
+          data,
+          client,
+          action: "removed",
+          cfg: this.params.cfg,
+          accountId: this.params.accountId,
+          botUserId: this.params.botUserId,
+          guildEntries: this.params.guildEntries,
+          logger: this.params.logger,
+        });
+      } finally {
+        logSlowDiscordListener({
+          logger: this.params.logger,
+          listener: this.constructor.name,
+          event: this.type,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    })();
   }
 }
 

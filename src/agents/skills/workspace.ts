@@ -24,6 +24,8 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { createFilteredSkillDir } from "./filter-skill-dirs.js";
+import os from "node:os";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -150,10 +152,30 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const workspaceSkills = loadSkills({
-    dir: workspaceSkillsDir,
-    source: "openclaw-workspace",
-  });
+  let workspaceSkills: Skill[] = [];
+  try {
+    const tempDir = path.join(os.tmpdir(), `openclaw-skills-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    try {
+      createFilteredSkillDir(workspaceSkillsDir, tempDir);
+      workspaceSkills = loadSkills({
+        dir: tempDir,
+        source: "openclaw-workspace",
+      });
+    } finally {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+  } catch {
+    // Fallback to unfiltered scan if filtering fails
+    workspaceSkills = loadSkills({
+      dir: workspaceSkillsDir,
+      source: "openclaw-workspace",
+    });
+  }
 
   const merged = new Map<string, Skill>();
   // Precedence: extra < bundled < managed < workspace
