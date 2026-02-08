@@ -258,18 +258,19 @@ function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): Secrets
       return createGcpSecretsProvider(config.gcp);
     case "env":
       return createEnvSecretsProvider(env);
-    case "aws":
-      return createAwsSecretsProvider(config.aws);
     case "keyring":
       return createKeyringSecretsProvider(config.keyring);
+    case "aws":
     case "1password":
-      return createOnePasswordSecretsProvider();
     case "doppler":
-      return createDopplerSecretsProvider(config.doppler);
     case "bitwarden":
-      return createBitwardenSecretsProvider();
     case "vault":
-      return createVaultSecretsProvider(config.vault);
+      throw new SecretsProviderError(
+        `Secrets provider "${config.provider}" is not yet implemented. ` +
+          `Supported providers: gcp, env, keyring. ` +
+          `See https://docs.openclaw.ai/gateway/secrets for alternatives. ` +
+          `Contributions welcome — see src/config/secrets/${config.provider === "1password" ? "onepassword" : config.provider}.ts`,
+      );
     default:
       throw new SecretsProviderError(
         `Unknown secrets provider: "${config.provider}". Supported: gcp, env, keyring. Not yet implemented: aws, 1password, doppler, bitwarden, vault`,
@@ -366,6 +367,15 @@ export async function resolveConfigSecrets(
   let resolved: Map<string, string>;
 
   if (refs.size === 0) {
+    // Warn if a not-yet-implemented provider is configured but no secrets are referenced
+    const stubProviders = new Set(["aws", "1password", "doppler", "bitwarden", "vault"]);
+    if (stubProviders.has(secretsConfig.provider)) {
+      console.warn(
+        `[openclaw] Warning: secrets provider "${secretsConfig.provider}" is not yet implemented. ` +
+          `No $secret{...} references found so this is not blocking startup, but the provider ` +
+          `will fail if secret references are added. Supported providers: gcp, env, keyring.`,
+      );
+    }
     resolved = new Map();
   } else {
     // Create provider, resolve all secrets, and dispose when done

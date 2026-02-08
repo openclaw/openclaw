@@ -224,10 +224,9 @@ Example config:
 
 Not yet supported.
 
-### Not Yet Implemented
+### Coming Soon
 
-The following providers are recognized in config but **will fail at runtime** if you try to
-resolve secrets through them. They exist as placeholders for future implementation:
+The following providers are recognized in config but **not yet implemented**:
 
 - AWS Secrets Manager (`aws`)
 - 1Password (`1password`)
@@ -235,9 +234,15 @@ resolve secrets through them. They exist as placeholders for future implementati
 - Bitwarden (`bitwarden`)
 - HashiCorp Vault (`vault`)
 
-Setting `secrets.provider` to one of these values will pass config validation, but any
-`$secret{...}` reference will throw an error during resolution. **Do not use these in
-production configs until they are implemented.**
+**Behavior when configured:**
+
+- If your config has `$secret{...}` references → startup **fails immediately** with a clear
+  error telling you the provider isn't available yet and listing supported alternatives.
+- If your config has **no** `$secret{...}` references → startup **succeeds with a warning**
+  in the logs, so you're aware the provider won't work when you add secret references later.
+
+This means you can safely prepare your config for a future provider switch without breaking
+your current setup — just don't add `$secret{...}` references until the provider is implemented.
 
 Contributions are welcome — see the stub files in `src/config/secrets/`.
 
