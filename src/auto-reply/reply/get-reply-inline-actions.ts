@@ -272,6 +272,7 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
+  let inlineCommandHandled = false;
   if (inlineCommand) {
     const inlineCommandContext = {
       ...command,
@@ -314,6 +315,9 @@ export async function handleInlineActions(params: {
         return { kind: "reply", reply: inlineResult.reply };
       }
       await sendInlineReply(inlineResult.reply);
+      // Command already handled inline; skip the main handleCommands pass
+      // to avoid duplicate replies (e.g. envelope-formatted Signal messages).
+      inlineCommandHandled = true;
     }
   }
 
@@ -341,39 +345,41 @@ export async function handleInlineActions(params: {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
   }
 
-  const commandResult = await handleCommands({
-    ctx,
-    cfg,
-    command,
-    agentId,
-    directives,
-    elevated: {
-      enabled: elevatedEnabled,
-      allowed: elevatedAllowed,
-      failures: elevatedFailures,
-    },
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    workspaceDir,
-    defaultGroupActivation: defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    resolveDefaultThinkingLevel,
-    provider,
-    model,
-    contextTokens,
-    isGroup,
-    skillCommands,
-  });
-  if (!commandResult.shouldContinue) {
-    typing.cleanup();
-    return { kind: "reply", reply: commandResult.reply };
+  if (!inlineCommandHandled) {
+    const commandResult = await handleCommands({
+      ctx,
+      cfg,
+      command,
+      agentId,
+      directives,
+      elevated: {
+        enabled: elevatedEnabled,
+        allowed: elevatedAllowed,
+        failures: elevatedFailures,
+      },
+      sessionEntry,
+      previousSessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionScope,
+      workspaceDir,
+      defaultGroupActivation: defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel,
+      provider,
+      model,
+      contextTokens,
+      isGroup,
+      skillCommands,
+    });
+    if (!commandResult.shouldContinue) {
+      typing.cleanup();
+      return { kind: "reply", reply: commandResult.reply };
+    }
   }
 
   return {
