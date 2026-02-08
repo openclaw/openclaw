@@ -16,13 +16,25 @@ export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
     });
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    child.on("error", (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error(`Failed to spawn docker: ${err.message}`));
+    });
     child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !opts?.allowFailure) {
         reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
