@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/camb-ai",
+  "version": "2026.1.30",
+  "description": "OpenClaw Camb AI plugin for TTS, transcription, translation, voice cloning, and sound generation",
+  "type": "module",
+  "dependencies": {
+    "@camb-ai/sdk": "^1.0.1",
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

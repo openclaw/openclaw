@@ -1,0 +1,96 @@
+{
+  "id": "camb-ai",
+  "uiHints": {
+    "apiKey": {
+      "label": "Camb AI API Key",
+      "sensitive": true
+    },
+    "tts.model": {
+      "label": "TTS Model",
+      "help": "MARS model: mars-flash (low latency), mars-pro (high fidelity), mars-instruct (instruction-following)"
+    },
+    "tts.defaultLanguage": {
+      "label": "Default TTS Language",
+      "help": "Language code like en-us, es-es, fr-fr"
+    },
+    "tts.defaultVoiceId": {
+      "label": "Default Voice ID"
+    },
+    "voiceCloning.enabled": {
+      "label": "Enable Voice Cloning",
+      "help": "Opt-in for voice cloning capabilities",
+      "advanced": true
+    },
+    "soundGeneration.enabled": {
+      "label": "Enable Sound Generation",
+      "help": "Generate music and sound effects from text prompts",
+      "advanced": true
+    },
+    "pollingIntervalMs": {
+      "label": "Task Polling Interval (ms)",
+      "advanced": true
+    },
+    "pollingTimeoutMs": {
+      "label": "Task Polling Timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "tts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "enum": ["mars-pro", "mars-flash", "mars-instruct", "auto"]
+          },
+          "defaultLanguage": {
+            "type": "string"
+          },
+          "defaultVoiceId": {
+            "type": "integer"
+          },
+          "outputFormat": {
+            "type": "string",
+            "enum": ["mp3", "wav"]
+          }
+        }
+      },
+      "voiceCloning": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "soundGeneration": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "pollingIntervalMs": {
+        "type": "integer",
+        "minimum": 500
+      },
+      "pollingTimeoutMs": {
+        "type": "integer",
+        "minimum": 5000
+      }
+    }
+  }
+}
