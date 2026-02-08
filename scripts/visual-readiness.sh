@@ -18,16 +18,20 @@ echo "$perm_out"
 if echo "$perm_out" | grep -Fq "Screen Recording (Required): Not Granted"; then
   cat <<'EOF'
 
-== Fix: grant Screen Recording to Terminal (exact macOS steps) ==
+== Fix: grant Screen Recording (exact macOS steps) ==
 1) Open System Settings
 2) Privacy & Security → Screen Recording
-3) Enable your terminal app (Terminal or iTerm)
+3) Enable:
+   - Your terminal app (Terminal or iTerm)
+   - Peekaboo (and/or Peekaboo Bridge), if it appears
 4) Quit & reopen the terminal app (permission is per running instance)
-5) Re-run: peekaboo permissions
+5) If Peekaboo Bridge is running, quit & relaunch it too
+6) Re-run: peekaboo permissions
 
 Once Screen Recording is enabled, Peekaboo can:
 - Capture screenshots (whole screen, frontmost window)
 - Generate annotated UI maps with element IDs (peekaboo see --annotate)
+- Inspect window/app state visually (list windows + see snapshot IDs)
 EOF
   exit 2
 fi
@@ -35,16 +39,20 @@ fi
 if echo "$perm_out" | grep -Fq "Accessibility (Required): Not Granted"; then
   cat <<'EOF'
 
-== Fix: grant Accessibility to Terminal (exact macOS steps) ==
+== Fix: grant Accessibility (exact macOS steps) ==
 1) Open System Settings
 2) Privacy & Security → Accessibility
-3) Enable your terminal app (Terminal or iTerm)
+3) Enable:
+   - Your terminal app (Terminal or iTerm)
+   - Peekaboo (and/or Peekaboo Bridge), if it appears
 4) Quit & reopen the terminal app
-5) Re-run: peekaboo permissions
+5) If Peekaboo Bridge is running, quit & relaunch it too
+6) Re-run: peekaboo permissions
 
 Once Accessibility is enabled, Peekaboo can:
 - Click/type/press keys reliably (click/type/press/hotkey)
 - Drive menus/menubar and focus windows (menu/menubar/window)
+- Interact with specific UI elements by ID (from the annotated UI map)
 EOF
   exit 3
 fi
