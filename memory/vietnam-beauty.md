@@ -623,11 +623,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `f1c5b68 docs(ucp): add Phase 3 guide, implementation record, update STATUS (02-08)`
 - `11ffce1 feat(main): register UCP feed router (/ucp/v1/feed) (02-08)`
 - `66e1098 feat(ucp): update discovery with feed + structured data capabilities (02-08)`
 - `f154d8e feat(ucp): add product feed generator and structured data endpoints (02-08)`
 - `3b5ce76 docs: I032 UCP Phase 2 implementation record + STATUS update (02-08)`
-- `881bfe3 fix(ucp): fix order status update — JSONB mutation + shipping type (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
