@@ -213,4 +213,75 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
+
+  it("inherits exec overrides from spawnedBy session", async () => {
+    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => {
+      if (sessionKey === "agent:main:subagent:child") {
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry: {
+            sessionId: "child-session-id",
+            updatedAt: Date.now(),
+          },
+          canonicalKey: "agent:main:subagent:child",
+        };
+      }
+      if (sessionKey === "agent:main:main") {
+        return {
+          cfg: {},
+          storePath: "/tmp/sessions.json",
+          entry: {
+            sessionId: "parent-session-id",
+            updatedAt: Date.now(),
+            execHost: "gateway",
+            execSecurity: "allowlist",
+            execAsk: "always",
+            execNode: "node-a",
+          },
+          canonicalKey: "agent:main:main",
+        };
+      }
+      return {
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: undefined,
+        canonicalKey: sessionKey,
+      };
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      await updater(store);
+      capturedEntry = store["agent:main:subagent:child"] as Record<string, unknown>;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "test",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:child",
+        spawnedBy: "agent:main:main",
+        idempotencyKey: "test-inherit-exec",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "3", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(capturedEntry).toBeDefined();
+    expect(capturedEntry?.execHost).toBe("gateway");
+    expect(capturedEntry?.execSecurity).toBe("allowlist");
+    expect(capturedEntry?.execAsk).toBe("always");
+    expect(capturedEntry?.execNode).toBe("node-a");
+  });
 });

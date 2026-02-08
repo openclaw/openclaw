@@ -221,7 +221,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
-      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+      let inheritedExec:
+        | { execHost?: string; execSecurity?: string; execAsk?: string; execNode?: string }
+        | undefined;
+      const needsInheritedGroup = !resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace;
+      const needsInheritedExec =
+        entry?.execHost == null ||
+        entry?.execSecurity == null ||
+        entry?.execAsk == null ||
+        entry?.execNode == null;
+      if (spawnedByValue && (needsInheritedGroup || needsInheritedExec)) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
           inheritedGroup = {
@@ -229,8 +238,15 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
           };
+          inheritedExec = {
+            execHost: parentEntry?.execHost,
+            execSecurity: parentEntry?.execSecurity,
+            execAsk: parentEntry?.execAsk,
+            execNode: parentEntry?.execNode,
+          };
         } catch {
           inheritedGroup = undefined;
+          inheritedExec = undefined;
         }
       }
       resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
@@ -252,6 +268,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
+        execHost: entry?.execHost ?? inheritedExec?.execHost,
+        execSecurity: entry?.execSecurity ?? inheritedExec?.execSecurity,
+        execAsk: entry?.execAsk ?? inheritedExec?.execAsk,
+        execNode: entry?.execNode ?? inheritedExec?.execNode,
         label: labelValue,
         spawnedBy: spawnedByValue,
         channel: entry?.channel ?? request.channel?.trim(),
