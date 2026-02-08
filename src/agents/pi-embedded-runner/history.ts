@@ -3,6 +3,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
+/**
+ * Default history limit for group sessions (generous — preserves context).
+ * Only kicks in when no per-group or per-provider override is configured.
+ */
+const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
   return match?.[1] ?? value;
@@ -10,7 +16,7 @@ function stripThreadSuffix(value: string): string {
 
 /**
  * Limits conversation history to the last N user turns (and their associated
- * assistant responses). This reduces token usage for long-running DM sessions.
+ * assistant responses). This reduces token usage for long-running sessions.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -35,11 +41,35 @@ export function limitHistoryTurns(
   return messages;
 }
 
+type ProviderChannelConfig = {
+  dmHistoryLimit?: number;
+  groupHistoryLimit?: number;
+  dms?: Record<string, { historyLimit?: number }>;
+  groups?: Record<string, { historyLimit?: number }>;
+};
+
+function resolveProviderConfig(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): ProviderChannelConfig | undefined {
+  const channels = cfg?.channels;
+  if (!channels || typeof channels !== "object") {
+    return undefined;
+  }
+  const entry = (channels as Record<string, unknown>)[providerId];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  return entry as ProviderChannelConfig;
+}
+
 /**
- * Extract provider + user ID from a session key and look up dmHistoryLimit.
- * Supports per-DM overrides and provider defaults.
+ * Resolve history limit from a session key.
+ * Supports DMs, groups, and per-entity overrides.
+ * Groups get a generous default (50 turns) to prevent unbounded accumulation
+ * while preserving high-quality context.
  */
-export function getDmHistoryLimitFromSessionKey(
+export function getHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
 ): number | undefined {
@@ -56,43 +86,31 @@ export function getDmHistoryLimitFromSessionKey(
   }
 
   const kind = providerParts[1]?.toLowerCase();
-  const userIdRaw = providerParts.slice(2).join(":");
-  const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") {
-    return undefined;
+  const entityIdRaw = providerParts.slice(2).join(":");
+  const entityId = stripThreadSuffix(entityIdRaw);
+  const providerConfig = resolveProviderConfig(config, provider);
+
+  if (kind === "dm") {
+    if (entityId && providerConfig?.dms?.[entityId]?.historyLimit !== undefined) {
+      return providerConfig.dms[entityId].historyLimit;
+    }
+    return providerConfig?.dmHistoryLimit;
   }
 
-  const getLimit = (
-    providerConfig:
-      | {
-          dmHistoryLimit?: number;
-          dms?: Record<string, { historyLimit?: number }>;
-        }
-      | undefined,
-  ): number | undefined => {
-    if (!providerConfig) {
-      return undefined;
+  if (kind === "group" || kind === "supergroup" || kind === "channel") {
+    if (entityId && providerConfig?.groups?.[entityId]?.historyLimit !== undefined) {
+      return providerConfig.groups[entityId].historyLimit;
     }
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
-    }
-    return providerConfig.dmHistoryLimit;
-  };
+    return providerConfig?.groupHistoryLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  }
 
-  const resolveProviderConfig = (
-    cfg: OpenClawConfig | undefined,
-    providerId: string,
-  ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
-    const channels = cfg?.channels;
-    if (!channels || typeof channels !== "object") {
-      return undefined;
-    }
-    const entry = (channels as Record<string, unknown>)[providerId];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return undefined;
-    }
-    return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
-  };
+  return undefined;
+}
 
-  return getLimit(resolveProviderConfig(config, provider));
+/** @deprecated Use getHistoryLimitFromSessionKey instead. */
+export function getDmHistoryLimitFromSessionKey(
+  sessionKey: string | undefined,
+  config: OpenClawConfig | undefined,
+): number | undefined {
+  return getHistoryLimitFromSessionKey(sessionKey, config);
 }

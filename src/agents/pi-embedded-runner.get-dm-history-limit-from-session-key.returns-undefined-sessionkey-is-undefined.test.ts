@@ -143,14 +143,16 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       9,
     );
   });
-  it("returns undefined for non-dm session kinds", () => {
+  it("returns group default for channel kinds, undefined for unrecognized kinds", () => {
     const config = {
       channels: {
         telegram: { dmHistoryLimit: 15 },
         slack: { dmHistoryLimit: 10 },
       },
     } as OpenClawConfig;
-    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBeUndefined();
+    // "channel" kind now falls under group handling with a default limit of 50
+    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBe(50);
+    // Unrecognized kind "slash" still returns undefined
     expect(getDmHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
   });
   it("returns undefined for unknown provider", () => {

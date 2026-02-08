@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   ensurePiCompactionReserveTokens,
+  resolveBackgroundOptimization,
   resolveCompactionReserveTokensFloor,
 } from "./pi-settings.js";
 
@@ -25,13 +26,13 @@ describe("ensurePiCompactionReserveTokens", () => {
 
   it("does not override when already above floor", () => {
     const settingsManager = {
-      getCompactionReserveTokens: () => 32_000,
+      getCompactionReserveTokens: () => 50_000,
       applyOverrides: vi.fn(),
     };
 
     const result = ensurePiCompactionReserveTokens({ settingsManager });
 
-    expect(result).toEqual({ didOverride: false, reserveTokens: 32_000 });
+    expect(result).toEqual({ didOverride: false, reserveTokens: 50_000 });
     expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
   });
 });
@@ -52,5 +53,58 @@ describe("resolveCompactionReserveTokensFloor", () => {
         agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
       }),
     ).toBe(0);
+  });
+});
+
+describe("resolveBackgroundOptimization", () => {
+  it("returns all defaults when config is missing", () => {
+    const result = resolveBackgroundOptimization();
+    expect(result).toEqual({
+      verbatimTurns: 30,
+      targetWaterLevel: 0.5,
+      summaryBudgetRatio: 0.25,
+      optimizeAfterTurns: 15,
+      optimizeIntervalMin: 20,
+    });
+  });
+
+  it("accepts partial overrides and fills defaults", () => {
+    const result = resolveBackgroundOptimization({
+      agents: {
+        defaults: {
+          compaction: {
+            backgroundOptimization: { verbatimTurns: 10, targetWaterLevel: 0.7 },
+          },
+        },
+      },
+    });
+    expect(result.verbatimTurns).toBe(10);
+    expect(result.targetWaterLevel).toBe(0.7);
+    expect(result.summaryBudgetRatio).toBe(0.25);
+    expect(result.optimizeAfterTurns).toBe(15);
+    expect(result.optimizeIntervalMin).toBe(20);
+  });
+
+  it("clamps out-of-range values", () => {
+    const result = resolveBackgroundOptimization({
+      agents: {
+        defaults: {
+          compaction: {
+            backgroundOptimization: {
+              verbatimTurns: 0,
+              targetWaterLevel: 2.0,
+              summaryBudgetRatio: -1,
+              optimizeAfterTurns: 999,
+              optimizeIntervalMin: 0,
+            },
+          },
+        },
+      },
+    });
+    expect(result.verbatimTurns).toBe(1);
+    expect(result.targetWaterLevel).toBe(0.9);
+    expect(result.summaryBudgetRatio).toBe(0.05);
+    expect(result.optimizeAfterTurns).toBe(100);
+    expect(result.optimizeIntervalMin).toBe(1);
   });
 });
