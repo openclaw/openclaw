@@ -9,6 +9,59 @@ import { killProcessTree } from "./shell-utils.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
+/**
+ * Environment variables that could enable code injection if attacker-controlled.
+ * These are blocked from being passed to Docker containers to prevent RCE attacks.
+ */
+const DANGEROUS_ENV_VARS = new Set([
+  // Node.js code injection
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "NODE_REPL_HISTORY",
+  // Dynamic library injection (Linux)
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "LD_AUDIT",
+  // Dynamic library injection (macOS)
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "DYLD_FRAMEWORK_PATH",
+  "DYLD_VERSIONED_LIBRARY_PATH",
+  "DYLD_VERSIONED_FRAMEWORK_PATH",
+  // Python code injection
+  "PYTHONPATH",
+  "PYTHONSTARTUP",
+  "PYTHONHOME",
+  // Perl code injection
+  "PERL5LIB",
+  "PERLLIB",
+  "PERL5OPT",
+  // Ruby code injection
+  "RUBYLIB",
+  "RUBYOPT",
+  // Shell injection
+  "ENV",
+  "BASH_ENV",
+]);
+
+/**
+ * Check if an environment variable name is dangerous (could enable code injection).
+ * Matches exact names in the blocklist plus patterns like LD_*, DYLD_*, etc.
+ * Uses case-insensitive matching to prevent bypasses like "node_options".
+ */
+function isDangerousEnvVar(key: string): boolean {
+  // Normalize to uppercase for case-insensitive matching
+  const upperKey = key.toUpperCase();
+  if (DANGEROUS_ENV_VARS.has(upperKey)) {
+    return true;
+  }
+  // Block pattern-based dangerous variables
+  if (upperKey.startsWith("LD_") || upperKey.startsWith("DYLD_") || upperKey.startsWith("_LD_")) {
+    return true;
+  }
+  return false;
+}
+
 export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
@@ -63,6 +116,11 @@ export function buildDockerExecArgs(params: {
     args.push("-w", params.workdir);
   }
   for (const [key, value] of Object.entries(params.env)) {
+    // Block dangerous environment variables that could enable code injection (CWE-94)
+    // Exception: PATH is allowed for the custom PATH handling logic
+    if (key !== "PATH" && isDangerousEnvVar(key)) {
+      continue;
+    }
     args.push("-e", `${key}=${value}`);
   }
   const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;

@@ -424,3 +424,168 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("-t");
   });
 });
+
+/**
+ * VULN-161: Block dangerous environment variables from Docker containers
+ *
+ * Tests that dangerous environment variables that could enable code injection
+ * (NODE_OPTIONS, LD_PRELOAD, DYLD_INSERT_LIBRARIES, etc.) are blocked from
+ * being passed to Docker containers via docker exec -e.
+ */
+describe("buildDockerExecArgs env var blocking", () => {
+  it("blocks NODE_OPTIONS from docker container", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        NODE_OPTIONS: "--require=/tmp/malicious.js",
+        SAFE_VAR: "safe-value",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    // NODE_OPTIONS should be blocked
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("NODE_OPTIONS="))).toBe(false);
+    // Safe vars should still be passed
+    expect(envArgs).toContain("SAFE_VAR=safe-value");
+  });
+
+  it("blocks LD_PRELOAD from docker container", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        LD_PRELOAD: "/tmp/malicious.so",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("LD_PRELOAD="))).toBe(false);
+  });
+
+  it("blocks DYLD_INSERT_LIBRARIES from docker container", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("DYLD_INSERT_LIBRARIES="))).toBe(false);
+  });
+
+  it("blocks PYTHONPATH from docker container", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        PYTHONPATH: "/tmp/malicious-python",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("PYTHONPATH="))).toBe(false);
+  });
+
+  it("blocks BASH_ENV from docker container", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        BASH_ENV: "/tmp/evil.sh",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("BASH_ENV="))).toBe(false);
+  });
+
+  it("blocks pattern-based dangerous vars like LD_LIBRARY_PATH", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        LD_LIBRARY_PATH: "/tmp/lib",
+        DYLD_FRAMEWORK_PATH: "/tmp/frameworks",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs.some((arg) => arg.startsWith("LD_LIBRARY_PATH="))).toBe(false);
+    expect(envArgs.some((arg) => arg.startsWith("DYLD_FRAMEWORK_PATH="))).toBe(false);
+  });
+
+  it("allows safe environment variables", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        OPENAI_API_KEY: "sk-test",
+        ANTHROPIC_API_KEY: "sk-ant-test",
+        MY_CUSTOM_VAR: "custom-value",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs).toContain("OPENAI_API_KEY=sk-test");
+    expect(envArgs).toContain("ANTHROPIC_API_KEY=sk-ant-test");
+    expect(envArgs).toContain("MY_CUSTOM_VAR=custom-value");
+  });
+
+  it("still passes PATH for custom PATH handling", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        PATH: "/custom/bin:/usr/bin",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    // PATH should still be passed for the PATH handling logic
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envArgs).toContain("PATH=/custom/bin:/usr/bin");
+  });
+
+  it("blocks mixed-case variants of dangerous env vars", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: {
+        node_options: "--require=/tmp/malicious.js",
+        Node_Options: "--require=/tmp/malicious.js",
+        ld_preload: "/tmp/malicious.so",
+        Ld_Preload: "/tmp/malicious.so",
+        pythonpath: "/tmp/malicious-python",
+        SAFE_VAR: "safe-value",
+        HOME: "/home/user",
+      },
+      tty: false,
+    });
+
+    const envArgs = args.filter((_, i) => args[i - 1] === "-e");
+    // All mixed-case dangerous vars should be blocked
+    expect(envArgs.some((arg) => arg.toLowerCase().startsWith("node_options="))).toBe(false);
+    expect(envArgs.some((arg) => arg.toLowerCase().startsWith("ld_preload="))).toBe(false);
+    expect(envArgs.some((arg) => arg.toLowerCase().startsWith("pythonpath="))).toBe(false);
+    // Safe vars should still be passed
+    expect(envArgs).toContain("SAFE_VAR=safe-value");
+  });
+});
