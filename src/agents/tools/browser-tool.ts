@@ -412,7 +412,11 @@ export function createBrowserTool(opts?: {
           if (targetId) {
             await browserCloseTab(baseUrl, targetId, { profile });
           } else {
-            await browserAct(baseUrl, { kind: "close" }, { profile });
+            // Known issue: The 'close' action does not verify the ownership of the current tab before atempting to close it, leading to potential action conflicts in concurrent scenarios. For now, enforce a strict close action with targetId for proxyRequest: path = "/act". The following line is commented out to prevent accidental usage. Instead, we throw an error to inform the user.
+            // await browserAct(baseUrl, { kind: "close" }, { profile });
+            throw new Error(
+              `Closing a tab without providing a targetId is not allowed. (But it was somehow allowed to do so in a previous version!). To avoid closing a tab not belonging to you, ensure you maintain a set of tabs by their targetId and provide a targetId when closing.`,
+            );
           }
           return jsonResult({ ok: true });
         }

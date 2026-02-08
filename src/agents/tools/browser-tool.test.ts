@@ -289,3 +289,35 @@ describe("browser tool snapshot labels", () => {
     expect(result?.content?.[1]).toMatchObject({ type: "image" });
   });
 });
+
+describe("browser tool tab open and close behaviors", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+  });
+
+  it("close a tab by targetId should be allowed in profile = 'clawd'", async () => {
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("", { action: "close", targetId: "a real target id", profile: "clawd" });
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      "a real target id",
+      { profile: "clawd" },
+    );
+  });
+
+  it("close a tab by targetId should be allowed in profile = 'chrome'", async () => {
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("", { action: "close", targetId: "a real target id", profile: "clawd" });
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      "http://127.0.0.1:9999",
+      "a real target id",
+      { profile: "clawd" },
+    );
+  });
+
+  it("close a tab without targetId should throw error", async () => {
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await expect(tool.execute?.("", { action: "close" })).rejects.toThrow();
+  });
+});
