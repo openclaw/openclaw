@@ -15,6 +15,17 @@ export async function resolveAnnounceTarget(params: {
 }): Promise<AnnounceTarget | null> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
+  const requesterParsed = params.requesterSessionKey
+    ? resolveAnnounceTargetFromKey(params.requesterSessionKey)
+    : null;
+
+  // Priority 1: Requester's session (Current Context)
+  // If the request comes from a valid channel (even internal), reply there immediately.
+  // This prevents "channel sticking" when switching channels.
+  if (requesterParsed) {
+    return requesterParsed;
+  }
+
   const fallback = parsed ?? parsedDisplay ?? null;
 
   if (fallback) {
@@ -65,11 +76,9 @@ export async function resolveAnnounceTarget(params: {
     // ignore
   }
 
-  // Fallback: use requester's session key (e.g. SENA's group chat) so the
-  // target agent can announce into the chat room the request originated from.
-  if (params.requesterSessionKey) {
-    const requesterParsed = resolveAnnounceTargetFromKey(params.requesterSessionKey);
-    if (requesterParsed) return requesterParsed;
+  // Fallback: use requester's session key if not found above
+  if (requesterParsed) {
+    return requesterParsed;
   }
 
   // Don't return internal channels (webchat) as announce targets
