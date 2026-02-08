@@ -32,7 +32,6 @@ const defaultShell = isWin
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
-const longDelayCmd = isWin ? "Start-Sleep -Seconds 2" : "sleep 2";
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
 const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, `echo ${message}`]);
@@ -148,15 +147,17 @@ describe("exec tool backgrounding", () => {
   it("uses default timeout when timeout is omitted", async () => {
     const customBash = createExecTool({ timeoutSec: 1, backgroundMs: 10 });
     const customProcess = createProcessTool();
+    // Keep this comfortably above the timeout window to avoid flaky races under CI load.
+    const timeoutTestCmd = isWin ? "Start-Sleep -Seconds 5" : "sleep 5";
 
     const result = await customBash.execute("call1", {
-      command: longDelayCmd,
+      command: timeoutTestCmd,
       background: true,
     });
 
     const sessionId = (result.details as { sessionId: string }).sessionId;
     let status = "running";
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + (isWin ? 12_000 : 5000);
 
     while (Date.now() < deadline && status === "running") {
       const poll = await customProcess.execute("call2", {
