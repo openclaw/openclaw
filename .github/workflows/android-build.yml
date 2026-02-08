@@ -1,0 +1,56 @@
+name: Android Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "apps/android/**"
+  pull_request:
+    paths:
+      - "apps/android/**"
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Grant execute permission for gradlew
+        run: |
+          cd apps/android
+          chmod +x gradlew
+
+      - name: Build Debug APK
+        run: |
+          cd apps/android
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/openclaw-*.apk
+          retention-days: 30
+
+      - name: Build Release APK
+        run: |
+          cd apps/android
+          ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-release-apk
+          path: apps/android/app/build/outputs/apk/release/openclaw-*.apk
+          retention-days: 90
