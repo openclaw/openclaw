@@ -1,7 +1,9 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { checkCircuitBreaker } from "./fuse.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -162,7 +164,7 @@ export async function onTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const due = findDueJobs(state);
+      const due = await findDueJobs(state);
 
       if (due.length === 0) {
         const changed = recomputeNextRuns(state);
@@ -279,10 +281,22 @@ export async function onTimer(state: CronServiceState) {
   }
 }
 
-function findDueJobs(state: CronServiceState): CronJob[] {
+async function findDueJobs(state: CronServiceState): Promise<CronJob[]> {
   if (!state.store) {
     return [];
   }
+
+  // Check FUSE circuit breaker before processing any cron jobs
+  const config = loadConfig();
+  const shouldProceed = await checkCircuitBreaker(config, {
+    log: (msg: string) => state.deps.log.info(msg),
+  });
+
+  if (!shouldProceed) {
+    // Circuit breaker is open (HOLD), skip all cron jobs this cycle
+    return [];
+  }
+
   const now = state.deps.nowMs();
   return state.store.jobs.filter((j) => {
     if (!j.state) {
@@ -303,6 +317,19 @@ export async function runMissedJobs(state: CronServiceState) {
   if (!state.store) {
     return;
   }
+
+  // Check FUSE circuit breaker before processing any cron jobs
+  const config = loadConfig();
+  const shouldProceed = await checkCircuitBreaker(config, {
+    log: (msg: string) => state.deps.log.info(msg),
+  });
+
+  if (!shouldProceed) {
+    // Circuit breaker is open (HOLD), skip missed jobs
+    state.deps.log.info("cron: skipping missed jobs due to circuit breaker (HOLD)");
+    return;
+  }
+
   const now = state.deps.nowMs();
   const missed = state.store.jobs.filter((j) => {
     if (!j.state) {
@@ -336,6 +363,18 @@ export async function runDueJobs(state: CronServiceState) {
   if (!state.store) {
     return;
   }
+
+  // Check FUSE circuit breaker before processing any cron jobs
+  const config = loadConfig();
+  const shouldProceed = await checkCircuitBreaker(config, {
+    log: (msg: string) => state.deps.log.info(msg),
+  });
+
+  if (!shouldProceed) {
+    // Circuit breaker is open (HOLD), skip all cron jobs
+    return;
+  }
+
   const now = state.deps.nowMs();
   const due = state.store.jobs.filter((j) => {
     if (!j.state) {

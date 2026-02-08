@@ -192,6 +192,9 @@ export const OpenClawSchema = z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
         checkOnStart: z.boolean().optional(),
+        missionCritical: z.boolean().optional(),
+        manualUpgrade: z.boolean().optional(),
+        fuseUrl: z.string().url().optional(),
       })
       .strict()
       .optional(),

@@ -1,0 +1,20 @@
+# This file is intentionally empty.
+# 
+# IMPORTANT: Only the FIRST LINE is processed. All other lines are ignored.
+# 
+# When needed, OpenClaw maintainers can add one of these commands on the FIRST LINE:
+#
+# HOLD [reason]
+#   Suspends all cron job execution. Example:
+#   HOLD for emergency maintenance
+#
+# UPGRADE version
+#   Notifies users of available upgrade. Example:
+#   UPGRADE v2.1.0
+#
+# ANNOUNCE message
+#   Displays an announcement. Example:
+#   ANNOUNCE New features available in latest release
+#
+# Leave the first line empty (or as a comment) to allow normal cron processing.
+# All lines after the first are ignored and can contain notes, documentation, etc.

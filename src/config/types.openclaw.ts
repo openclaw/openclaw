@@ -63,6 +63,12 @@ export type OpenClawConfig = {
     channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
+    /** Mission critical mode prevents central hold of cron jobs. */
+    missionCritical?: boolean;
+    /** Manual upgrade mode requires explicit user action for updates. */
+    manualUpgrade?: boolean;
+    /** Custom FUSE file URL for remote control. Default: https://raw.githubusercontent.com/openclaw/openclaw/refs/heads/main/FUSE.txt */
+    fuseUrl?: string;
   };
   browser?: BrowserConfig;
   ui?: {

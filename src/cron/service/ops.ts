@@ -1,5 +1,7 @@
 import type { CronJobCreate, CronJobPatch } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { loadConfig } from "../../config/config.js";
+import { checkCircuitBreaker } from "./fuse.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -190,6 +192,20 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
+
+    // Check FUSE circuit breaker for non-forced runs
+    if (mode !== "force") {
+      const config = loadConfig();
+      const shouldProceed = await checkCircuitBreaker(config, {
+        log: (msg: string) => state.deps.log.info(msg),
+      });
+
+      if (!shouldProceed) {
+        // Circuit breaker is open (HOLD), skip execution
+        return { ok: true, ran: false, reason: "circuit-breaker-hold" as const };
+      }
+    }
+
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
     if (!due) {
