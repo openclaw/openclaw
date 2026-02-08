@@ -247,8 +247,36 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (message.role !== "assistant") {
             return true;
           }
+          // Extract text from content (handles both string and array formats)
+          let text = "";
+          const content = message.content;
+          if (typeof content === "string") {
+            text = content;
+          } else if (Array.isArray(content)) {
+            // Handle array format: [{ type: "text", text: "..." }]
+            for (const part of content) {
+              if (
+                part &&
+                typeof part === "object" &&
+                "type" in part &&
+                "text" in part &&
+                typeof part.text === "string"
+              ) {
+                if (
+                  part.type === "text" ||
+                  part.type === "output_text" ||
+                  part.type === "input_text"
+                ) {
+                  const trimmed = part.text.trim();
+                  if (trimmed) {
+                    text = trimmed;
+                    break;
+                  }
+                }
+              }
+            }
+          }
           // Filter out assistant messages that are only HEARTBEAT_OK
-          const text = typeof message.content === "string" ? message.content : "";
           const trimmed = text.trim();
           return trimmed !== HEARTBEAT_TOKEN;
         });
