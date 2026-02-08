@@ -357,3 +357,65 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
   });
 });
+
+describe("listSessionsFromStore includeKeys", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  const now = Date.now();
+  const makeStore = (): Record<string, SessionEntry> => ({
+    "agent:main:recent": {
+      sessionId: "sess-recent",
+      updatedAt: now,
+      displayName: "Recent Session",
+    } as SessionEntry,
+    "agent:main:old-pinned": {
+      sessionId: "sess-old",
+      updatedAt: now - 200 * 60_000,
+      displayName: "Old Pinned Session",
+    } as SessionEntry,
+    "agent:main:old-other": {
+      sessionId: "sess-old-other",
+      updatedAt: now - 200 * 60_000,
+      displayName: "Old Other Session",
+    } as SessionEntry,
+  });
+
+  test("includeKeys bypasses activeMinutes filter", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(),
+      opts: { activeMinutes: 60, includeKeys: ["agent:main:old-pinned"] },
+    });
+    const keys = result.sessions.map((s) => s.key);
+    expect(keys).toContain("agent:main:recent");
+    expect(keys).toContain("agent:main:old-pinned");
+    expect(keys).not.toContain("agent:main:old-other");
+  });
+
+  test("includeKeys bypasses limit filter", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(),
+      opts: { limit: 1, includeKeys: ["agent:main:old-pinned"] },
+    });
+    const keys = result.sessions.map((s) => s.key);
+    expect(keys).toContain("agent:main:old-pinned");
+    expect(result.sessions.length).toBe(2);
+  });
+
+  test("includeKeys with no matching keys behaves normally", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(),
+      opts: { activeMinutes: 60, includeKeys: ["agent:main:nonexistent"] },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].key).toBe("agent:main:recent");
+  });
+});

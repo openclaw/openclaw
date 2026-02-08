@@ -84,6 +84,8 @@ export type MsgContext = {
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
+  /** Forum topic name (e.g. Telegram forum topics). */
+  TopicName?: string;
   /** Human label for channel-like group conversations (e.g. #general, #support). */
   GroupChannel?: string;
   GroupSpace?: string;

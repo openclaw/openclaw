@@ -63,6 +63,18 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
+  it("appends topic name to group display name (telegram preserves subject/topic casing)", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "telegram",
+        subject: "OpenClawBot",
+        topicName: "General",
+        id: "123",
+        key: "telegram:group:123",
+      }),
+    ).toBe("telegram : OpenClawBot : General");
+  });
+
   it("collapses direct chats to main by default", () => {
     expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe("agent:main:main");
   });

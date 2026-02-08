@@ -21,6 +21,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** Always include these session keys in the result, bypassing activeMinutes filter. */
+    includeKeys: Type.Optional(Type.Array(NonEmptyString)),
   },
   { additionalProperties: false },
 );

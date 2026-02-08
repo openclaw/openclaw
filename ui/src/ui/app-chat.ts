@@ -207,6 +207,7 @@ export async function refreshChat(host: ChatHost) {
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      includeKeys: [host.sessionKey],
     }),
     refreshChatAvatar(host),
   ]);
