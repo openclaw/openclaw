@@ -20,6 +20,37 @@ const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) =>
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
 
+const MAX_REFRESH_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  retries: number = MAX_REFRESH_RETRIES,
+  delayMs: number = RETRY_DELAY_MS,
+): Promise<T> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === retries) {
+        throw error;
+      }
+      log.warn(
+        `OAuth refresh attempt ${attempt}/${retries} failed, retrying in ${delayMs * attempt}ms`,
+        {
+          error: error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : undefined,
+          stack: error instanceof Error ? error.stack : undefined,
+          status: (error as { status?: number }).status,
+          code: (error as { code?: string }).code,
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  throw new Error("Unexpected: retry loop exited without return or throw");
+}
+
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
 
@@ -81,7 +112,7 @@ async function refreshOAuthTokenWithLock(params: {
               if (!oauthProvider) {
                 return null;
               }
-              return await getOAuthApiKey(oauthProvider, oauthCreds);
+              return await withRetry(() => getOAuthApiKey(oauthProvider, oauthCreds));
             })();
     if (!result) {
       return null;
