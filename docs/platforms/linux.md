@@ -92,3 +92,49 @@ Enable it:
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
+
+## WSL2 Troubleshooting
+
+On WSL2 (Ubuntu), systemd user sessions sometimes fail to initialize the DBus socket on boot. This breaks systemd-dependent services including the OpenClaw Gateway.
+
+### Symptoms
+
+- Gateway fails to start with DBus-related errors
+- `systemctl --user` commands fail
+- Missing `/run/user/$(id -u)/bus` socket
+
+### Fix
+
+Restart the user session service:
+
+```bash
+sudo systemctl restart user@$(id -u).service
+```
+
+### Verify
+
+After restarting, confirm the socket exists:
+
+```bash
+ls -la /run/user/$(id -u)/bus
+```
+
+Then restart the gateway (adjust for your profile if not using default):
+
+```bash
+systemctl --user restart openclaw-gateway.service
+# Or with a profile: openclaw-gateway-<profile>.service
+```
+
+### Persistent Fix
+
+Add to your `.profile` or `.zprofile` (login shell, runs once per session):
+
+```bash
+# WSL2 DBus socket fix - runs once at login
+if [[ -n "$WSL_DISTRO_NAME" ]] && [[ ! -e "/run/user/$(id -u)/bus" ]]; then
+  sudo systemctl restart user@$(id -u).service 2>/dev/null
+fi
+```
+
+> **Note:** This uses `.profile` (not `.bashrc`) to avoid repeated sudo prompts in subshells.
