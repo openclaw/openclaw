@@ -197,6 +197,14 @@ export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
 };
 
+/**
+ * Inbound deduplication for multi-gateway HA.
+ * When multiple instances receive the same webhook, only one processes it.
+ * - "memory": in-process only (default; single gateway).
+ * - { file: { dir } }: shared directory so all instances use the same claims (e.g. NFS).
+ */
+export type GatewayInboundDedupeConfig = "memory" | { file?: { dir?: string } };
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -245,4 +253,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Cross-instance inbound deduplication (default: memory). Set file.dir for multi-gateway HA. */
+  inboundDedupe?: GatewayInboundDedupeConfig;
 };

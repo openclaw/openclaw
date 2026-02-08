@@ -110,3 +110,25 @@ openclaw --profile main status
 openclaw --profile rescue status
 openclaw --profile rescue browser status
 ```
+
+## High availability (multiple instances, same webhook)
+
+When you run **multiple Gateway instances** for HA (e.g. behind a load balancer), the same webhook (Telegram, etc.) is delivered to every instance. Without coordination, each instance would process the same message, causing duplicate AI runs and token waste (e.g. 5–10K tokens per duplicate heartbeat).
+
+Configure **cross-instance inbound deduplication** so only one instance processes each message:
+
+```json5
+{
+  gateway: {
+    inboundDedupe: {
+      file: { dir: "/var/lib/openclaw/inbound-claim" },
+    },
+  },
+}
+```
+
+- **`gateway.inboundDedupe`** (optional):
+  - Omitted or `"memory"`: in-process dedupe only (single Gateway; default).
+  - **`{ file: { dir: "<path>" } }`**: use a **shared directory** so all instances coordinate. The first instance to "claim" a message processes it; others skip. The directory must be readable and writable by all Gateway processes (e.g. NFS or a path on shared storage). Claim files are pruned automatically after 5 minutes.
+
+Use a path that is the same on every instance (e.g. NFS mount or a shared volume). Do not use a local-only path when instances run on different hosts.

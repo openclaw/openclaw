@@ -1,5 +1,6 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InboundClaimStore } from "../infra/inbound-claim.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
@@ -27,6 +28,8 @@ export type MonitorTelegramOpts = {
   webhookSecret?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
+  /** Cross-instance inbound claim store (multi-gateway HA). */
+  inboundClaimStore?: InboundClaimStore | null;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -148,6 +151,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         lastUpdateId,
         onUpdateId: persistUpdateId,
       },
+      inboundClaimStore: opts.inboundClaimStore ?? undefined,
     });
 
     if (opts.useWebhook) {
@@ -162,6 +166,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
+        inboundClaimStore: opts.inboundClaimStore ?? undefined,
       });
       return;
     }
