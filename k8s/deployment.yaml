@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw
+  labels:
+    app: openclaw-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # PVC is RWO; avoid two pods fighting for the volume
+  selector:
+    matchLabels:
+      app: openclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: openclaw-gateway
+    spec:
+      securityContext:
+        runAsUser: 1000 # node user (matches Dockerfile USER)
+        runAsGroup: 1000
+        fsGroup: 1000 # ensure PVC files are writable
+
+      # ── Init: run non-interactive onboard to write gateway config ──
+      initContainers:
+        - name: onboard
+          image: openclaw:local
+          command:
+            - node
+            - dist/index.js
+            - onboard
+            - --non-interactive
+            - --accept-risk
+            - --no-install-daemon
+            - --skip-channels
+            - --skip-skills
+            - --skip-health
+            - --skip-ui
+            - --gateway-bind
+            - lan
+            - --gateway-port
+            - "18789"
+            - --gateway-auth
+            - token
+            - --gateway-token
+            - $(OPENCLAW_GATEWAY_TOKEN)
+            - --auth-choice
+            - skip
+          env:
+            - name: HOME
+              value: /home/node
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: gateway-token
+          volumeMounts:
+            - name: openclaw-config
+              mountPath: /home/node/.openclaw
+
+      # ── Main: gateway server ──
+      containers:
+        - name: openclaw-gateway
+          image: openclaw:local
+          command:
+            - node
+            - dist/index.js
+            - gateway
+            - --bind
+            - lan
+            - --port
+            - "18789"
+          env:
+            - name: HOME
+              value: /home/node
+            - name: NODE_ENV
+              value: production
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: gateway-token
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+            - name: bridge
+              containerPort: 18790
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: gateway
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: gateway
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: openclaw-config
+              mountPath: /home/node/.openclaw
+
+      volumes:
+        - name: openclaw-config
+          persistentVolumeClaim:
+            claimName: openclaw-config

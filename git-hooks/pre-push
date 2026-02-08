@@ -1,0 +1,19 @@
+#!/bin/sh
+# Prevent pushing internal/* branches and tags to public remotes.
+# Internal branches and tags should only be pushed to a private remote.
+
+remote="$1"
+
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in
+    refs/heads/internal/*|refs/tags/internal/*)
+      if [ "$remote" = "origin" ] || [ "$remote" = "upstream" ]; then
+        echo "❌ Blocked: refusing to push $local_ref to $remote."
+        echo "   Internal branches and tags must only be pushed to a private remote."
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+exit 0
