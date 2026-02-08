@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -7,6 +7,46 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
+
+/**
+ * Get the current git SHA for build fingerprint.
+ * Used to verify dist matches current HEAD after crashes/restarts.
+ */
+function getGitSha() {
+  try {
+    return execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Inject build SHA into dist/control-ui/index.html after vite build.
+ * Adds data-build-sha attribute to <html> tag.
+ */
+function injectBuildSha() {
+  const sha = getGitSha();
+  const indexPath = path.join(repoRoot, "dist", "control-ui", "index.html");
+
+  if (!fs.existsSync(indexPath)) {
+    console.error("[ui] WARN: dist/control-ui/index.html not found, skipping SHA injection");
+    return;
+  }
+
+  let content = fs.readFileSync(indexPath, "utf-8");
+
+  // Inject data-build-sha into <html> tag
+  content = content.replace(/<html([^>]*)>/, `<html$1 data-build-sha="${sha}">`);
+
+  // Also add a meta tag for easier access
+  content = content.replace(
+    /<\/head>/,
+    `  <meta name="build-sha" content="${sha}" />\n  </head>`,
+  );
+
+  fs.writeFileSync(indexPath, content, "utf-8");
+  console.log(`[ui] injected build SHA: ${sha.slice(0, 8)}...`);
+}
 const uiDir = path.join(repoRoot, "ui");
 
 function usage() {
@@ -133,5 +173,12 @@ if (action === "install") {
     const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
     runSync(runner.cmd, installArgs, installEnv);
   }
-  run(runner.cmd, ["run", script, ...rest]);
+
+  // For build, run synchronously so we can inject SHA after
+  if (action === "build") {
+    runSync(runner.cmd, ["run", script, ...rest]);
+    injectBuildSha();
+  } else {
+    run(runner.cmd, ["run", script, ...rest]);
+  }
 }
