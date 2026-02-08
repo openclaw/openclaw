@@ -27,10 +27,11 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
-  // Handle Minimax (M2.1 is chatty/reasoning-like)
-  if (normalized.includes("minimax")) {
-    return true;
-  }
+  // NOTE: MiniMax was previously included here but removed because:
+  // 1. MiniMax models don't reliably output <think>/<final> tags
+  // 2. enforceFinalTag=true causes all content to be stripped → "(no output)"
+  // 3. MiniMax's reasoning is handled differently (not via text stream tags)
+  // See: https://github.com/openclaw/openclaw/issues/4499
 
   return false;
 }
