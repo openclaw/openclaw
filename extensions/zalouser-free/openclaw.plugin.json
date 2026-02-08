@@ -1,0 +1,74 @@
+{
+  "id": "zalouser-free",
+  "channels": ["zalouser-free"],
+  "name": "Zalo Personal (Free)",
+  "version": "1.0.0",
+  "description": "Free Zalo Personal channel plugin using zca-js library",
+  "author": "OpenClaw Community",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "sessionPath": {
+        "type": "string",
+        "description": "Path to store session credentials (defaults to ~/.openclaw/zalouser-free/)"
+      },
+      "accounts": {
+        "type": "object",
+        "description": "Map of account ID to account configuration",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable this account on gateway startup"
+            },
+            "dmAccess": {
+              "type": "string",
+              "enum": ["open", "whitelist"],
+              "default": "whitelist",
+              "description": "DM access control: 'open' (anyone) or 'whitelist' (only allowed users)"
+            },
+            "groupAccess": {
+              "type": "string",
+              "enum": ["open", "whitelist"],
+              "default": "whitelist",
+              "description": "Group access control: 'open' (anyone) or 'whitelist' (only allowed groups)"
+            },
+            "groupReplyMode": {
+              "type": "string",
+              "enum": ["mention", "all"],
+              "default": "mention",
+              "description": "Group reply mode: 'mention' (only reply when mentioned) or 'all' (reply to all messages)"
+            },
+            "allowedUsers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of allowed user IDs (for whitelist modes)"
+            },
+            "allowedGroups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of allowed group IDs (for whitelist modes)"
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "sessionPath": {
+      "label": "Session Path",
+      "placeholder": "~/.openclaw/zalouser-free/"
+    },
+    "accounts": {
+      "label": "Accounts",
+      "description": "Configure multiple Zalo accounts. Use 'openclaw zalouser-free login <accountId>' to authenticate each account."
+    }
+  }
+}

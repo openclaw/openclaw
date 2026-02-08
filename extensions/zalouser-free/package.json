@@ -1,0 +1,48 @@
+{
+  "name": "zalouser-free",
+  "version": "1.0.0",
+  "description": "Free Zalo Personal channel plugin for OpenClaw using zca-js",
+  "keywords": [
+    "channel",
+    "messaging",
+    "openclaw",
+    "zalo",
+    "zca-js"
+  ],
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0",
+    "openclaw": "workspace:*",
+    "pngjs": "^7.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "zca-js": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.0",
+    "typescript": "^5.9.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "zalouser-free",
+      "label": "Zalo Personal (Free)",
+      "selectionLabel": "Zalo Personal (zca-js, free)",
+      "docsPath": "/channels/zalouser-free",
+      "docsLabel": "zalouser-free",
+      "blurb": "Free Zalo Personal messaging using zca-js library.",
+      "order": 84,
+      "aliases": [
+        "zalo-free",
+        "zfree"
+      ]
+    }
+  }
+}

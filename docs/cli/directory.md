@@ -39,6 +39,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 - Microsoft Teams (plugin): `user:<id>` and `conversation:<id>`
 - Zalo (plugin): user id (Bot API)
 - Zalo Personal / `zalouser` (plugin): thread id (DM/group) from `zca` (`me`, `friend list`, `group list`)
+- Zalo Personal Free / `zalouser-free` (plugin): thread id (DM/group) from zca-js session
 
 ## Self (“me”)
 
