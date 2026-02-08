@@ -12,6 +12,7 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { parseSlackChannelMention, listSlackChannels, resolveByName } from "./resolve-channels.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -33,6 +34,7 @@ type SlackSendOpts = {
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
+  title?: string;
 };
 
 export type SlackSendResult = {
@@ -77,7 +79,12 @@ async function resolveChannelId(
   recipient: SlackRecipient,
 ): Promise<{ channelId: string; isDm?: boolean }> {
   if (recipient.kind === "channel") {
-    return { channelId: recipient.id };
+    // Only resolve if not already a valid channel ID
+    if (!SLACK_CHANNEL_ID_REGEX.test(recipient.id)) {
+      const channelId = await resolveChannelIdForUpload(client, recipient.id);
+      return { channelId };
+    }
+    return { channelId: recipient.id.toUpperCase() };
   }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
@@ -87,6 +94,37 @@ async function resolveChannelId(
   return { channelId, isDm: true };
 }
 
+const SLACK_CHANNEL_ID_REGEX = /^[CGDZ][A-Z0-9]{8,}$/i;
+
+async function resolveChannelIdForUpload(
+  client: WebClient,
+  channelIdOrName: string,
+): Promise<string> {
+  const input = channelIdOrName.trim();
+  if (!input) {
+    throw new Error("Slack channel identifier is required");
+  }
+  if (SLACK_CHANNEL_ID_REGEX.test(input)) {
+    return input.toUpperCase();
+  }
+  const parsed = parseSlackChannelMention(input);
+  const idCandidate = (parsed.id ?? "").trim();
+  if (idCandidate && SLACK_CHANNEL_ID_REGEX.test(idCandidate)) {
+    return idCandidate.toUpperCase();
+  }
+  const nameCandidateRaw = (parsed.name ?? "").trim() || input.replace(/^#/, "").trim();
+  const nameToResolve = nameCandidateRaw.toLowerCase();
+  if (!nameToResolve) {
+    throw new Error(`Invalid Slack channel identifier: "${input}"`);
+  }
+  const channels = await listSlackChannels(client);
+  const match = resolveByName(nameToResolve, channels);
+  if (match) {
+    return match.id;
+  }
+  throw new Error(`Slack channel not found or bot not a member: "${nameToResolve}"`);
+}
+
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
@@ -94,6 +132,7 @@ async function uploadSlackFile(params: {
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
+  title?: string;
 }): Promise<string> {
   const {
     buffer,
@@ -104,6 +143,7 @@ async function uploadSlackFile(params: {
     channel_id: params.channelId,
     file: buffer,
     filename: fileName,
+    title: params.title || fileName,
     ...(params.caption ? { initial_comment: params.caption } : {}),
     // Note: filetype is deprecated in files.uploadV2, Slack auto-detects from file content
   };
@@ -112,16 +152,10 @@ async function uploadSlackFile(params: {
     : basePayload;
   const response = await params.client.files.uploadV2(payload);
   const parsed = response as {
-    files?: Array<{ id?: string; name?: string }>;
     file?: { id?: string; name?: string };
   };
-  const fileId =
-    parsed.files?.[0]?.id ??
-    parsed.file?.id ??
-    parsed.files?.[0]?.name ??
-    parsed.file?.name ??
-    "unknown";
-  return fileId;
+  const fileObj = parsed.file;
+  return fileObj?.id ?? fileObj?.name ?? "unknown";
 }
 
 export async function sendMessageSlack(
@@ -180,6 +214,7 @@ export async function sendMessageSlack(
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
+      title: opts.title,
     });
     for (const chunk of rest) {
       const response = await client.chat.postMessage({
