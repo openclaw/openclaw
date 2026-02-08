@@ -271,7 +271,7 @@ export async function refreshRemoteNodeBins(params: {
   const workspaceDirs = listWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg, cwd: workspaceDir });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }

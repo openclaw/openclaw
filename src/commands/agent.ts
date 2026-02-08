@@ -195,6 +195,7 @@ export async function agentCommand(
           eligibility: { remote: getRemoteSkillEligibility() },
           snapshotVersion: skillsSnapshotVersion,
           skillFilter,
+          cwd: process.cwd(),
         })
       : sessionEntry?.skillsSnapshot;
 

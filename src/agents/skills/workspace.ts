@@ -96,12 +96,38 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
   return fallback;
 }
 
+function loadProjectSkillsIfExists(
+  loadSkills: (params: { dir: string; source: string }) => Skill[],
+  projectDir: string,
+  convention: ".claude" | ".agents",
+): Skill[] {
+  const skillsDir = path.join(projectDir, convention, "skills");
+  if (!fs.existsSync(skillsDir)) {
+    return [];
+  }
+  return loadSkills({
+    dir: skillsDir,
+    source: `project-${convention.slice(1)}`,
+  });
+}
+
+function mergeSkillsByPrecedence(skillSets: Skill[][]): Map<string, Skill> {
+  const merged = new Map<string, Skill>();
+  for (const skills of skillSets) {
+    for (const skill of skills) {
+      merged.set(skill.name, skill);
+    }
+  }
+  return merged;
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    cwd?: string;
   },
 ): SkillEntry[] {
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
@@ -133,6 +159,8 @@ function loadSkillEntries(
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
+  const projectSkillsDir = opts?.cwd ?? workspaceDir;
+
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
         dir: bundledSkillsDir,
@@ -154,21 +182,17 @@ function loadSkillEntries(
     dir: workspaceSkillsDir,
     source: "openclaw-workspace",
   });
+  const projectClaudeSkills = loadProjectSkillsIfExists(loadSkills, projectSkillsDir, ".claude");
+  const projectAgentsSkills = loadProjectSkillsIfExists(loadSkills, projectSkillsDir, ".agents");
 
-  const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < workspace
-  for (const skill of extraSkills) {
-    merged.set(skill.name, skill);
-  }
-  for (const skill of bundledSkills) {
-    merged.set(skill.name, skill);
-  }
-  for (const skill of managedSkills) {
-    merged.set(skill.name, skill);
-  }
-  for (const skill of workspaceSkills) {
-    merged.set(skill.name, skill);
-  }
+  const merged = mergeSkillsByPrecedence([
+    extraSkills,
+    bundledSkills,
+    managedSkills,
+    projectAgentsSkills,
+    projectClaudeSkills,
+    workspaceSkills,
+  ]);
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
     let frontmatter: ParsedSkillFrontmatter = {};
@@ -195,10 +219,10 @@ export function buildWorkspaceSkillSnapshot(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
     snapshotVersion?: number;
+    cwd?: string;
   },
 ): SkillSnapshot {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
@@ -232,9 +256,9 @@ export function buildWorkspaceSkillsPrompt(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
+    cwd?: string;
   },
 ): string {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
@@ -279,6 +303,7 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    cwd?: string;
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);
@@ -341,6 +366,7 @@ export function buildWorkspaceSkillCommandSpecs(
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
     reservedNames?: Set<string>;
+    cwd?: string;
   },
 ): SkillCommandSpec[] {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
