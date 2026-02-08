@@ -15,6 +15,7 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { hasTemplateVariables } from "./response-prefix-template.js";
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -71,8 +72,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : cfg.messages?.responsePrefix === "auto"
       ? undefined
       : cfg.messages?.responsePrefix;
+  // Skip prefix when it contains unresolvable template variables (e.g. {model})
+  // to avoid displaying raw template text in the message.
+  const effectivePrefix = hasTemplateVariables(responsePrefix) ? undefined : responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
-    responsePrefix,
+    responsePrefix: effectivePrefix,
   });
   if (!normalized) {
     return { ok: true };
