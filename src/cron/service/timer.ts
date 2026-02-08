@@ -50,6 +50,7 @@ function applyJobResult(
     error?: string;
     startedAt: number;
     endedAt: number;
+    forced?: boolean;
   },
 ): boolean {
   job.state.runningAtMs = undefined;
@@ -104,11 +105,14 @@ function applyJobResult(
         },
         "cron: applying error backoff",
       );
-    } else if (job.enabled) {
+    } else if (job.enabled && !result.forced) {
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, result.endedAt);
-    } else {
+    } else if (!job.enabled) {
       job.state.nextRunAtMs = undefined;
     }
+    // When result.forced is true and job is enabled, preserve the existing
+    // nextRunAtMs so the cron schedule grid stays aligned.  Force-runs are
+    // out-of-band and should not shift the regular cadence.
   }
 
   return shouldDelete;
@@ -452,7 +456,7 @@ export async function executeJob(
   state: CronServiceState,
   job: CronJob,
   _nowMs: number,
-  _opts: { forced: boolean },
+  opts: { forced: boolean },
 ) {
   if (!job.state) {
     job.state = {};
@@ -481,6 +485,7 @@ export async function executeJob(
     error: coreResult.error,
     startedAt,
     endedAt,
+    forced: opts.forced,
   });
 
   emit(state, {
