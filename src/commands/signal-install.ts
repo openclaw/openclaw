@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { RuntimeEnv } from "../runtime.js";
+import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR } from "../utils.js";
 
@@ -22,6 +23,77 @@ type ReleaseResponse = {
   tag_name?: string;
   assets?: ReleaseAsset[];
 };
+
+const WINDOWS_ARCHIVE_PREFIX = /^[a-zA-Z]:[\\/]/;
+
+const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
+
+function normalizeArchiveEntryPath(entryPath: string): string {
+  return entryPath.replaceAll("\\", "/");
+}
+
+function isArchiveEntryPathSafe(targetDir: string, entryPath: string): boolean {
+  const normalized = normalizeArchiveEntryPath(entryPath);
+  if (!normalized || normalized === ".") {
+    return true;
+  }
+  if (normalized.includes("\u0000")) {
+    return false;
+  }
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("//") ||
+    WINDOWS_ARCHIVE_PREFIX.test(normalized)
+  ) {
+    return false;
+  }
+  const rootResolved = path.resolve(targetDir);
+  const rootWithSep = ensureTrailingSep(rootResolved);
+  const resolved = path.resolve(rootResolved, normalized);
+  return resolved === rootResolved || resolved.startsWith(rootWithSep);
+}
+
+async function validateArchiveEntries(params: {
+  archivePath: string;
+  archiveType: "zip" | "tar";
+  targetDir: string;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const { archivePath, archiveType, targetDir, timeoutMs } = params;
+  if (archiveType === "zip") {
+    const listing = await runCommandWithTimeout(["unzip", "-Z", "-1", archivePath], { timeoutMs });
+    if (listing.code !== 0) {
+      const detail = listing.stderr.trim() || listing.stdout.trim();
+      return detail ? `failed to inspect archive: ${detail}` : "failed to inspect archive";
+    }
+    const entries = listing.stdout
+      .split("\n")
+      .map((line) => line.replace(/\r$/, ""))
+      .filter((line) => line.length > 0);
+    for (const entry of entries) {
+      if (!isArchiveEntryPathSafe(targetDir, entry)) {
+        return `archive entry escapes target dir: ${entry}`;
+      }
+    }
+    return null;
+  }
+
+  const listing = await runCommandWithTimeout(["tar", "-tf", archivePath], { timeoutMs });
+  if (listing.code !== 0) {
+    const detail = listing.stderr.trim() || listing.stdout.trim();
+    return detail ? `failed to inspect archive: ${detail}` : "failed to inspect archive";
+  }
+  const entries = listing.stdout
+    .split("\n")
+    .map((line) => line.replace(/\r$/, ""))
+    .filter((line) => line.length > 0);
+  for (const entry of entries) {
+    if (!isArchiveEntryPathSafe(targetDir, entry)) {
+      return `archive entry escapes target dir: ${entry}`;
+    }
+  }
+  return null;
+}
 
 export type SignalInstallResult = {
   ok: boolean;
@@ -157,10 +229,34 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   await fs.mkdir(installRoot, { recursive: true });
 
   if (assetName.endsWith(".zip")) {
+    if (!hasBinary("unzip")) {
+      return { ok: false, error: "unzip not found on PATH" };
+    }
+    const validationError = await validateArchiveEntries({
+      archivePath,
+      archiveType: "zip",
+      targetDir: installRoot,
+      timeoutMs: 60_000,
+    });
+    if (validationError) {
+      return { ok: false, error: validationError };
+    }
     await runCommandWithTimeout(["unzip", "-q", archivePath, "-d", installRoot], {
       timeoutMs: 60_000,
     });
   } else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tgz")) {
+    if (!hasBinary("tar")) {
+      return { ok: false, error: "tar not found on PATH" };
+    }
+    const validationError = await validateArchiveEntries({
+      archivePath,
+      archiveType: "tar",
+      targetDir: installRoot,
+      timeoutMs: 60_000,
+    });
+    if (validationError) {
+      return { ok: false, error: validationError };
+    }
     await runCommandWithTimeout(["tar", "-xzf", archivePath, "-C", installRoot], {
       timeoutMs: 60_000,
     });

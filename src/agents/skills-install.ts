@@ -252,6 +252,101 @@ async function downloadFile(
   }
 }
 
+const WINDOWS_ARCHIVE_PREFIX = /^[a-zA-Z]:[\\/]/;
+
+const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
+
+function normalizeArchiveEntryPath(entryPath: string): string {
+  return entryPath.replaceAll("\\", "/");
+}
+
+function stripArchiveEntryPath(entryPath: string, stripComponents?: number): string {
+  if (!stripComponents || stripComponents <= 0) {
+    return entryPath;
+  }
+  const parts = entryPath.split("/").filter((part) => part.length > 0);
+  return parts.slice(stripComponents).join("/");
+}
+
+function isArchiveEntryPathSafe(params: {
+  targetDir: string;
+  entryPath: string;
+  stripComponents?: number;
+}): boolean {
+  const normalized = normalizeArchiveEntryPath(params.entryPath);
+  if (!normalized || normalized === ".") {
+    return true;
+  }
+  if (normalized.includes("\u0000")) {
+    return false;
+  }
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("//") ||
+    WINDOWS_ARCHIVE_PREFIX.test(normalized)
+  ) {
+    return false;
+  }
+  const stripped = stripArchiveEntryPath(normalized, params.stripComponents);
+  if (!stripped || stripped === ".") {
+    return true;
+  }
+  if (
+    stripped.startsWith("/") ||
+    stripped.startsWith("//") ||
+    WINDOWS_ARCHIVE_PREFIX.test(stripped)
+  ) {
+    return false;
+  }
+  const rootResolved = path.resolve(params.targetDir);
+  const rootWithSep = ensureTrailingSep(rootResolved);
+  const resolved = path.resolve(rootResolved, stripped);
+  return resolved === rootResolved || resolved.startsWith(rootWithSep);
+}
+
+async function validateArchiveEntries(params: {
+  archivePath: string;
+  archiveType: string;
+  targetDir: string;
+  stripComponents?: number;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+  if (archiveType === "zip") {
+    const listing = await runCommandWithTimeout(["unzip", "-Z", "-1", archivePath], { timeoutMs });
+    if (listing.code !== 0) {
+      const detail = listing.stderr.trim() || listing.stdout.trim();
+      return detail ? `failed to inspect archive: ${detail}` : "failed to inspect archive";
+    }
+    const entries = listing.stdout
+      .split("\n")
+      .map((line) => line.replace(/\r$/, ""))
+      .filter((line) => line.length > 0);
+    for (const entry of entries) {
+      if (!isArchiveEntryPathSafe({ targetDir, entryPath: entry, stripComponents: undefined })) {
+        return `archive entry escapes target dir: ${entry}`;
+      }
+    }
+    return null;
+  }
+
+  const listing = await runCommandWithTimeout(["tar", "-tf", archivePath], { timeoutMs });
+  if (listing.code !== 0) {
+    const detail = listing.stderr.trim() || listing.stdout.trim();
+    return detail ? `failed to inspect archive: ${detail}` : "failed to inspect archive";
+  }
+  const entries = listing.stdout
+    .split("\n")
+    .map((line) => line.replace(/\r$/, ""))
+    .filter((line) => line.length > 0);
+  for (const entry of entries) {
+    if (!isArchiveEntryPathSafe({ targetDir, entryPath: entry, stripComponents })) {
+      return `archive entry escapes target dir: ${entry}`;
+    }
+  }
+  return null;
+}
+
 async function extractArchive(params: {
   archivePath: string;
   archiveType: string;
@@ -260,9 +355,23 @@ async function extractArchive(params: {
   timeoutMs: number;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
   const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+  const normalizedStrip =
+    typeof stripComponents === "number" && Number.isFinite(stripComponents)
+      ? Math.max(0, Math.floor(stripComponents))
+      : undefined;
   if (archiveType === "zip") {
     if (!hasBinary("unzip")) {
       return { stdout: "", stderr: "unzip not found on PATH", code: null };
+    }
+    const validationError = await validateArchiveEntries({
+      archivePath,
+      archiveType,
+      targetDir,
+      stripComponents: undefined,
+      timeoutMs,
+    });
+    if (validationError) {
+      return { stdout: "", stderr: validationError, code: 1 };
     }
     const argv = ["unzip", "-q", archivePath, "-d", targetDir];
     return await runCommandWithTimeout(argv, { timeoutMs });
@@ -271,9 +380,19 @@ async function extractArchive(params: {
   if (!hasBinary("tar")) {
     return { stdout: "", stderr: "tar not found on PATH", code: null };
   }
+  const validationError = await validateArchiveEntries({
+    archivePath,
+    archiveType,
+    targetDir,
+    stripComponents: normalizedStrip,
+    timeoutMs,
+  });
+  if (validationError) {
+    return { stdout: "", stderr: validationError, code: 1 };
+  }
   const argv = ["tar", "xf", archivePath, "-C", targetDir];
-  if (typeof stripComponents === "number" && Number.isFinite(stripComponents)) {
-    argv.push("--strip-components", String(Math.max(0, Math.floor(stripComponents))));
+  if (typeof normalizedStrip === "number") {
+    argv.push("--strip-components", String(normalizedStrip));
   }
   return await runCommandWithTimeout(argv, { timeoutMs });
 }
