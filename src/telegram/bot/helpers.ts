@@ -226,8 +226,11 @@ export type TelegramReplyTarget = {
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
-  const externalReply = msg.external_reply;
-  const quoteText = msg.quote?.text ?? reply?.quote?.text ?? externalReply?.quote?.text;
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const quoteText =
+    msg.quote?.text ??
+    (reply as Message & { quote?: { text?: string } } | undefined)?.quote?.text ??
+    (externalReply as Message & { quote?: { text?: string } } | undefined)?.quote?.text;
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
 
