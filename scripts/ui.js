@@ -51,12 +51,19 @@ function resolveRunner() {
 }
 
 function run(cmd, args) {
-  const child = spawn(cmd, args, {
-    cwd: uiDir,
-    stdio: "inherit",
-    env: process.env,
-    shell: process.platform === "win32",
-  });
+  const isWin = process.platform === "win32";
+  const child = isWin
+    ? spawn(`"${cmd}" ${args.join(" ")}`, {
+        cwd: uiDir,
+        stdio: "inherit",
+        env: process.env,
+        shell: true,
+      })
+    : spawn(cmd, args, {
+        cwd: uiDir,
+        stdio: "inherit",
+        env: process.env,
+      });
   child.on("exit", (code, signal) => {
     if (signal) {
       process.exit(1);
@@ -66,12 +73,19 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
-  const result = spawnSync(cmd, args, {
-    cwd: uiDir,
-    stdio: "inherit",
-    env: envOverride ?? process.env,
-    shell: process.platform === "win32",
-  });
+  const isWin = process.platform === "win32";
+  const result = isWin
+    ? spawnSync(`"${cmd}" ${args.join(" ")}`, {
+        cwd: uiDir,
+        stdio: "inherit",
+        env: envOverride ?? process.env,
+        shell: true,
+      })
+    : spawnSync(cmd, args, {
+        cwd: uiDir,
+        stdio: "inherit",
+        env: envOverride ?? process.env,
+      });
   if (result.signal) {
     process.exit(1);
   }
