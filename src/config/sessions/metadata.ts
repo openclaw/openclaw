@@ -4,6 +4,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { extractThreadIdFromSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 
@@ -135,6 +136,10 @@ export function deriveGroupSessionPatch(params: {
     patch.space = space;
   }
 
+  const topicId =
+    extractThreadIdFromSessionKey(params.sessionKey) ??
+    (params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId) : null);
+
   const displayName = buildGroupDisplayName({
     provider: channel,
     subject: nextSubject ?? params.existing?.subject,
@@ -142,6 +147,7 @@ export function deriveGroupSessionPatch(params: {
     space: space ?? params.existing?.space,
     id: resolution.id,
     key: params.sessionKey,
+    topicId,
   });
   if (displayName) {
     patch.displayName = displayName;

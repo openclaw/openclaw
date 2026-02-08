@@ -15,7 +15,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { extractThreadIdFromSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -317,11 +317,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.threadId === "string" && request.threadId.trim()
         ? request.threadId.trim()
         : undefined;
+    // Extract threadId from sessionKey if not explicitly provided
+    const sessionKeyThreadId = extractThreadIdFromSessionKey(requestedSessionKey) ?? undefined;
+    const finalExplicitThreadId = explicitThreadId ?? sessionKeyThreadId;
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
       requestedChannel: request.replyChannel ?? request.channel,
       explicitTo,
-      explicitThreadId,
+      explicitThreadId: finalExplicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
       wantsDelivery,
     });

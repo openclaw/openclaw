@@ -221,8 +221,13 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  // Use "dm" scope by default: it passes through all thread IDs unchanged.
+  // "forum" scope would filter out id=1 (General topic), which is correct for
+  // supergroups but breaks DM topics. The delivery layer (bot-message-context)
+  // already resolves the correct scope for agent replies; this path is used by
+  // the message tool and direct sends where we lack chat-type context.
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: "dm" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
   const quoteText = opts.quoteText?.trim();
@@ -697,7 +702,7 @@ export async function sendStickerTelegram(
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: "dm" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {

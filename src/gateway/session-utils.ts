@@ -25,11 +25,17 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import {
+  extractThreadIdFromSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  resolveThreadParentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../utils/delivery-context.js";
 import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
@@ -187,7 +193,28 @@ export function loadSessionEntry(sessionKey: string) {
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
+  let entry = store[canonicalKey];
+
+  // Thread session fallback: if entry not found and key contains :thread: or :topic:,
+  // load parent session and inject threadId into deliveryContext
+  if (!entry) {
+    const threadId = extractThreadIdFromSessionKey(canonicalKey);
+    const parentKey = resolveThreadParentSessionKey(canonicalKey);
+    if (threadId && parentKey) {
+      const baseEntry = store[parentKey];
+      if (baseEntry) {
+        // Create derived entry with threadId injected
+        const baseContext = deliveryContextFromSession(baseEntry);
+        const mergedContext = mergeDeliveryContext({ ...baseContext, threadId }, baseContext);
+        entry = {
+          ...baseEntry,
+          deliveryContext: mergedContext,
+          lastThreadId: threadId,
+        };
+      }
+    }
+  }
+
   return { cfg, storePath, store, entry, canonicalKey };
 }
 
@@ -623,6 +650,10 @@ export function listSessionsFromStore(params: {
       const id = parsed?.id;
       const origin = entry?.origin;
       const originLabel = origin?.label;
+      const topicId =
+        extractThreadIdFromSessionKey(key) ??
+        (entry?.lastThreadId != null ? String(entry.lastThreadId) : null) ??
+        (origin?.threadId != null ? String(origin.threadId) : null);
       const displayName =
         entry?.displayName ??
         (channel
@@ -633,6 +664,7 @@ export function listSessionsFromStore(params: {
               space,
               id,
               key,
+              topicId,
             })
           : undefined) ??
         entry?.label ??

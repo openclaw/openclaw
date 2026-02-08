@@ -32,6 +32,7 @@ export function buildGroupDisplayName(params: {
   space?: string;
   id?: string;
   key: string;
+  topicId?: string | null;
 }) {
   const providerKey = (params.provider?.trim().toLowerCase() || "group").trim();
   const groupChannel = params.groupChannel?.trim();
@@ -53,7 +54,14 @@ export function buildGroupDisplayName(params: {
   if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {
     token = `g-${token}`;
   }
-  return token ? `${providerKey}:${token}` : providerKey;
+  const baseDisplayName = token ? `${providerKey}:${token}` : providerKey;
+
+  // Append topic ID if present
+  if (params.topicId) {
+    return `${baseDisplayName} (Topic: ${params.topicId})`;
+  }
+
+  return baseDisplayName;
 }
 
 export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {

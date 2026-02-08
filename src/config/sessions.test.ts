@@ -63,6 +63,29 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
+  it("includes topic ID in display name when present", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "telegram",
+        subject: "My Group",
+        id: "123456",
+        key: "telegram:group:123456:topic:7",
+        topicId: "7",
+      }),
+    ).toBe("telegram:g-my-group (Topic: 7)");
+  });
+
+  it("builds display name without topic ID when not provided", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "telegram",
+        subject: "My Group",
+        id: "123456",
+        key: "telegram:group:123456",
+      }),
+    ).toBe("telegram:g-my-group");
+  });
+
   it("collapses direct chats to main by default", () => {
     expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe("agent:main:main");
   });
