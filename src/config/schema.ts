@@ -200,6 +200,9 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "gateway.auth.injectTokenFromHeader": "Reverse Proxy Token Injection",
+  "gateway.auth.injectTokenFromHeader.enabled": "Enable Token Injection from Header",
+  "gateway.auth.injectTokenFromHeader.headerName": "Token Header Name",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
@@ -418,6 +421,12 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "gateway.auth.injectTokenFromHeader":
+    "Server-side token injection for reverse proxy (SSO) deployments. Reads the gateway token from an HTTP header and injects it into Control UI HTML.",
+  "gateway.auth.injectTokenFromHeader.enabled":
+    "Enable reading the gateway token from a reverse proxy header and injecting it into the Control UI HTML (default: false).",
+  "gateway.auth.injectTokenFromHeader.headerName":
+    'HTTP header name to read the token from (case-insensitive, default: "x-openclaw-token").',
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":

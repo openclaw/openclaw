@@ -87,6 +87,26 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /**
+   * Server-side token injection for reverse proxy deployments.
+   * When enabled, the gateway reads the auth token from the specified HTTP
+   * request header and injects it into the Control UI HTML response, so
+   * browsers behind the proxy are automatically authenticated.
+   *
+   * Example: oauth2-proxy sets `--pass-header=X-OpenClaw-Token` after SSO login,
+   * and the gateway auto-populates the browser's localStorage with the token.
+   */
+  injectTokenFromHeader?: GatewayTokenInjectionConfig;
+};
+
+export type GatewayTokenInjectionConfig = {
+  /** Enable server-side token injection from HTTP header (default: false). */
+  enabled?: boolean;
+  /**
+   * HTTP header name to read the token from (case-insensitive).
+   * Default: "x-openclaw-token".
+   */
+  headerName?: string;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
