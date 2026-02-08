@@ -166,24 +166,27 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
-    const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    const shouldLoadSkillEntries =
+      sandbox?.enabled === true || !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
+    restoreSkillEnv = shouldLoadSkillEntries
+      ? applySkillEnvOverrides({
+          skills: skillEntries ?? [],
           config: params.config,
         })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
+      : applySkillEnvOverridesFromSnapshot({
+          snapshot: params.skillsSnapshot,
           config: params.config,
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: sandbox?.enabled ? undefined : params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
+      // Note: tools enforce sandbox paths against the host-side sandbox workspace root,
+      // so skill <location> should stay within that host path (not the container mount path).
       workspaceDir: effectiveWorkspace,
     });
 
