@@ -2,6 +2,42 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async () => ({})),
+  browserCookies: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    cookies: [
+      {
+        name: "SID",
+        value: "abc123",
+        domain: ".google.com",
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax",
+      },
+      {
+        name: "HSID",
+        value: "def456",
+        domain: ".google.com",
+        path: "/",
+        expires: -1,
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+      },
+      {
+        name: "other",
+        value: "xyz",
+        domain: ".example.com",
+        path: "/",
+        expires: -1,
+        httpOnly: false,
+        secure: false,
+        sameSite: "Lax",
+      },
+    ],
+  })),
   browserFocusTab: vi.fn(async () => ({})),
   browserOpenTab: vi.fn(async () => ({})),
   browserProfiles: vi.fn(async () => []),
@@ -242,6 +278,124 @@ describe("browser tool snapshot maxChars", () => {
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser tool cookies action", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("retrieves all cookies without domain filter", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "cookies" });
+
+    expect(browserClientMocks.browserCookies).toHaveBeenCalledWith(undefined, {
+      targetId: undefined,
+      domain: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("passes domain filter to browserCookies", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "cookies", domain: "google" });
+
+    expect(browserClientMocks.browserCookies).toHaveBeenCalledWith(undefined, {
+      targetId: undefined,
+      domain: "google",
+      profile: undefined,
+    });
+  });
+
+  it("passes profile parameter", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "cookies", profile: "chrome" });
+
+    expect(browserClientMocks.browserCookies).toHaveBeenCalledWith(undefined, {
+      targetId: undefined,
+      domain: undefined,
+      profile: "chrome",
+    });
+  });
+
+  it("routes to node proxy when target=node", async () => {
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        result: {
+          ok: true,
+          targetId: "t1",
+          cookies: [{ name: "test", value: "123", domain: ".test.com" }],
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "cookies", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 20000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/cookies",
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserCookies).not.toHaveBeenCalled();
+  });
+
+  it("filters cookies by domain when using node proxy", async () => {
+    nodesUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        displayName: "Browser Node",
+        connected: true,
+        caps: ["browser"],
+        commands: ["browser.proxy"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        result: {
+          ok: true,
+          targetId: "t1",
+          cookies: [
+            { name: "SID", value: "abc", domain: ".google.com" },
+            { name: "other", value: "xyz", domain: ".example.com" },
+          ],
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.(null, {
+      action: "cookies",
+      target: "node",
+      domain: "google",
+    });
+
+    // Verify proxy was called
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalled();
+    // Verify result contains filtered cookies (only google.com, not example.com)
+    expect(result?.content?.[0]).toMatchObject({ type: "text" });
+    const text = (result?.content?.[0] as { type: string; text: string })?.text ?? "";
+    expect(text).toContain(".google.com");
+    expect(text).not.toContain(".example.com");
   });
 });
 

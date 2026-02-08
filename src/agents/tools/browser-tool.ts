@@ -10,6 +10,7 @@ import {
 } from "../../browser/client-actions.js";
 import {
   browserCloseTab,
+  browserCookies,
   browserFocusTab,
   browserOpenTab,
   browserProfiles,
@@ -251,10 +252,11 @@ export function createBrowserTool(opts?: {
         throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !requestedNode && profile === "chrome") {
-        // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
-        target = "host";
-      }
+      // Note: Chrome extension relay (profile="chrome") can work via either:
+      // 1. Local host browser control (if available and relay is running)
+      // 2. Node Host browser proxy (if a browser-capable node is connected)
+      // Let resolveBrowserNodeTarget() decide based on gateway.nodes.browser.mode config.
+      // In Docker/headless environments, Node Host routing is typically preferred.
 
       const nodeTarget = await resolveBrowserNodeTarget({
         requestedNode: requestedNode ?? undefined,
@@ -715,6 +717,39 @@ export function createBrowserTool(opts?: {
             }
             throw err;
           }
+        }
+        case "cookies": {
+          const targetId = readStringParam(params, "targetId");
+          const domain = readStringParam(params, "domain");
+          if (proxyRequest) {
+            const result = (await proxyRequest({
+              method: "GET",
+              path: "/cookies",
+              profile,
+              query: {
+                targetId,
+              },
+            })) as { ok: boolean; targetId: string; cookies: unknown[] };
+            // Server endpoint doesn't support domain filtering, so filter client-side
+            if (domain && Array.isArray(result.cookies)) {
+              const domainFilter = domain.toLowerCase();
+              result.cookies = result.cookies.filter((c) => {
+                const cookieDomain =
+                  typeof c === "object" && c && "domain" in c
+                    ? String((c as { domain: unknown }).domain).toLowerCase()
+                    : "";
+                return cookieDomain.includes(domainFilter);
+              });
+            }
+            return jsonResult(result);
+          }
+          return jsonResult(
+            await browserCookies(baseUrl, {
+              targetId: targetId ?? undefined,
+              domain: domain ?? undefined,
+              profile,
+            }),
+          );
         }
         default:
           throw new Error(`Unknown action: ${action}`);
