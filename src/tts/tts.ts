@@ -513,20 +513,57 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 }
 
 /**
- * Formats a TTS provider error message, handling cases where error.message
- * may be undefined or empty.
+ * Formats a TTS provider error message, handling cases where the thrown value
+ * may not be an Error instance (e.g., string, object) or error.message is undefined.
  */
-export function formatTtsError(provider: string, error: Error): string {
-  if (error.name === "AbortError") {
-    return `${provider}: request timed out`;
+export function formatTtsError(provider: string, error: unknown): string {
+  // Handle string throws directly
+  if (typeof error === "string") {
+    return `${provider}: ${error.trim() || "unknown error"}`;
   }
-  const message = error.message?.trim();
-  if (message) {
-    return `${provider}: ${message}`;
+
+  // Handle Error instances
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return `${provider}: request timed out`;
+    }
+    const message = error.message?.trim();
+    if (message) {
+      return `${provider}: ${message}`;
+    }
+    // Fallback to error name when message is unavailable
+    if (error.name && error.name !== "Error") {
+      return `${provider}: ${error.name}`;
+    }
   }
-  // Fallback to error name or string representation when message is unavailable
-  const fallback = error.name || String(error) || "unknown error";
-  return `${provider}: ${fallback}`;
+
+  // Handle plain objects - try to extract useful info
+  if (error !== null && typeof error === "object") {
+    // Check for common error-like properties
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.message === "string" && obj.message.trim()) {
+      return `${provider}: ${obj.message.trim()}`;
+    }
+    if (typeof obj.error === "string" && obj.error.trim()) {
+      return `${provider}: ${obj.error.trim()}`;
+    }
+    // Try JSON for objects with meaningful content
+    try {
+      const json = JSON.stringify(error);
+      if (json !== "{}" && json.length < 200) {
+        return `${provider}: ${json}`;
+      }
+    } catch {
+      // JSON.stringify failed, fall through
+    }
+  }
+
+  // Last resort fallback
+  const str = String(error);
+  if (str && str !== "[object Object]") {
+    return `${provider}: ${str}`;
+  }
+  return `${provider}: unknown error`;
 }
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
@@ -700,7 +737,7 @@ export async function textToSpeech(params: {
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
-      lastError = formatTtsError(provider, err as Error);
+      lastError = formatTtsError(provider, err);
     }
   }
 
@@ -789,7 +826,7 @@ export async function textToSpeechTelephony(params: {
         sampleRate: output.sampleRate,
       };
     } catch (err) {
-      lastError = formatTtsError(provider, err as Error);
+      lastError = formatTtsError(provider, err);
     }
   }
 
