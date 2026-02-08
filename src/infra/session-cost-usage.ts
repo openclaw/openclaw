@@ -63,10 +63,17 @@ export type CostUsageDailyEntry = CostUsageTotals & {
   date: string;
 };
 
+export type ModelUsageEntry = CostUsageTotals & {
+  model: string;
+  provider?: string;
+  sessionCount: number;
+};
+
 export type CostUsageSummary = {
   updatedAt: number;
   days: number;
   daily: CostUsageDailyEntry[];
+  models: ModelUsageEntry[];
   totals: CostUsageTotals;
 };
 
@@ -391,6 +398,10 @@ export async function loadCostUsageSummary(params?: {
   }
 
   const dailyMap = new Map<string, CostUsageTotals>();
+  const modelMap = new Map<
+    string,
+    CostUsageTotals & { sessionFiles: Set<string>; provider?: string }
+  >();
   const totals = emptyTotals();
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
@@ -401,14 +412,6 @@ export async function loadCostUsageSummary(params?: {
         .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
-          const stats = await fs.promises.stat(filePath).catch(() => null);
-          if (!stats) {
-            return null;
-          }
-          // Include file if it was modified after our start time
-          if (stats.mtimeMs < sinceTime) {
-            return null;
-          }
           return filePath;
         }),
     )
@@ -423,6 +426,8 @@ export async function loadCostUsageSummary(params?: {
         if (!ts || ts < sinceTime || ts > untilTime) {
           return;
         }
+
+        // Aggregate daily
         const dayKey = formatDayKey(entry.timestamp ?? now);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
         applyUsageTotals(bucket, entry.usage);
@@ -433,6 +438,24 @@ export async function loadCostUsageSummary(params?: {
         }
         dailyMap.set(dayKey, bucket);
 
+        // Aggregate by model
+        const modelKey = entry.model || "unknown";
+        const modelBucket =
+          modelMap.get(modelKey) ??
+          Object.assign(emptyTotals(), {
+            sessionFiles: new Set<string>(),
+            provider: entry.provider,
+          });
+        applyUsageTotals(modelBucket, entry.usage);
+        if (entry.costBreakdown?.total !== undefined) {
+          applyCostBreakdown(modelBucket, entry.costBreakdown);
+        } else {
+          applyCostTotal(modelBucket, entry.costTotal);
+        }
+        modelBucket.sessionFiles.add(filePath);
+        modelMap.set(modelKey, modelBucket);
+
+        // Aggregate totals
         applyUsageTotals(totals, entry.usage);
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(totals, entry.costBreakdown);
@@ -447,6 +470,13 @@ export async function loadCostUsageSummary(params?: {
     .map(([date, bucket]) => Object.assign({ date }, bucket))
     .toSorted((a, b) => a.date.localeCompare(b.date));
 
+  const models = Array.from(modelMap.entries())
+    .map(([model, bucket]) => {
+      const { sessionFiles, ...rest } = bucket;
+      return Object.assign({ model, sessionCount: sessionFiles.size }, rest);
+    })
+    .toSorted((a, b) => b.totalTokens - a.totalTokens);
+
   // Calculate days for backwards compatibility in response
   const days = Math.ceil((untilTime - sinceTime) / (24 * 60 * 60 * 1000)) + 1;
 
@@ -454,6 +484,7 @@ export async function loadCostUsageSummary(params?: {
     updatedAt: Date.now(),
     days,
     daily,
+    models,
     totals,
   };
 }

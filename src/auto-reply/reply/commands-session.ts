@@ -235,6 +235,138 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
+export const handleTotalUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/total_usage" && !normalized.startsWith("/total_usage ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /total_usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const args =
+    normalized === "/total_usage"
+      ? []
+      : normalized.slice("/total_usage".length).trim().split(/\s+/);
+
+  // Interactive Selector with Buttons
+  if (args.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "📊 *请选择用量统计范围* \n━━━━━━━━━━━━━━\n查看所有会话的 Token 消耗与费用汇总：",
+        channelData: {
+          telegram: {
+            buttons: [
+              [
+                { text: "⚡️ 最近 5 小时", callback_data: "/total_usage 5h" },
+                { text: "🕒 最近 24 小时", callback_data: "/total_usage 24h" },
+              ],
+              [
+                { text: "📅 最近 7 天", callback_data: "/total_usage 7d" },
+                { text: "📅 最近 30 天", callback_data: "/total_usage 30d" },
+              ],
+              [
+                { text: "🤖 按模型统计 (30d)", callback_data: "/total_usage by-model" },
+                { text: "🌐 所有时间 (365d)", callback_data: "/total_usage all" },
+              ],
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  // Parse arguments
+  let rangeStr = args[0];
+  let isByModel = args.includes("by-model") || args.includes("model");
+
+  if (rangeStr === "by-model" || rangeStr === "model") {
+    rangeStr = "30d";
+    isByModel = true;
+  }
+
+  let durationMs = 30 * 24 * 60 * 60 * 1000; // Default 30 days
+  let label = "最近 30 天";
+
+  if (rangeStr === "all") {
+    durationMs = 365 * 24 * 60 * 60 * 1000;
+    label = "所有时间";
+  } else {
+    const match = rangeStr.match(/^(\d+)([hd])?$/i);
+    if (match) {
+      const val = parseInt(match[1], 10);
+      const unit = (match[2] || "d").toLowerCase();
+      if (unit === "h") {
+        durationMs = val * 60 * 60 * 1000;
+        label = `最近 ${val} 小时`;
+      } else {
+        durationMs = val * 24 * 60 * 60 * 1000;
+        label = `最近 ${val} 天`;
+      }
+    }
+  }
+
+  const startMs = Date.now() - durationMs;
+  const summary = await loadCostUsageSummary({ startMs, endMs: Date.now(), config: params.cfg });
+
+  if (isByModel) {
+    // Model breakdown message
+    const modelLines = summary.models
+      .map((m) => {
+        const cost = formatUsd(m.totalCost);
+        const tokens = formatTokenCount(m.totalTokens);
+        return `🤖 *${m.model}*\n   ├ 消耗: \`${tokens}\` tokens\n   └ 费用: \`${cost}\` (${m.sessionCount} 场会话)`;
+      })
+      .slice(0, 15)
+      .join("\n\n");
+
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `📊 *模型用量细分报告*\n📅 范围：\`${label}\`\n━━━━━━━━━━━━━━\n\n${modelLines || "⚠️ 无调用记录"}\n\n━━━━━━━━━━━━━━\n💰 *总计开销*: \`${formatUsd(summary.totals.totalCost)}\``,
+      },
+    };
+  }
+
+  // Summary message
+  const totalCost = formatUsd(summary.totals.totalCost);
+  const totalTokens = formatTokenCount(summary.totals.totalTokens);
+  const cacheTokens = formatTokenCount(summary.totals.cacheRead);
+  const cacheRate =
+    summary.totals.totalTokens > 0
+      ? ((summary.totals.cacheRead / summary.totals.totalTokens) * 100).toFixed(1)
+      : "0";
+
+  // Calculate alignment for top 5 models
+  const topModels = summary.models.slice(0, 5);
+  const maxModelNameLen = Math.max(...topModels.map((m) => m.model.length), 10);
+
+  const modelDistributionLines = topModels
+    .map((m) => {
+      const percent = ((m.totalTokens / summary.totals.totalTokens) * 100).toFixed(1);
+      const tokens = formatTokenCount(m.totalTokens);
+      // Pad name and counts for tabular alignment
+      const namePart = m.model.padEnd(maxModelNameLen, " ");
+      const tokenPart = tokens.padStart(7, " ");
+      return `• \`${namePart}\`  \`${tokenPart}\` (\`${percent.padStart(5, " ")}%\`)`;
+    })
+    .join("\n");
+
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `📊 *用量统计总览 (${label})*\n━━━━━━━━━━━━━━\n\n💰 *总估算费用*: \`${totalCost}\`\n💎 *总 Token 消耗*: \`${totalTokens}\` \n♻️ *缓存命中*: \`${cacheTokens}\` (\`${cacheRate}%\`)\n\n🤖 *模型用量分布 (Top 5)*:\n${modelDistributionLines || "⚠️ 无记录"}`,
+    },
+  };
+};
+
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
