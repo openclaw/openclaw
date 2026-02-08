@@ -156,12 +156,62 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
   await fs.mkdir(installRoot, { recursive: true });
 
+  // Validate archive entries to prevent path traversal and symlink attacks (CWE-22)
+  try {
+    const isZip = assetName.endsWith(".zip");
+    // Use verbose listing to detect both path traversal and symlinks
+    const listArgv = isZip ? ["unzip", "-Z", archivePath] : ["tar", "tvf", archivePath];
+    const listResult = await runCommandWithTimeout(listArgv, { timeoutMs: 60_000 });
+    if (listResult.code === 0) {
+      const resolvedRoot = path.resolve(installRoot);
+      const lines = listResult.stdout.split("\n").filter(Boolean);
+      for (const line of lines) {
+        // Reject symlinks: they can be used to redirect writes outside target.
+        // Symlink entries start with 'l' in verbose listing (both tar and zipinfo).
+        if (line.startsWith("l")) {
+          if (isZip) {
+            return { ok: false, error: "Archive contains symlinks (potential traversal vector)" };
+          }
+          // For tar, check if symlink target escapes
+          const arrowIdx = line.indexOf(" -> ");
+          if (arrowIdx !== -1) {
+            const target = line.slice(arrowIdx + 4);
+            const resolvedLink = path.resolve(installRoot, target);
+            if (
+              resolvedLink !== resolvedRoot &&
+              !resolvedLink.startsWith(resolvedRoot + path.sep)
+            ) {
+              return { ok: false, error: `Archive symlink escapes target: ${target}` };
+            }
+          }
+        }
+        // For tar, also check entry names for path traversal (no built-in protection)
+        if (!isZip) {
+          const arrowIdx = line.indexOf(" -> ");
+          const namePart = arrowIdx !== -1 ? line.slice(0, arrowIdx) : line;
+          const entryName = namePart.split(/\s+/).at(-1) ?? "";
+          if (entryName) {
+            const normalized = entryName.replaceAll("\\", "/");
+            const resolved = path.resolve(installRoot, normalized);
+            if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+              return { ok: false, error: `Archive entry escapes target directory: ${entryName}` };
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // If listing fails (e.g. tool not available), let extraction proceed
+  }
+
   if (assetName.endsWith(".zip")) {
-    await runCommandWithTimeout(["unzip", "-q", archivePath, "-d", installRoot], {
+    // -n: never overwrite existing files (defense-in-depth)
+    await runCommandWithTimeout(["unzip", "-q", "-n", archivePath, "-d", installRoot], {
       timeoutMs: 60_000,
     });
   } else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tgz")) {
-    await runCommandWithTimeout(["tar", "-xzf", archivePath, "-C", installRoot], {
+    // -k: keep existing files (defense-in-depth)
+    await runCommandWithTimeout(["tar", "-xzf", archivePath, "-k", "-C", installRoot], {
       timeoutMs: 60_000,
     });
   } else {
