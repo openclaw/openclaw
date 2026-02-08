@@ -53,7 +53,7 @@ async function removeSecureNetwork(): Promise<void> {
  * Start a socat relay container that bridges the internal network to the host proxy.
  * Connected to both the internal network (for gateway access) and bridge (to reach host).
  */
-async function startRelayContainer(proxyBridgeIp: string, proxyPort: number, gatewayPort: number): Promise<void> {
+async function startRelayContainer(proxyBridgeIp: string, proxyPort: number): Promise<void> {
   // Remove any existing relay
   try {
     await execDocker(["rm", "-f", RELAY_CONTAINER_NAME], { allowFailure: true });
@@ -110,7 +110,7 @@ export async function startGatewayContainer(opts: GatewayContainerOptions): Prom
 
   // Set up network isolation: internal network + relay
   await ensureSecureNetwork();
-  await startRelayContainer(opts.proxyBridgeIp, opts.proxyPort, opts.gatewayPort);
+  await startRelayContainer(opts.proxyBridgeIp, opts.proxyPort);
 
   const filteredEnv = filterSecretEnv(opts.env || process.env);
 
