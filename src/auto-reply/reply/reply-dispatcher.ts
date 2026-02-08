@@ -149,21 +149,22 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         await options.deliver(normalized, { kind });
 
-        // Fire message_sent hook after successful delivery (all channels)
+        // Fire message_sent hook after successful delivery (all channels).
+        // Skip when hookContext is missing — callers must opt in with valid context.
         const hookRunner = getGlobalHookRunner();
-        if (hookRunner && normalized.text) {
-          const hctx = options.hookContext;
+        const hctx = options.hookContext;
+        if (hookRunner && normalized.text && hctx?.channelId) {
           void hookRunner
             .runMessageSent(
               {
-                to: hctx?.conversationId ?? "",
+                to: hctx.conversationId ?? hctx.channelId,
                 content: normalized.text,
                 success: true,
               },
               {
-                channelId: hctx?.channelId ?? "",
-                accountId: hctx?.accountId,
-                conversationId: hctx?.conversationId,
+                channelId: hctx.channelId,
+                accountId: hctx.accountId,
+                conversationId: hctx.conversationId,
               },
             )
             .catch(() => {});
