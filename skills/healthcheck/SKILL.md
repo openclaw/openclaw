@@ -106,6 +106,93 @@ Offer suggested profiles as optional defaults (numbered). Note that most users p
 3. Developer Convenience: more local services allowed, explicit exposure warnings, still audited.
 4. Custom: user-defined constraints (services, exposure, update cadence, access methods).
 
+### 4b) Tailscale hardening (optional, for remote VPS access)
+
+If the user selected "VPS Hardened" or accesses the host remotely over the internet, offer Tailscale as a zero-config VPN option to hide SSH from public exposure.
+
+**When to recommend:**
+
+- User accesses OpenClaw host over the internet
+- VPS or headless server deployment
+- User wants to hide SSH from public internet
+- User selected "VPS Hardened" risk profile
+
+**Tailscale setup steps (require approval for each):**
+
+1. Install Tailscale:
+
+   ```bash
+   # Debian/Ubuntu — add official repo (safer than curl|sh)
+   curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+   curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+   sudo apt update
+   sudo apt install tailscale -y
+   
+   # Authenticate (opens browser or provides link)
+   sudo tailscale up
+   ```
+
+2. Get Tailscale IP:
+
+   ```bash
+   tailscale ip -4
+   # Example output: 100.x.x.x
+   ```
+
+3. Lock SSH to Tailscale only (UFW):
+
+   ```bash
+   # First, check what's currently allowed
+   sudo ufw status
+   
+   # IMPORTANT: If you have other services (web, etc.), preserve them:
+   # sudo ufw allow 80/tcp
+   # sudo ufw allow 443/tcp
+   
+   # Allow SSH only from Tailscale network (100.64.0.0/10)
+   sudo ufw allow from 100.64.0.0/10 to any port 22 proto tcp
+   
+   # Remove public SSH access
+   sudo ufw delete allow 22/tcp
+   sudo ufw delete allow ssh
+   
+   # Enable firewall (WARNING: takes effect immediately)
+   sudo ufw enable
+   ```
+
+4. **Critical: Verify access before closing session**
+
+   Before proceeding, instruct user to open a NEW terminal and test:
+   ```bash
+   ssh user@<tailscale-ip>
+   ```
+   
+   Only continue if the user confirms this works.
+
+**Verification checklist:**
+
+After setup, verify all items:
+
+- `tailscale status` shows "connected"
+- SSH works via Tailscale IP
+- `sudo ufw status` shows only 100.64.0.0/10 for port 22
+
+**Rollback plan:**
+
+If user gets locked out:
+
+1. Access via hosting provider's web console (Hostinger, DigitalOcean, Linode, etc.)
+2. Run: `sudo ufw allow 22/tcp` to restore public SSH
+3. Debug Tailscale connection: `tailscale status`, `journalctl -u tailscaled`
+
+**Alternative secure access options (numbered):**
+
+If user prefers not to use Tailscale, offer alternatives:
+
+1. **WireGuard** — manual VPN setup, no account required, more control
+2. **SSH keys + fail2ban** — no VPN, hardens direct SSH access
+3. **Cloudflare Tunnel** — HTTP-based access, requires Cloudflare account
+
 ### 5) Produce a remediation plan
 
 Provide a plan that includes:
