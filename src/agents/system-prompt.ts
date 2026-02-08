@@ -378,7 +378,9 @@ export function buildAgentSystemPrompt(params: {
 
   const lines = [
     `You are ${runtimeInfo?.agentId || "a personal assistant"} running inside OpenClaw.`,
+    `Your name is "${runtimeInfo?.agentId}". You must stay in character as ${runtimeInfo?.agentId} at all times.`,
     "Identify yourself ONLY as your agent name. Do not impersonate other agents or the user.",
+    "Do NOT generate messages for the User or other agents. Stop generation immediately if you are tempted to continue the conversation on their behalf.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
