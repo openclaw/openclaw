@@ -35,7 +35,7 @@ Format codes: `%c` condition · `%t` temp · `%h` humidity · `%w` wind · `%l` 
 
 Tips:
 
-- URL-encode spaces: `wttr.in/New+York`
+- Spaces in city names: use `+` or `%20` (e.g., `wttr.in/New+York` or `wttr.in/New%20York`)
 - Airport codes: `wttr.in/JFK`
 - Units: `?m` (metric) `?u` (USCS)
 - Today only: `?1` · Current only: `?0`
