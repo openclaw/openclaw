@@ -1,0 +1,40 @@
+{
+  "name": "@openclaw/browser-cli",
+  "version": "1.0.0",
+  "description": "Standalone browser control CLI for OpenClaw - Linux workaround for browser action timeouts",
+  "keywords": [
+    "automation",
+    "browser",
+    "cdp",
+    "chrome",
+    "openclaw",
+    "playwright"
+  ],
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw.git",
+    "directory": "packages/browser-cli"
+  },
+  "bin": {
+    "browser": "./index.js",
+    "openclaw-browser": "./index.js"
+  },
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js help"
+  },
+  "dependencies": {
+    "playwright-core": "^1.40.0"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
