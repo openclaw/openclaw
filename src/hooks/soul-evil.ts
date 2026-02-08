@@ -46,6 +46,7 @@ export function resolveSoulEvilConfigFromHook(
   if (!entry) {
     return null;
   }
+  entry = { ...entry, ...(entry.env as Record<string, unknown> | undefined) };
   const file = typeof entry.file === "string" ? entry.file : undefined;
   if (entry.file !== undefined && !file) {
     log?.warn?.("soul-evil config: file must be a string");
