@@ -1,30 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-const log = (() => {
-  // Lazy import to avoid circular dependencies
-  let logger: ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger> | null =
-    null;
-  return {
-    warn: (msg: string, meta?: Record<string, unknown>) => {
-      if (!logger) {
-        logger = import("../logging/subsystem.js").then((m) =>
-          m.createSubsystemLogger("session-repair"),
-        );
-      }
-      logger?.then((l) => l.warn(msg, meta));
-      console.warn(`[session-repair] ${msg}`, meta ?? "");
-    },
-    info: (msg: string, meta?: Record<string, unknown>) => {
-      if (!logger) {
-        logger = import("../logging/subsystem.js").then((m) =>
-          m.createSubsystemLogger("session-repair"),
-        );
-      }
-      logger?.then((l) => l.info(msg, meta));
-      console.info(`[session-repair] ${msg}`, meta ?? "");
-    },
-  };
-})();
+// Simple logger to avoid circular dependencies and ensure synchronous, reliable logging
+const log = {
+  warn: (msg: string, meta?: Record<string, unknown>) => {
+    const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
+    console.warn(`[session-repair] ${msg}${metaStr}`);
+  },
+  info: (msg: string, meta?: Record<string, unknown>) => {
+    const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
+    console.info(`[session-repair] ${msg}${metaStr}`);
+  },
+};
 
 type ToolCallLike = {
   id: string;
