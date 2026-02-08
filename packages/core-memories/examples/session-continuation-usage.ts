@@ -7,8 +7,8 @@
 /* eslint-disable no-unused-vars */
 
 import { CoreMemories, FlashEntry } from "../src/index";
-import { onSessionStart, heartbeatSessionCheck } from "../src/session-continuation-integration";
 import { SessionContinuation } from "../src/session-continuation";
+import { onSessionStart, heartbeatSessionCheck } from "../src/session-continuation-integration";
 
 // ============================================================================
 // EXAMPLE 1: On Gateway/Session Start
@@ -47,7 +47,7 @@ async function onUserContinues(topic: string): Promise<string | undefined> {
   const cm = new CoreMemories();
   await cm.initialize();
 
-  const results = await cm.findByKeyword(topic);
+  const results = cm.findByKeyword(topic);
   const allResults = [...results.flash, ...results.warm];
 
   if (allResults.length > 0) {

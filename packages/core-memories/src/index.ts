@@ -485,7 +485,7 @@ function mergeKnownKeys(
     if (isPlainObject(sourceValue) && isPlainObject(targetValue)) {
       result[key] = mergeKnownKeys(targetValue, sourceValue, `${prefix}.${key}`);
     } else if (typeof sourceValue !== "function") {
-      result[key] = sourceValue as unknown;
+      result[key] = sourceValue;
     }
   }
 
@@ -508,15 +508,12 @@ function deepMerge(
 
     const sourceValue = source[key];
     const targetValue = result[key as keyof CoreMemoriesConfig];
+    const resultRecord = result as Record<string, unknown>;
 
     if (isPlainObject(sourceValue) && isPlainObject(targetValue)) {
-      (result[key as keyof CoreMemoriesConfig] as unknown) = mergeKnownKeys(
-        targetValue as Record<string, unknown>,
-        sourceValue as Record<string, unknown>,
-        key,
-      );
+      resultRecord[key] = mergeKnownKeys(targetValue, sourceValue, key);
     } else if (typeof sourceValue !== "function") {
-      (result[key as keyof CoreMemoriesConfig] as unknown) = sourceValue;
+      resultRecord[key] = sourceValue;
     }
   }
 
@@ -524,7 +521,9 @@ function deepMerge(
 }
 
 // Initialize configuration with auto-detection
-export async function initializeConfig(options?: { memoryDir?: string }): Promise<CoreMemoriesConfig> {
+export async function initializeConfig(options?: {
+  memoryDir?: string;
+}): Promise<CoreMemoriesConfig> {
   if (CONFIG) {
     return CONFIG;
   }
@@ -926,10 +925,7 @@ class MemoryMdIntegration {
     }
 
     // Backup old version
-    const backupPath = path.join(
-      path.dirname(memoryMdPath),
-      `MEMORY.md.backup.${Date.now()}`,
-    );
+    const backupPath = path.join(path.dirname(memoryMdPath), `MEMORY.md.backup.${Date.now()}`);
     fs.writeFileSync(backupPath, fs.readFileSync(memoryMdPath));
 
     // Write updated version
