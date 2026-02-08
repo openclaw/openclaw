@@ -361,7 +361,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke": async ({ params, respond, context }) => {
+  "node.invoke": async ({ params, respond, context, client }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -417,10 +417,22 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      let invokeParams = p.params;
+      if (command === "system.run" && invokeParams && typeof invokeParams === "object") {
+        const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
+        const canApprove =
+          scopes.includes("operator.approvals") || scopes.includes("operator.admin");
+        if (!canApprove) {
+          const sanitized = { ...(invokeParams as Record<string, unknown>) };
+          delete sanitized.approved;
+          delete sanitized.approvalDecision;
+          invokeParams = sanitized;
+        }
+      }
       const res = await context.nodeRegistry.invoke({
         nodeId,
         command,
-        params: p.params,
+        params: invokeParams,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
