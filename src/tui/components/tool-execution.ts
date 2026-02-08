@@ -13,42 +13,48 @@ type ToolResultContent = {
 type ToolResult = {
   content?: ToolResultContent[];
   details?: Record<string, unknown>;
+  error?: string;
+  message?: string;
 };
 
 const PREVIEW_LINES = 12;
 
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
-  const detail = formatToolDetail(display);
-  if (detail) {
-    return detail;
-  }
-  if (!args || typeof args !== "object") {
+function extractText(result?: ToolResult): string {
+  if (!result) {
     return "";
   }
+  if (result.content && Array.isArray(result.content)) {
+    const lines: string[] = [];
+    for (const entry of result.content) {
+      if (entry.type === "text" && entry.text) {
+        lines.push(entry.text);
+      } else if (entry.type === "image") {
+        const mime = entry.mimeType ?? "image";
+        const size = entry.bytes != null ? ` ${Math.round(entry.bytes / 1024)}kb` : "";
+        const omitted = entry.omitted ? " (omitted)" : "";
+        lines.push(`[${mime}${size}${omitted}]`);
+      }
+    }
+    return lines.join("\n").trim();
+  }
+
+  // Fallback for error objects or unstructured results
+  if (typeof result.error === "string") {
+    return `Error: ${result.error}`;
+  }
+  if (typeof result.message === "string") {
+    return result.message;
+  }
+  if (result.details && typeof result.details.status === "string") {
+    return `Status: ${result.details.status}`;
+  }
+
+  // Last resort: show the raw object so the user sees *something*
   try {
-    return JSON.stringify(args);
+    return JSON.stringify(result, null, 2);
   } catch {
     return "";
   }
-}
-
-function extractText(result?: ToolResult): string {
-  if (!result?.content) {
-    return "";
-  }
-  const lines: string[] = [];
-  for (const entry of result.content) {
-    if (entry.type === "text" && entry.text) {
-      lines.push(entry.text);
-    } else if (entry.type === "image") {
-      const mime = entry.mimeType ?? "image";
-      const size = entry.bytes ? ` ${Math.round(entry.bytes / 1024)}kb` : "";
-      const omitted = entry.omitted ? " (omitted)" : "";
-      lines.push(`[${mime}${size}${omitted}]`);
-    }
-  }
-  return lines.join("\n").trim();
 }
 
 export class ToolExecutionComponent extends Container {
@@ -119,7 +125,14 @@ export class ToolExecutionComponent extends Container {
     const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
-    const argLine = formatArgs(this.toolName, this.args);
+    let argLine = formatToolDetail(display);
+    if (!argLine && this.args && typeof this.args === "object") {
+      try {
+        argLine = JSON.stringify(this.args);
+      } catch {
+        // ignore
+      }
+    }
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
 
     const raw = extractText(this.result);
