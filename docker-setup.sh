@@ -34,6 +34,7 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_USAGE_WEBHOOK_URL="${OPENCLAW_USAGE_WEBHOOK_URL:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 
@@ -168,7 +169,39 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES
+  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_USAGE_WEBHOOK_URL
+
+# Write initial config with webhook URL if specified
+if [[ -n "$OPENCLAW_USAGE_WEBHOOK_URL" ]]; then
+  CONFIG_FILE="$OPENCLAW_CONFIG_DIR/config.json"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # Merge webhook URL into existing config using node/jq
+    if command -v jq >/dev/null 2>&1; then
+      tmp="$(mktemp)"
+      jq --arg url "$OPENCLAW_USAGE_WEBHOOK_URL" \
+        '.gateway.http.endpoints.chatCompletions.enabled = true | .gateway.http.endpoints.chatCompletions.usageWebhookUrl = $url' \
+        "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+    fi
+  else
+    # Create new config with webhook URL
+    cat > "$CONFIG_FILE" <<EOF
+{
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true,
+          "usageWebhookUrl": "$OPENCLAW_USAGE_WEBHOOK_URL"
+        }
+      }
+    }
+  }
+}
+EOF
+  fi
+  echo "==> Webhook URL configured: $OPENCLAW_USAGE_WEBHOOK_URL"
+fi
 
 echo "==> Building Docker image: $IMAGE_NAME"
 docker build \
@@ -208,6 +241,9 @@ echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
 echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+if [[ -n "$OPENCLAW_USAGE_WEBHOOK_URL" ]]; then
+  echo "Webhook: $OPENCLAW_USAGE_WEBHOOK_URL"
+fi
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
