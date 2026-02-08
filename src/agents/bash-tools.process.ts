@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   deleteSession,
   drainSession,
@@ -12,7 +13,6 @@ import {
 } from "./bash-process-registry.js";
 import {
   deriveSessionName,
-  formatDuration,
   killSession,
   pad,
   sliceLogLines,
@@ -118,7 +118,7 @@ export function createProcessTool(
           .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            return `${s.sessionId} ${pad(s.status, 9)} ${formatDuration(s.runtimeMs)} :: ${label}`;
+            return `${s.sessionId} ${pad(s.status, 9)} ${formatDurationCompact(s.runtimeMs) ?? "n/a"} :: ${label}`;
           });
         return {
           content: [

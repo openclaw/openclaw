@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
-import { formatAge } from "./format.js";
+import { formatTimeAgo } from "./format.js";
 
 export type ChannelRow = {
   id: ChannelId;
@@ -436,7 +436,7 @@ export async function buildChannelsTable(
           extra.push(link.selfE164);
         }
         if (link.linked && link.authAgeMs != null && link.authAgeMs >= 0) {
-          extra.push(`auth ${formatAge(link.authAgeMs)}`);
+          extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
         }
         if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
           extra.push(`accounts ${accounts.length || 1}`);

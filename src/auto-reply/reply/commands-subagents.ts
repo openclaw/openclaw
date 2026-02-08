@@ -14,17 +14,13 @@ import {
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { stopSubagentsForRequester } from "./abort.js";
 import { clearSessionQueues } from "./queue.js";
-import {
-  formatAgeShort,
-  formatDurationShort,
-  formatRunLabel,
-  formatRunStatus,
-  sortSubagentRuns,
-} from "./subagents-utils.js";
+import { formatRunLabel, formatRunStatus, sortSubagentRuns } from "./subagents-utils.js";
 
 type SubagentTargetResolution = {
   entry?: SubagentRunRecord;
@@ -45,7 +41,7 @@ function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
   }
-  return `${formatTimestamp(valueMs)} (${formatAgeShort(Date.now() - valueMs)})`;
+  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
 function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
@@ -214,8 +210,8 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       const label = formatRunLabel(entry);
       const runtime =
         entry.endedAt && entry.startedAt
-          ? formatDurationShort(entry.endedAt - entry.startedAt)
-          : formatAgeShort(Date.now() - (entry.startedAt ?? entry.createdAt));
+          ? (formatDurationCompact(entry.endedAt - entry.startedAt) ?? "n/a")
+          : formatTimeAgo(Date.now() - (entry.startedAt ?? entry.createdAt), { fallback: "n/a" });
       const runId = entry.runId.slice(0, 8);
       lines.push(
         `${index + 1}) ${status} · ${label} · ${runtime} · run ${runId} · ${entry.childSessionKey}`,
@@ -296,7 +292,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
     const runtime =
       run.startedAt && Number.isFinite(run.startedAt)
-        ? formatDurationShort((run.endedAt ?? Date.now()) - run.startedAt)
+        ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
         : "n/a";
     const outcome = run.outcome
       ? `${run.outcome.status}${run.outcome.error ? ` (${run.outcome.error})` : ""}`

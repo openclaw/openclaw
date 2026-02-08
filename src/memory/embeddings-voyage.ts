@@ -12,8 +12,12 @@ const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com/v1";
 
 export function normalizeVoyageModel(model: string): string {
   const trimmed = model.trim();
-  if (!trimmed) return DEFAULT_VOYAGE_EMBEDDING_MODEL;
-  if (trimmed.startsWith("voyage/")) return trimmed.slice("voyage/".length);
+  if (!trimmed) {
+    return DEFAULT_VOYAGE_EMBEDDING_MODEL;
+  }
+  if (trimmed.startsWith("voyage/")) {
+    return trimmed.slice("voyage/".length);
+  }
   return trimmed;
 }
 
@@ -24,12 +28,16 @@ export async function createVoyageEmbeddingProvider(
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
   const embed = async (input: string[], input_type?: "query" | "document"): Promise<number[][]> => {
-    if (input.length === 0) return [];
+    if (input.length === 0) {
+      return [];
+    }
     const body: { model: string; input: string[]; input_type?: "query" | "document" } = {
       model: client.model,
       input,
     };
-    if (input_type) body.input_type = input_type;
+    if (input_type) {
+      body.input_type = input_type;
+    }
 
     const res = await fetch(url, {
       method: "POST",

@@ -3,6 +3,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
+import { formatTimeAgo } from "./format-time/format-relative.ts";
 
 export type ChannelSummaryOptions = {
   colorize?: boolean;
@@ -224,7 +225,7 @@ export async function buildChannelSummary(
       line += ` ${self.e164}`;
     }
     if (authAgeMs != null && authAgeMs >= 0) {
-      line += ` auth ${formatAge(authAgeMs)}`;
+      line += ` auth ${formatTimeAgo(authAgeMs)}`;
     }
 
     lines.push(tint(line, statusColor));
@@ -251,23 +252,4 @@ export async function buildChannelSummary(
   }
 
   return lines;
-}
-
-export function formatAge(ms: number): string {
-  if (ms < 0) {
-    return "unknown";
-  }
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }

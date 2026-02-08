@@ -280,7 +280,9 @@ export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  if (tasks.length === 0) return [];
+  if (tasks.length === 0) {
+    return [];
+  }
   const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
   const results: T[] = Array.from({ length: tasks.length });
   let next = 0;
@@ -288,10 +290,14 @@ export async function runWithConcurrency<T>(
 
   const workers = Array.from({ length: resolvedLimit }, async () => {
     while (true) {
-      if (firstError) return;
+      if (firstError) {
+        return;
+      }
       const index = next;
       next += 1;
-      if (index >= tasks.length) return;
+      if (index >= tasks.length) {
+        return;
+      }
       try {
         results[index] = await tasks[index]();
       } catch (err) {
@@ -302,6 +308,8 @@ export async function runWithConcurrency<T>(
   });
 
   await Promise.allSettled(workers);
-  if (firstError) throw firstError;
+  if (firstError) {
+    throw firstError;
+  }
   return results;
 }
