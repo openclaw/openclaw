@@ -246,4 +246,34 @@ describe("canvas host", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("default index.html uses safe DOM manipulation to prevent XSS", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-"));
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+      liveReload: false,
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
+      const html = await res.text();
+      expect(res.status).toBe(200);
+
+      // No innerHTML assignment for the status element (XSS vector)
+      expect(html).not.toContain("statusEl.innerHTML");
+
+      // Safe DOM methods are used instead
+      expect(html).toContain("document.createElement");
+      expect(html).toContain("textContent");
+      expect(html).toContain("appendChild");
+    } finally {
+      await server.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
