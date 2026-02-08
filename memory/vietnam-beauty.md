@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `d174e97 docs: D027 Vietnam market sales strategy (02-08)`
 - `54dfadd docs: update D020 with UCP pipeline steps (02-08)`
 - `0516ac9 docs: update D018 with UCP order process (02-08)`
 - `b4849ab docs: update STATUS with UCP Admin Phase A~C completion (02-08)`
 - `64a6dad docs: I034 UCP Admin implementation record (02-08)`
-- `3974d9e feat(web): add UCP Feed management page (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
