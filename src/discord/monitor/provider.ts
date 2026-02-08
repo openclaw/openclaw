@@ -18,6 +18,7 @@ import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
+import { retryAsync } from "../../infra/retry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -423,9 +424,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const applicationId = await fetchDiscordApplicationId(token, 4000);
+  let applicationId: string | undefined;
+  let lastError: unknown;
+  try {
+    applicationId = await retryAsync(() => fetchDiscordApplicationId(token, 4000), {
+      attempts: 3,
+      minDelayMs: 2000,
+      maxDelayMs: 10_000,
+      jitter: 0.15,
+    });
+  } catch (err) {
+    lastError = err;
+  }
   if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+    throw new Error("Failed to resolve Discord application id", { cause: lastError });
   }
 
   const maxDiscordCommands = 100;
