@@ -108,8 +108,22 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   if (!req) {
     return false;
   }
+  const remoteAddr = req.socket?.remoteAddress;
   const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
-  if (!isLoopbackAddress(clientIp)) {
+  const isLoopback = isLoopbackAddress(clientIp);
+
+  // In secure mode with Docker, connections come from the Docker bridge IP (e.g., 172.17.0.1).
+  // If the remote address is in trustedProxies and there are no forwarding headers,
+  // treat it as a local connection (the Docker bridge is acting as our "localhost").
+  const hasForwarded = Boolean(
+    req.headers?.["x-forwarded-for"] ||
+    req.headers?.["x-real-ip"] ||
+    req.headers?.["x-forwarded-host"],
+  );
+  const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
+  const isTrustedDirectConnection = remoteIsTrustedProxy && !hasForwarded;
+
+  if (!isLoopback && !isTrustedDirectConnection) {
     return false;
   }
 
@@ -117,13 +131,6 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
   const hostIsTailscaleServe = host.endsWith(".ts.net");
 
-  const hasForwarded = Boolean(
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
-  );
-
-  const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
   return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
 }
 

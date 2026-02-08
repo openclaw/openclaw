@@ -211,6 +211,17 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type SecretsProxyConfig = {
+  /** Enable secure mode: run gateway in Docker with secrets injected via proxy. */
+  enabled?: boolean;
+  /** Port for the secrets injection proxy on the host (default: 8080). */
+  port?: number;
+  /** Docker image to use for the gateway container (default: openclaw-gateway:latest). */
+  image?: string;
+  /** Additional domains to allow through the proxy (merged with defaults). */
+  allowlist?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -239,6 +250,8 @@ export type GatewayConfig = {
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;
+  /** Secrets injection proxy configuration for secure mode. */
+  secretsProxy?: SecretsProxyConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or

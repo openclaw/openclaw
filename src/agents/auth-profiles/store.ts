@@ -189,6 +189,20 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
     };
     mutated = true;
   }
+
+  // Security: delete oauth.json after migration to prevent secrets from persisting
+  // Similar to auth.json cleanup (see loadAuthProfileStoreForAgent)
+  if (mutated) {
+    try {
+      fs.unlinkSync(oauthPath);
+      log.info("deleted legacy oauth.json after migration to auth-profiles.json");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        log.warn("failed to delete legacy oauth.json after migration", { err, oauthPath });
+      }
+    }
+  }
+
   return mutated;
 }
 

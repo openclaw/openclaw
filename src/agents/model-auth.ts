@@ -238,6 +238,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = process.env[envVar]?.trim();
     if (!value) {
+      if (process.env.OPENCLAW_SECURE_MODE === "1") {
+        return { apiKey: `{{${envVar}}}`, source: "secure proxy placeholder" };
+      }
       return null;
     }
     const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;

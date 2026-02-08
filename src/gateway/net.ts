@@ -95,12 +95,59 @@ function parseRealIp(realIp?: string): string | undefined {
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Check if an IPv4 address matches a CIDR range.
+ * Example: ipMatchesCidr("172.17.0.1", "172.17.0.0/16") => true
+ */
+function ipMatchesCidr(ip: string, cidr: string): boolean {
+  const [range, prefixLength] = cidr.split("/");
+  if (!range || !prefixLength) {
+    return false;
+  }
+  const prefix = parseInt(prefixLength, 10);
+  if (Number.isNaN(prefix) || prefix < 0 || prefix > 32) {
+    return false;
+  }
+
+  const ipToInt = (addr: string): number | null => {
+    const parts = addr.split(".");
+    if (parts.length !== 4) {
+      return null;
+    }
+    let result = 0;
+    for (const part of parts) {
+      const n = parseInt(part, 10);
+      if (Number.isNaN(n) || n < 0 || n > 255) {
+        return null;
+      }
+      result = (result << 8) | n;
+    }
+    return result >>> 0; // Ensure unsigned
+  };
+
+  const ipInt = ipToInt(ip);
+  const rangeInt = ipToInt(range);
+  if (ipInt === null || rangeInt === null) {
+    return false;
+  }
+
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  return (ipInt & mask) === (rangeInt & mask);
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) {
     return false;
   }
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+  return trustedProxies.some((proxy) => {
+    // Support CIDR notation (e.g., "172.17.0.0/16")
+    if (proxy.includes("/")) {
+      return ipMatchesCidr(normalized, proxy);
+    }
+    // Exact IP match
+    return normalizeIp(proxy) === normalized;
+  });
 }
 
 export function resolveGatewayClientIp(params: {

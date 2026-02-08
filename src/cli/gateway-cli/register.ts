@@ -20,6 +20,7 @@ import {
   runDaemonUninstall,
 } from "../daemon-cli.js";
 import { withProgress } from "../progress.js";
+import { addGatewayAllowlistCommands } from "./allowlist-cli.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";
 import {
   dedupeBeacons,
@@ -356,4 +357,6 @@ export function registerGatewayCli(program: Command) {
         }
       }, "gateway discover failed");
     });
+
+  addGatewayAllowlistCommands(gateway);
 }

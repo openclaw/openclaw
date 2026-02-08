@@ -590,7 +590,8 @@ export function loadConfig(): OpenClawConfig {
       return cached.config;
     }
   }
-  const config = io.loadConfig();
+  let config = io.loadConfig();
+
   if (shouldUseConfigCache(process.env)) {
     const cacheMs = resolveConfigCacheMs(process.env);
     if (cacheMs > 0) {

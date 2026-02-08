@@ -37,6 +37,11 @@ async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+  // SECURE MODE: Don't attempt local refresh - the host proxy handles token management
+  if (process.env.OPENCLAW_SECURE_MODE === "1") {
+    return null;
+  }
+
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
@@ -124,6 +129,25 @@ async function tryResolveOAuthProfile(params: {
     return null;
   }
 
+  // SECURE MODE: Return placeholder without checking expiry or refreshing.
+  // The secrets proxy on the host will inject the real token at HTTP time.
+  if (process.env.OPENCLAW_SECURE_MODE === "1") {
+    // For google-gemini-cli, return JSON format with placeholders
+    const needsProjectId =
+      cred.provider === "google-gemini-cli" || cred.provider === "google-antigravity";
+    const apiKey = needsProjectId
+      ? JSON.stringify({
+          token: `{{OAUTH:${profileId}}}`,
+          projectId: cred.projectId || "",
+        })
+      : `{{OAUTH:${profileId}}}`;
+    return {
+      apiKey,
+      provider: cred.provider,
+      email: cred.email,
+    };
+  }
+
   if (Date.now() < cred.expires) {
     return {
       apiKey: buildOAuthApiKey(cred.provider, cred),
@@ -166,6 +190,30 @@ export async function resolveApiKeyForProfile(params: {
     if (!(profileConfig.mode === "oauth" && cred.type === "token")) {
       return null;
     }
+  }
+
+  // SECURE MODE: Return placeholders instead of actual credentials
+  if (process.env.OPENCLAW_SECURE_MODE === "1") {
+    let placeholder: string;
+    if (cred.type === "oauth") {
+      // For google-gemini-cli, return JSON format with placeholders
+      const needsProjectId =
+        cred.provider === "google-gemini-cli" || cred.provider === "google-antigravity";
+      placeholder = needsProjectId
+        ? JSON.stringify({
+            token: `{{OAUTH:${profileId}}}`,
+            projectId: cred.projectId || "",
+          })
+        : `{{OAUTH:${profileId}}}`;
+    } else if (cred.type === "api_key") {
+      placeholder = `{{APIKEY:${profileId}}}`;
+    } else if (cred.type === "token") {
+      placeholder = `{{TOKEN:${profileId}}}`;
+    } else {
+      // Fallback for unknown types
+      placeholder = `{{AUTH:${profileId}}}`;
+    }
+    return { apiKey: placeholder, provider: cred.provider, email: cred.email };
   }
 
   if (cred.type === "api_key") {
