@@ -32,7 +32,13 @@ export function listTailnetAddresses(): TailnetAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 
-  const ifaces = os.networkInterfaces();
+  let ifaces: ReturnType<typeof os.networkInterfaces> | undefined;
+  try {
+    ifaces = os.networkInterfaces();
+  } catch {
+    // Some environments (sandboxed/locked down) can throw here. Return empty lists.
+    return { ipv4: [], ipv6: [] };
+  }
   for (const entries of Object.values(ifaces)) {
     if (!entries) {
       continue;

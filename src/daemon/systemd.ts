@@ -326,7 +326,11 @@ export async function restartSystemdService({
 export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
-  await assertSystemdAvailable();
+  try {
+    await assertSystemdAvailable();
+  } catch {
+    return false;
+  }
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
