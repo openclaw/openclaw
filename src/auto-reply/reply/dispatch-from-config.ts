@@ -198,6 +198,8 @@ export async function dispatchReplyFromConfig(params: {
         logVerbose(
           `dispatch-from-config: message marked for cancel by plugin hook from ${ctx.From ?? "unknown"}`,
         );
+        recordProcessed("skipped", { reason: "cancelled_by_plugin" });
+        markIdle("message_cancelled");
         return;
       }
     } catch (err) {

@@ -238,8 +238,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run message_received hook.
+   * Runs in parallel and blocks until all hooks complete.
    * Plugins can block or audit inbound messages.
-   * Runs in parallel.
    */
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
