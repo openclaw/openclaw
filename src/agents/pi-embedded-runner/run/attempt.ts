@@ -63,7 +63,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyCustomHeaders, applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -524,6 +524,31 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+
+      // Run before_llm_request hooks to allow plugins to inject custom LLM headers
+      const llmHookRunner = getGlobalHookRunner();
+      if (llmHookRunner?.hasHooks("before_llm_request")) {
+        try {
+          const hookResult = await llmHookRunner.runBeforeLlmRequest(
+            { provider: params.provider, modelId: params.modelId, headers: {} },
+            {
+              agentId: params.agentId ?? undefined,
+              sessionKey: params.sessionKey,
+              senderId: params.senderId ?? undefined,
+              senderName: params.senderName ?? undefined,
+              channel: params.messageChannel ?? params.messageProvider ?? undefined,
+            },
+          );
+          if (hookResult?.headers && Object.keys(hookResult.headers).length > 0) {
+            applyCustomHeaders(activeSession.agent, hookResult.headers);
+            log.debug(
+              `hooks: applied ${Object.keys(hookResult.headers).length} custom LLM headers`,
+            );
+          }
+        } catch (hookErr) {
+          log.warn(`before_llm_request hook failed: ${String(hookErr)}`);
+        }
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {

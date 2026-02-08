@@ -14,6 +14,9 @@ import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookBeforeLlmRequestContext,
+  PluginHookBeforeLlmRequestEvent,
+  PluginHookBeforeLlmRequestResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookGatewayContext,
@@ -55,6 +58,9 @@ export type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookBeforeLlmRequestContext,
+  PluginHookBeforeLlmRequestEvent,
+  PluginHookBeforeLlmRequestResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -372,6 +378,29 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // LLM Request Hooks
+  // =========================================================================
+
+  /**
+   * Run before_llm_request hook.
+   * Allows plugins to inject custom HTTP headers into LLM API requests.
+   * Runs sequentially, merging headers from all handlers.
+   */
+  async function runBeforeLlmRequest(
+    event: PluginHookBeforeLlmRequestEvent,
+    ctx: PluginHookBeforeLlmRequestContext,
+  ): Promise<PluginHookBeforeLlmRequestResult | undefined> {
+    return runModifyingHook<"before_llm_request", PluginHookBeforeLlmRequestResult>(
+      "before_llm_request",
+      event,
+      ctx,
+      (acc, next) => ({
+        headers: { ...acc?.headers, ...next?.headers },
+      }),
+    );
+  }
+
+  // =========================================================================
   // Session Hooks
   // =========================================================================
 
@@ -455,6 +484,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    // LLM request hooks
+    runBeforeLlmRequest,
     // Session hooks
     runSessionStart,
     runSessionEnd,

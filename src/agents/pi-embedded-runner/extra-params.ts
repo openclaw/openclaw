@@ -118,6 +118,27 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+ * Apply plugin-provided custom headers to an agent's streamFn.
+ * Headers are captured in a closure and merged into every LLM request.
+ *
+ * @internal Exported for testing
+ */
+export function applyCustomHeaders(
+  agent: { streamFn?: StreamFn },
+  headers: Record<string, string>,
+): void {
+  if (Object.keys(headers).length === 0) {
+    return;
+  }
+  const underlying = agent.streamFn ?? streamSimple;
+  agent.streamFn = (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: { ...headers, ...options?.headers },
+    });
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *

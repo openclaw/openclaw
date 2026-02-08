@@ -295,6 +295,7 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_llm_request"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -426,6 +427,25 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// before_llm_request hook
+export type PluginHookBeforeLlmRequestContext = {
+  agentId?: string;
+  sessionKey?: string;
+  senderId?: string;
+  senderName?: string;
+  channel?: string;
+};
+
+export type PluginHookBeforeLlmRequestEvent = {
+  provider: string;
+  modelId: string;
+  headers: Record<string, string>;
+};
+
+export type PluginHookBeforeLlmRequestResult = {
+  headers?: Record<string, string>;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -499,6 +519,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  before_llm_request: (
+    event: PluginHookBeforeLlmRequestEvent,
+    ctx: PluginHookBeforeLlmRequestContext,
+  ) => Promise<PluginHookBeforeLlmRequestResult | void> | PluginHookBeforeLlmRequestResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

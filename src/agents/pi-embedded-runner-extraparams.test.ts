@@ -2,7 +2,11 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import {
+  applyCustomHeaders,
+  applyExtraParamsToAgent,
+  resolveExtraParams,
+} from "./pi-embedded-runner.js";
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -90,5 +94,60 @@ describe("applyExtraParamsToAgent", () => {
       "X-Title": "OpenClaw",
       "X-Custom": "1",
     });
+  });
+});
+
+describe("applyCustomHeaders", () => {
+  const model = {
+    api: "openai-completions",
+    provider: "anthropic",
+    id: "claude-sonnet-4-20250514",
+  } as Model<"openai-completions">;
+  const context: Context = { messages: [] };
+
+  it("wraps streamFn to inject custom headers", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyCustomHeaders(agent, { "X-Sender-Id": "user-123" });
+
+    void agent.streamFn?.(model, context, undefined);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({ "X-Sender-Id": "user-123" });
+  });
+
+  it("preserves existing per-call headers (per-call headers take precedence)", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyCustomHeaders(agent, { "X-Sender-Id": "user-123", "X-Channel": "telegram" });
+
+    void agent.streamFn?.(model, context, { headers: { "X-Channel": "override" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "X-Sender-Id": "user-123",
+      "X-Channel": "override",
+    });
+  });
+
+  it("no-ops when headers object is empty", () => {
+    const baseStreamFn: StreamFn = () => new AssistantMessageEventStream();
+    const agent = { streamFn: baseStreamFn };
+    const originalStreamFn = agent.streamFn;
+
+    applyCustomHeaders(agent, {});
+
+    // streamFn should not be replaced
+    expect(agent.streamFn).toBe(originalStreamFn);
   });
 });
