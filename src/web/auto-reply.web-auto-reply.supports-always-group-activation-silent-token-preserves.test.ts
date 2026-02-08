@@ -227,7 +227,7 @@ describe("web auto-reply", () => {
     await monitorWebChannel(false, listenerFactory, false, resolver);
     expect(capturedOnMessage).toBeDefined();
 
-    // WhatsApp @mention of the owner should NOT trigger the bot in self-chat mode.
+    // Owner's own message with their JID auto-included in mentionedJids should NOT trigger.
     await capturedOnMessage?.({
       body: "@owner ping",
       from: "123@g.us",
@@ -236,6 +236,27 @@ describe("web auto-reply", () => {
       chatType: "group",
       to: "+2",
       id: "g-self-1",
+      senderE164: "+999",
+      senderName: "Owner",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).not.toHaveBeenCalled();
+
+    // External user @mentions the bot via JID — should trigger (#8487).
+    await capturedOnMessage?.({
+      body: "@bot hello",
+      from: "123@g.us",
+      conversationId: "123@g.us",
+      chatId: "123@g.us",
+      chatType: "group",
+      to: "+2",
+      id: "g-self-1b",
       senderE164: "+111",
       senderName: "Alice",
       mentionedJids: ["999@s.whatsapp.net"],
@@ -246,7 +267,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    expect(resolver).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(1);
 
     // Text-based mentionPatterns still work (user can type "openclaw" explicitly).
     await capturedOnMessage?.({
@@ -266,7 +287,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(resolver).toHaveBeenCalledTimes(2);
 
     resetLoadConfigMock();
   });
