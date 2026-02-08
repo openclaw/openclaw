@@ -132,6 +132,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security: strip hidden text from web_fetch extracted content to prevent indirect prompt injection. (#8027)
 - Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
 - Onboarding: drop completion prompt now handled by install/update.

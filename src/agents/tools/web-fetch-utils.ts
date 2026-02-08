@@ -1,3 +1,5 @@
+import { sanitizeExtractedContent, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+
 export type ExtractMode = "markdown" | "text";
 
 function decodeEntities(value: string): string {
@@ -85,20 +87,23 @@ export async function extractReadableContent(params: {
   url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
+  // Sanitize HTML to strip hidden content (prompt injection prevention)
+  const sanitizedHtml = await sanitizeExtractedContent(params.html);
+
   const fallback = (): { text: string; title?: string } => {
-    const rendered = htmlToMarkdown(params.html);
+    const rendered = htmlToMarkdown(sanitizedHtml);
     if (params.extractMode === "text") {
-      const text = markdownToText(rendered.text) || normalizeWhitespace(stripTags(params.html));
-      return { text, title: rendered.title };
+      const text = markdownToText(rendered.text) || normalizeWhitespace(stripTags(sanitizedHtml));
+      return { text: stripInvisibleUnicode(text), title: rendered.title };
     }
-    return rendered;
+    return { text: stripInvisibleUnicode(rendered.text), title: rendered.title };
   };
   try {
     const [{ Readability }, { parseHTML }] = await Promise.all([
       import("@mozilla/readability"),
       import("linkedom"),
     ]);
-    const { document } = parseHTML(params.html);
+    const { document } = parseHTML(sanitizedHtml);
     try {
       (document as { baseURI?: string }).baseURI = params.url;
     } catch {
@@ -112,10 +117,10 @@ export async function extractReadableContent(params: {
     const title = parsed.title || undefined;
     if (params.extractMode === "text") {
       const text = normalizeWhitespace(parsed.textContent ?? "");
-      return text ? { text, title } : fallback();
+      return text ? { text: stripInvisibleUnicode(text), title } : fallback();
     }
     const rendered = htmlToMarkdown(parsed.content);
-    return { text: rendered.text, title: title ?? rendered.title };
+    return { text: stripInvisibleUnicode(rendered.text), title: title ?? rendered.title };
   } catch {
     return fallback();
   }
