@@ -23,6 +23,7 @@ export const ChannelsSchema = z
     defaults: z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
+        groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
       })
       .strict()

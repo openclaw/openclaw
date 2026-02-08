@@ -233,9 +233,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
+  const defaultGroupAllowFrom = cfg.channels?.defaults?.groupAllowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ??
     telegramCfg.groupAllowFrom ??
+    defaultGroupAllowFrom ??
     (telegramCfg.allowFrom && telegramCfg.allowFrom.length > 0
       ? telegramCfg.allowFrom
       : undefined) ??

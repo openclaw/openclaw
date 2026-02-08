@@ -73,8 +73,10 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const configuredAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
+  const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom;
   const configuredGroupAllowFrom =
     params.cfg.channels?.whatsapp?.groupAllowFrom ??
+    defaultGroupAllowFrom ??
     (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   if (isGroup) {
