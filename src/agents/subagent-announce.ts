@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { getFollowupQueueDepth, resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -462,10 +462,39 @@ export async function runSubagentAnnounceFlow(params: {
       return true;
     }
 
+    // Fix 2: If the followup queue has pending items for this session,
+    // enqueue the announce instead of sending directly. This prevents
+    // the timing gap where clearActiveEmbeddedRun has fired (so
+    // maybeQueueSubagentAnnounce returns "none") but the followup drain
+    // hasn't started yet — a direct callGateway("agent") here would
+    // jump ahead of queued user messages.
+    const { cfg, entry, canonicalKey } = loadRequesterSessionEntry(params.requesterSessionKey);
+    if (getFollowupQueueDepth(canonicalKey) > 0) {
+      const queueSettings = resolveQueueSettings({
+        cfg,
+        channel: entry?.channel ?? entry?.lastChannel,
+        sessionEntry: entry,
+      });
+      const origin = resolveAnnounceOrigin(entry, requesterOrigin);
+      enqueueAnnounce({
+        key: canonicalKey,
+        item: {
+          prompt: triggerMessage,
+          summaryLine: taskLabel,
+          enqueuedAt: Date.now(),
+          sessionKey: canonicalKey,
+          origin,
+        },
+        settings: queueSettings,
+        send: sendAnnounce,
+      });
+      didAnnounce = true;
+      return true;
+    }
+
     // Send to main agent - it will respond in its own voice
     let directOrigin = requesterOrigin;
     if (!directOrigin) {
-      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
       directOrigin = deliveryContextFromSession(entry);
     }
     await callGateway({
