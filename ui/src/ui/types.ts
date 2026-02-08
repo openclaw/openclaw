@@ -732,18 +732,22 @@ export type SkillStatusEntry = {
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;
+  /** URL to the source repository (e.g., GitHub) for transparency and auditability. */
+  repository?: string;
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
   requirements: {
     bins: string[];
+    anyBins: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
     bins: string[];
+    anyBins: string[];
     env: string[];
     config: string[];
     os: string[];
