@@ -54,6 +54,7 @@ RUNTIME_DIRS=(
   node_modules/
   skills/
   assets/
+  extensions/
 )
 RUNTIME_FILES=(
   package.json
