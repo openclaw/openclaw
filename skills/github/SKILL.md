@@ -32,6 +32,20 @@ metadata:
 
 Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
 
+## Prerequisites
+
+Authenticate with GitHub before using:
+
+```bash
+gh auth login
+```
+
+Verify authentication:
+
+```bash
+gh auth status
+```
+
 ## Pull Requests
 
 Check CI status on a PR:
