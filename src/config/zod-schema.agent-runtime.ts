@@ -420,15 +420,15 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
-export const AgentModelSchema = z.union([
-  z.string(),
+export const AgentModelSchema = z.preprocess(
+  (val) => (typeof val === "string" ? { primary: val } : val),
   z
     .object({
       primary: z.string().optional(),
       fallbacks: z.array(z.string()).optional(),
     })
     .strict(),
-]);
+);
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -446,17 +446,7 @@ export const AgentEntrySchema = z
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
-        model: z
-          .union([
-            z.string(),
-            z
-              .object({
-                primary: z.string().optional(),
-                fallbacks: z.array(z.string()).optional(),
-              })
-              .strict(),
-          ])
-          .optional(),
+        model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
       })
       .strict()
