@@ -67,11 +67,11 @@ function buildHooksReport(config: OpenClawConfig): HookStatusReport {
 }
 
 function formatHookStatus(hook: HookStatusEntry): string {
-  if (hook.eligible) {
-    return theme.success("✓ ready");
-  }
   if (hook.disabled) {
     return theme.warn("⏸ disabled");
+  }
+  if (hook.eligible) {
+    return theme.success("✓ ready");
   }
   return theme.error("✗ missing");
 }
@@ -212,10 +212,10 @@ export function formatHookInfo(
 
   const lines: string[] = [];
   const emoji = hook.emoji ?? "🔗";
-  const status = hook.eligible
-    ? theme.success("✓ Ready")
-    : hook.disabled
-      ? theme.warn("⏸ Disabled")
+  const status = hook.disabled
+    ? theme.warn("⏸ Disabled")
+    : hook.eligible
+      ? theme.success("✓ Ready")
       : theme.error("✗ Missing requirements");
 
   lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
@@ -372,7 +372,7 @@ export async function enableHook(hookName: string): Promise<void> {
     );
   }
 
-  if (!hook.eligible) {
+  if (!hook.requirementsMet) {
     throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
   }
 
