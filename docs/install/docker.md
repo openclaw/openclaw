@@ -289,6 +289,35 @@ URL you land on and paste it back into the wizard to finish auth.
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
+### Can't reach the dashboard (troubleshooting)
+
+If the image builds and the gateway starts but you cannot open the Control UI in the browser:
+
+1. **Confirm the gateway container is running**
+   - `docker compose ps` — `openclaw-gateway` should show as `Up`.
+   - If it is `Exited`, check logs: `docker compose logs openclaw-gateway`. Common causes: missing config (run onboarding first), or `gateway.mode` not set to `local` in `~/.openclaw/openclaw.json`.
+
+2. **Use the correct URL**
+   - Open **http** (not https) at **http://127.0.0.1:18789/** or **http://localhost:18789/**.
+   - The default host port is **18789** (fixed in `docker-compose.yml`). To use a different host port, add a `docker-compose.override.yml` with `ports: - "HOST_PORT:18789"` for the gateway service.
+
+3. **Verify port mapping**
+   - `docker compose port openclaw-gateway 18789` should print `0.0.0.0:18789`.
+   - On Windows with Docker Desktop, try both `http://localhost:18789/` and `http://127.0.0.1:18789/`.
+
+4. **Run a health check from the host**
+   - From the repo root, with the token from `.env` or the setup script output:
+     `docker compose exec openclaw-gateway node dist/index.js health --token "<token>"`.
+   - If this fails, the gateway process inside the container is not healthy.
+
+5. **Firewall**
+   - Ensure Windows (or host) firewall allows inbound TCP on port 18789 for localhost / your host IP if you access from another machine.
+
+6. **Re-run onboarding if config is missing**
+   - If logs say "Missing config" or "Gateway start blocked: set gateway.mode=local", run:
+     `docker compose run --rm openclaw-cli onboard --no-install-daemon`
+   - Then start the gateway again: `docker compose up -d openclaw-gateway`.
+
 ### E2E smoke test (Docker)
 
 ```bash
