@@ -79,6 +79,8 @@ export type ChannelOutboundContext = {
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  /** Agent ID for per-agent routing (e.g., Discord webhooks). */
+  agentId?: string | null;
   deps?: OutboundSendDeps;
 };
 
