@@ -1,0 +1,9 @@
+{
+  "name": "clawddocs",
+  "version": "1.2.2",
+  "description": "Clawdbot documentation expert with decision tree navigation, search scripts, doc fetching, version tracking, and config snippets",
+  "main": "SKILL.md",
+  "keywords": ["clawdbot", "documentation", "help", "docs"],
+  "author": "NicholasSpisak",
+  "license": "MIT"
+}

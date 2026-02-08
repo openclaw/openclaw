@@ -556,18 +556,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  packages/clawdbot:
-    dependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  packages/moltbot:
-    dependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   ui:
     dependencies:
       '@noble/ed25519':

@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "skills": {
+    "naver-news": {
+      "version": "1.0.2",
+      "installedAt": 1769900859184
+    },
+    "hippocampus-memory": {
+      "version": "3.1.2",
+      "installedAt": 1769900862012
+    },
+    "agents-manager": {
+      "version": "1.0.1",
+      "installedAt": 1769900864149
+    },
+    "agent-orchestrator": {
+      "version": "0.1.0",
+      "installedAt": 1769900865893
+    },
+    "multi-coding-agent": {
+      "version": "1.0.0",
+      "installedAt": 1769900871116
+    },
+    "codex-sub-agents": {
+      "version": "1.0.0",
+      "installedAt": 1769900873110
+    },
+    "opencode-controller": {
+      "version": "1.0.0",
+      "installedAt": 1769900875312
+    },
+    "cursor-agent": {
+      "version": "2.1.0",
+      "installedAt": 1769900877912
+    },
+    "clean-code": {
+      "version": "1.0.0",
+      "installedAt": 1769900883098
+    },
+    "todoist": {
+      "version": "0.2.1",
+      "installedAt": 1769900884659
+    },
+    "home-assistant": {
+      "version": "1.0.0",
+      "installedAt": 1769900886781
+    },
+    "n8n-workflow-automation": {
+      "version": "1.0.0",
+      "installedAt": 1769900889102
+    },
+    "flowmind": {
+      "version": "1.0.2",
+      "installedAt": 1769900894117
+    },
+    "vestige": {
+      "version": "1.0.0",
+      "installedAt": 1769900896129
+    },
+    "agent-memory": {
+      "version": "1.0.0",
+      "installedAt": 1769900898403
+    },
+    "memory-manager": {
+      "version": "1.0.0",
+      "installedAt": 1769900900544
+    },
+    "seoul-subway": {
+      "version": "0.1.10",
+      "installedAt": 1769900905989
+    },
+    "triple-memory": {
+      "version": "1.0.0",
+      "installedAt": 1769900992434
+    },
+    "self-improving-agent": {
+      "version": "1.0.4",
+      "installedAt": 1769900995068
+    },
+    "ralph-loop": {
+      "version": "0.1.1",
+      "installedAt": 1769900996978
+    },
+    "remind-me": {
+      "version": "2.1.0",
+      "installedAt": 1769900999218
+    },
+    "auto-updater": {
+      "version": "1.0.0",
+      "installedAt": 1769901007580
+    },
+    "clawddocs": {
+      "version": "1.2.2",
+      "installedAt": 1769901010029
+    },
+    "caldav-calendar": {
+      "version": "1.0.1",
+      "installedAt": 1769901017648
+    },
+    "homeassistant": {
+      "version": "1.0.0",
+      "installedAt": 1769901019800
+    },
+    "excel": {
+      "version": "1.0.0",
+      "installedAt": 1769901022779
+    },
+    "youtube-watcher": {
+      "version": "1.0.0",
+      "installedAt": 1769901025089
+    }
+  }
+}

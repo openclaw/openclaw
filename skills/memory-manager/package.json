@@ -1,0 +1,10 @@
+{
+  "name": "memory-manager",
+  "version": "1.0.0",
+  "description": "Local memory management for agents. Compression detection, auto-snapshots, and semantic search. Never lose context again.",
+  "author": "margent",
+  "license": "MIT",
+  "homepage": "https://www.moltbook.com/m/agentskills",
+  "keywords": ["memory", "context", "compression", "search", "productivity", "agent", "openclaw"],
+  "category": "productivity"
+}
