@@ -238,12 +238,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     const filtered = heartbeatVisibility.showOk
       ? capped
       : capped.filter((msg) => {
+          // Type guard: ensure msg has required structure
+          if (typeof msg !== "object" || msg === null || !("role" in msg)) {
+            return true;
+          }
+          const message = msg as { role?: unknown; content?: unknown };
           // Keep non-assistant messages
-          if (msg.role !== "assistant") {
+          if (message.role !== "assistant") {
             return true;
           }
           // Filter out assistant messages that are only HEARTBEAT_OK
-          const text = typeof msg.content === "string" ? msg.content : "";
+          const text = typeof message.content === "string" ? message.content : "";
           const trimmed = text.trim();
           return trimmed !== HEARTBEAT_TOKEN;
         });
@@ -468,7 +473,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
-      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // Only BodyForAgent gets the timestamp - Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
