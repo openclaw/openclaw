@@ -89,12 +89,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
+      // Only skip delta events for finalized runs - final events contain the actual response
+      // and must always be processed, even if duplicate or out-of-order
       if (evt.state === "delta") {
         return;
       }
-      if (evt.state === "final") {
-        return;
-      }
+      // Don't return for "final" state - it needs to render
     }
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId) {

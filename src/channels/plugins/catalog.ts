@@ -29,7 +29,7 @@ export type ChannelPluginCatalogEntry = {
   install: {
     npmSpec: string;
     localPath?: string;
-    defaultChoice?: "npm" | "local";
+    defaultChoice?: "npm" | "local" | "skip";
   };
 };
 

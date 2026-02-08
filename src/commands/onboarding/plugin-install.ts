@@ -109,13 +109,25 @@ function resolveInstallDefaultChoice(params: {
 }): InstallChoice {
   const { cfg, entry, localPath } = params;
   const updateChannel = cfg.update?.channel;
+  const entryDefault = entry.install.defaultChoice;
+
+  // For stable/beta channels, respect the plugin's defaultChoice
+  // This allows unpublished plugins to default to "local" or "skip"
+  if (updateChannel === "stable" || updateChannel === "beta") {
+    if (entryDefault === "local" && localPath) {
+      return "local";
+    }
+    if (entryDefault === "skip") {
+      return "skip";
+    }
+    // Default to npm for stable/beta unless explicitly overridden
+    return "npm";
+  }
+
   if (updateChannel === "dev") {
     return localPath ? "local" : "npm";
   }
-  if (updateChannel === "stable" || updateChannel === "beta") {
-    return "npm";
-  }
-  const entryDefault = entry.install.defaultChoice;
+
   if (entryDefault === "local") {
     return localPath ? "local" : "npm";
   }

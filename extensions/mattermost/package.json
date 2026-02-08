@@ -22,7 +22,7 @@
     "install": {
       "npmSpec": "@openclaw/mattermost",
       "localPath": "extensions/mattermost",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     }
   }
 }
