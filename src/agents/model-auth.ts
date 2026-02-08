@@ -284,6 +284,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
   }
 
+  if (normalized === "nebius-token-factory") {
+    return pick("NEBIUS_TOKEN_FACTORY") ?? pick("NEBIUS_API_KEY");
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",

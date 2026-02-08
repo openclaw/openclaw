@@ -23,6 +23,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "xiaomi-api-key": "xiaomi",
   "synthetic-api-key": "synthetic",
   "venice-api-key": "venice",
+  "nebius-token-factory-api-key": "nebius-token-factory",
   "github-copilot": "github-copilot",
   "copilot-proxy": "copilot-proxy",
   "minimax-cloud": "minimax",

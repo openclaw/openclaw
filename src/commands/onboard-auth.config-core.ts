@@ -32,6 +32,7 @@ import {
 } from "./onboard-auth.credentials.js";
 import {
   buildMoonshotModelDefinition,
+  buildNebiusTokenFactoryModelDefinition,
   buildXaiModelDefinition,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
@@ -40,6 +41,9 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NEBIUS_TOKEN_FACTORY_BASE_URL,
+  NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_ID,
+  NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
@@ -296,6 +300,72 @@ function applyMoonshotProviderConfigWithBaseUrl(
     models: {
       mode: cfg.models?.mode ?? "merge",
       providers,
+    },
+  };
+}
+
+export function applyNebiusTokenFactoryProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF] = {
+    ...models[NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF],
+    alias: models[NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF]?.alias ?? "Nebius Token Factory",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers["nebius-token-factory"];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildNebiusTokenFactoryModelDefinition();
+  const hasDefaultModel = existingModels.some(
+    (model) => model.id === NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_ID,
+  );
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as {
+    apiKey?: string;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers["nebius-token-factory"] = {
+    ...existingProviderRest,
+    baseUrl: NEBIUS_TOKEN_FACTORY_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyNebiusTokenFactoryConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyNebiusTokenFactoryProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: NEBIUS_TOKEN_FACTORY_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }

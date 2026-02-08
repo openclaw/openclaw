@@ -44,6 +44,7 @@ export async function resolveNonInteractiveApiKey(params: {
   flagValue?: string;
   flagName: string;
   envVar: string;
+  envVarFallbacks?: string[];
   runtime: RuntimeEnv;
   agentDir?: string;
   allowProfile?: boolean;
@@ -56,6 +57,15 @@ export async function resolveNonInteractiveApiKey(params: {
   const envResolved = resolveEnvApiKey(params.provider);
   if (envResolved?.apiKey) {
     return { key: envResolved.apiKey, source: "env" };
+  }
+
+  if (params.envVarFallbacks?.length) {
+    for (const fallbackVar of params.envVarFallbacks) {
+      const value = process.env[fallbackVar]?.trim();
+      if (value) {
+        return { key: value, source: "env" };
+      }
+    }
   }
 
   if (params.allowProfile ?? true) {

@@ -22,6 +22,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "nebius-token-factory"
   | "qwen"
   | "qianfan"
   | "xai";
@@ -136,6 +137,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["venice-api-key"],
   },
   {
+    value: "nebius-token-factory",
+    label: "Nebius Token Factory",
+    hint: "OpenAI-compatible",
+    choices: ["nebius-token-factory-api-key"],
+  },
+  {
     value: "cloudflare-ai-gateway",
     label: "Cloudflare AI Gateway",
     hint: "Account ID + Gateway ID + API key",
@@ -191,6 +198,10 @@ export function buildAuthChoiceOptions(params: {
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "nebius-token-factory-api-key",
+    label: "Nebius Token Factory API key",
   });
   options.push({
     value: "github-copilot",
