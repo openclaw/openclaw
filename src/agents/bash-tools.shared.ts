@@ -77,7 +77,8 @@ export function buildDockerExecArgs(params: {
   const pathExport = hasCustomPath
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
-  args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  // Use absolute path /bin/sh to avoid OCI runtime PATH resolution issues in nix containers
+  args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
   return args;
 }
 

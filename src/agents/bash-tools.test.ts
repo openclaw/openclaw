@@ -409,7 +409,7 @@ describe("buildDockerExecArgs", () => {
       tty: false,
     });
 
-    expect(args).toContain("sh");
+    expect(args).toContain("/bin/sh");
     expect(args).toContain("-lc");
   });
 

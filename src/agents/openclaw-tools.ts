@@ -37,6 +37,8 @@ export function createOpenClawTools(options?: {
   agentGroupSpace?: string | null;
   agentDir?: string;
   sandboxRoot?: string;
+  /** Allowed read paths for sandbox path validation. */
+  allowedReadPaths?: string[];
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -63,6 +65,7 @@ export function createOpenClawTools(options?: {
         config: options?.config,
         agentDir: options.agentDir,
         sandboxRoot: options?.sandboxRoot,
+        allowedReadPaths: options?.allowedReadPaths,
         modelHasVision: options?.modelHasVision,
       })
     : null;

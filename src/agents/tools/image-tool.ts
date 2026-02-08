@@ -186,6 +186,7 @@ function buildImageContext(prompt: string, base64: string, mimeType: string): Co
 async function resolveSandboxedImagePath(params: {
   sandboxRoot: string;
   imagePath: string;
+  allowedReadPaths?: string[];
 }): Promise<{ resolved: string; rewrittenFrom?: string }> {
   const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
   const filePath = normalize(params.imagePath);
@@ -194,6 +195,7 @@ async function resolveSandboxedImagePath(params: {
       filePath,
       cwd: params.sandboxRoot,
       root: params.sandboxRoot,
+      allowedPaths: params.allowedReadPaths,
     });
     return { resolved: out.resolved };
   } catch (err) {
@@ -209,6 +211,7 @@ async function resolveSandboxedImagePath(params: {
       filePath: candidateRel,
       cwd: params.sandboxRoot,
       root: params.sandboxRoot,
+      allowedPaths: params.allowedReadPaths,
     });
     return { resolved: out.resolved, rewrittenFrom: filePath };
   }
@@ -305,6 +308,7 @@ export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
   sandboxRoot?: string;
+  allowedReadPaths?: string[];
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
 }): AnyAgentTool | null {
@@ -404,6 +408,7 @@ export function createImageTool(options?: {
           ? await resolveSandboxedImagePath({
               sandboxRoot,
               imagePath: resolvedImage,
+              allowedReadPaths: options?.allowedReadPaths,
             })
           : {
               resolved: resolvedImage.startsWith("file://")

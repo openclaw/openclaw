@@ -62,6 +62,7 @@ export type ApplyPatchToolDetails = {
 type ApplyPatchOptions = {
   cwd: string;
   sandboxRoot?: string;
+  allowedReadPaths?: string[];
   signal?: AbortSignal;
 };
 
@@ -72,11 +73,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandboxRoot?: string } = {},
+  options: { cwd?: string; sandboxRoot?: string; allowedReadPaths?: string[] } = {},
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandboxRoot = options.sandboxRoot;
+  const allowedReadPaths = options.allowedReadPaths;
 
   return {
     name: "apply_patch",
@@ -99,6 +101,7 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandboxRoot,
+        allowedReadPaths,
         signal,
       });
 
@@ -221,6 +224,7 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
       root: options.sandboxRoot,
+      allowedPaths: options.allowedReadPaths,
     });
     return {
       resolved: resolved.resolved,

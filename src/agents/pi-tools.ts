@@ -245,7 +245,7 @@ export function createOpenClawCodingTools(options?: {
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
-        return [createSandboxedReadTool(sandboxRoot)];
+        return [createSandboxedReadTool(sandboxRoot, sandbox?.docker.allowedReadPaths)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       return [createOpenClawReadTool(freshReadTool)];
@@ -310,12 +310,18 @@ export function createOpenClawCodingTools(options?: {
       : createApplyPatchTool({
           cwd: sandboxRoot ?? workspaceRoot,
           sandboxRoot: sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
+          // Note: allowedReadPaths intentionally not passed - apply_patch writes files
+          // and allowedReadPaths are meant to be read-only (e.g. bind-mounted skills)
         });
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
       ? allowWorkspaceWrites
-        ? [createSandboxedEditTool(sandboxRoot), createSandboxedWriteTool(sandboxRoot)]
+        ? [
+            // Note: allowedReadPaths not passed to write/edit - those paths are read-only
+            createSandboxedEditTool(sandboxRoot),
+            createSandboxedWriteTool(sandboxRoot),
+          ]
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
@@ -336,6 +342,7 @@ export function createOpenClawCodingTools(options?: {
       agentGroupSpace: options?.groupSpace ?? null,
       agentDir: options?.agentDir,
       sandboxRoot,
+      allowedReadPaths: sandbox?.docker.allowedReadPaths,
       workspaceDir: options?.workspaceDir,
       sandboxed: !!sandbox,
       config: options?.config,

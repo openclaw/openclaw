@@ -251,7 +251,11 @@ export function wrapToolParamNormalization(
   };
 }
 
-function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+function wrapSandboxPathGuard(
+  tool: AnyAgentTool,
+  root: string,
+  allowedPaths?: string[],
+): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -261,26 +265,34 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
-        await assertSandboxPath({ filePath, cwd: root, root });
+        await assertSandboxPath({ filePath, cwd: root, root, allowedPaths });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
   };
 }
 
-export function createSandboxedReadTool(root: string) {
+export function createSandboxedReadTool(root: string, allowedReadPaths?: string[]) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+  return wrapSandboxPathGuard(createOpenClawReadTool(base), root, allowedReadPaths);
 }
 
-export function createSandboxedWriteTool(root: string) {
+export function createSandboxedWriteTool(root: string, allowedReadPaths?: string[]) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
+    root,
+    allowedReadPaths,
+  );
 }
 
-export function createSandboxedEditTool(root: string) {
+export function createSandboxedEditTool(root: string, allowedReadPaths?: string[]) {
   const base = createEditTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
+    root,
+    allowedReadPaths,
+  );
 }
 
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
