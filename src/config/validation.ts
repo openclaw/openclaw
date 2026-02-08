@@ -179,12 +179,23 @@ export function validateConfigObjectWithPlugins(raw: unknown):
 
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
+    const channelIdSet = new Set<string>(CHANNEL_IDS);
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
-        issues.push({
-          path: `plugins.entries.${pluginId}`,
-          message: `plugin not found: ${pluginId}`,
-        });
+        // Check if this is a channel plugin - if so, warn instead of error
+        // This allows auto-enabled channel plugins to work even if not installed yet
+        const isChannelPlugin = channelIdSet.has(pluginId);
+        if (isChannelPlugin) {
+          warnings.push({
+            path: `plugins.entries.${pluginId}`,
+            message: `plugin not found: ${pluginId} (channel plugin not installed - run 'openclaw plugins install ${pluginId}' to install)`,
+          });
+        } else {
+          issues.push({
+            path: `plugins.entries.${pluginId}`,
+            message: `plugin not found: ${pluginId}`,
+          });
+        }
       }
     }
   }

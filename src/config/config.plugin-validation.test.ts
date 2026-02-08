@@ -70,6 +70,30 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("warns (not error) for channel plugins that are not installed", async () => {
+    await withTempHome(async (home) => {
+      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+      vi.resetModules();
+      const { validateConfigObjectWithPlugins } = await import("./config.js");
+      const res = validateConfigObjectWithPlugins({
+        agents: { list: [{ id: "pi" }] },
+        plugins: { enabled: false, entries: { feishu: { enabled: true } } },
+      });
+      // Should be valid (warning, not error)
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.warnings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: "plugins.entries.feishu",
+              message: expect.stringContaining("plugin not found: feishu"),
+            }),
+          ]),
+        );
+      }
+    });
+  });
+
   it("rejects missing plugin ids in allow/deny/slots", async () => {
     await withTempHome(async (home) => {
       process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");

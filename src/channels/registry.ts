@@ -12,6 +12,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "feishu",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -98,12 +99,23 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
   },
+  feishu: {
+    id: "feishu",
+    label: "Feishu",
+    selectionLabel: "Feishu (Lark Open Platform)",
+    detailLabel: "Feishu Bot",
+    docsPath: "/channels/feishu",
+    docsLabel: "feishu",
+    blurb: "Feishu/Lark bot via WebSocket.",
+    systemImage: "message.badge.waveform",
+  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
   "google-chat": "googlechat",
   gchat: "googlechat",
+  lark: "feishu",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
