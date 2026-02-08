@@ -322,6 +322,83 @@
   box-sizing: border-box;
 }
 
+/* Voice input mic button */
+.chat-mic-btn {
+  border-radius: 50% !important;
+  width: 40px;
+  min-width: 40px;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-mic-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-mic-btn--listening {
+  background: var(--color-danger, #ef4444) !important;
+  color: #fff !important;
+  border-color: var(--color-danger, #ef4444) !important;
+  animation: mic-pulse 1.5s infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+
+/* TTS speaker toggle button */
+.chat-tts-btn {
+  border-radius: 50% !important;
+  width: 40px;
+  min-width: 40px;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+}
+
+.chat-tts-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-tts-btn--active {
+  opacity: 1;
+  color: var(--color-accent, #667eea) !important;
+}
+
+.chat-tts-btn--speaking {
+  animation: tts-pulse 1s infinite;
+}
+
+@keyframes tts-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Interim voice transcription */
+.chat-voice-interim {
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--color-muted, #888);
+  font-style: italic;
+}
+
 /* Chat controls - moved to content-header area, left aligned */
 .chat-controls {
   display: flex;
