@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ObaBlock, ObaVerificationResult } from "../security/oba/types.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -23,6 +24,8 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  oba?: ObaBlock;
+  obaVerification?: ObaVerificationResult;
 };
 
 export type PluginManifestRegistry = {
@@ -103,6 +106,8 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    oba: params.manifest.oba,
+    obaVerification: params.manifest.obaVerification,
   };
 }
 

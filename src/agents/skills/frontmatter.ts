@@ -1,5 +1,6 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
+import type { ObaBlock, ObaVerificationResult } from "../../security/oba/types.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -9,6 +10,7 @@ import type {
 } from "./types.js";
 import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
+import { classifyObaOffline } from "../../security/oba/extract.js";
 import { parseBooleanValue } from "../../utils/boolean.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -165,6 +167,26 @@ export function resolveSkillInvocationPolicy(
       false,
     ),
   };
+}
+
+export function resolveObaFromSkillMetadata(frontmatter: ParsedSkillFrontmatter): {
+  oba?: ObaBlock;
+  obaVerification?: ObaVerificationResult;
+} {
+  const raw = getFrontmatterValue(frontmatter, "metadata");
+  if (!raw) {
+    return { obaVerification: { status: "unsigned" } };
+  }
+  try {
+    const parsed = JSON5.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return { obaVerification: { status: "unsigned" } };
+    }
+    const { oba, verification } = classifyObaOffline(parsed.oba);
+    return { oba, obaVerification: verification };
+  } catch {
+    return { obaVerification: { status: "unsigned" } };
+  }
 }
 
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { ObaBlock, ObaVerificationResult } from "../security/oba/types.js";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
@@ -135,6 +136,9 @@ function createPluginRecord(params: {
   workspaceDir?: string;
   enabled: boolean;
   configSchema: boolean;
+  manifestPath?: string;
+  oba?: ObaBlock;
+  obaVerification?: ObaVerificationResult;
 }): PluginRecord {
   return {
     id: params.id,
@@ -159,6 +163,9 @@ function createPluginRecord(params: {
     configSchema: params.configSchema,
     configUiHints: undefined,
     configJsonSchema: undefined,
+    manifestPath: params.manifestPath,
+    oba: params.oba,
+    obaVerification: params.obaVerification,
   };
 }
 
@@ -245,6 +252,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         workspaceDir: candidate.workspaceDir,
         enabled: false,
         configSchema: Boolean(manifestRecord.configSchema),
+        manifestPath: manifestRecord.manifestPath,
+        oba: manifestRecord.oba,
+        obaVerification: manifestRecord.obaVerification,
       });
       record.status = "disabled";
       record.error = `overridden by ${existingOrigin} plugin`;
@@ -264,6 +274,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
       configSchema: Boolean(manifestRecord.configSchema),
+      manifestPath: manifestRecord.manifestPath,
+      oba: manifestRecord.oba,
+      obaVerification: manifestRecord.obaVerification,
     });
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;

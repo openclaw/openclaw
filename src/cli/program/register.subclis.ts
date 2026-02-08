@@ -182,6 +182,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "oba",
+    description: "OpenBotAuth signing tools",
+    register: async (program) => {
+      const mod = await import("../oba-cli.js");
+      mod.registerObaCli(program);
+    },
+  },
+  {
     name: "plugins",
     description: "Plugin management",
     register: async (program) => {

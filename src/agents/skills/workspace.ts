@@ -19,6 +19,7 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import {
   parseFrontmatter,
+  resolveObaFromSkillMetadata,
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
@@ -178,11 +179,14 @@ function loadSkillEntries(
     } catch {
       // ignore malformed skills
     }
+    const obaResult = resolveObaFromSkillMetadata(frontmatter);
     return {
       skill,
       frontmatter,
       metadata: resolveOpenClawMetadata(frontmatter),
       invocation: resolveSkillInvocationPolicy(frontmatter),
+      oba: obaResult.oba,
+      obaVerification: obaResult.obaVerification,
     };
   });
   return skillEntries;

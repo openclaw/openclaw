@@ -1,4 +1,5 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { ObaBlock, ObaVerificationResult } from "../../security/oba/types.js";
 
 export type SkillInstallSpec = {
   id?: string;
@@ -68,6 +69,8 @@ export type SkillEntry = {
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  oba?: ObaBlock;
+  obaVerification?: ObaVerificationResult;
 };
 
 export type SkillEligibilityContext = {
