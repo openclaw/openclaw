@@ -135,13 +135,16 @@ export async function detectGlobalInstallManagerByPresence(
 }
 
 export function globalInstallArgs(manager: GlobalInstallManager, spec: string): string[] {
+  // SECURITY: Always use --ignore-scripts to prevent postinstall/preinstall RCE
+  // during global package updates. A compromised upstream package could execute
+  // arbitrary code via lifecycle scripts. (VULN-215)
   if (manager === "pnpm") {
-    return ["pnpm", "add", "-g", spec];
+    return ["pnpm", "add", "-g", spec, "--ignore-scripts"];
   }
   if (manager === "bun") {
-    return ["bun", "add", "-g", spec];
+    return ["bun", "add", "-g", spec, "--ignore-scripts"];
   }
-  return ["npm", "i", "-g", spec];
+  return ["npm", "i", "-g", spec, "--ignore-scripts"];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

@@ -121,7 +121,7 @@ describe("runGatewayUpdate", () => {
         stdout: `${stableTag}\n${betaTag}\n`,
       },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
-      "pnpm install": { stdout: "" },
+      "pnpm install --ignore-scripts": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
       [`${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`]: {
@@ -186,7 +186,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm root -g") {
         return { stdout: nodeModules, stderr: "", code: 0 };
       }
-      if (key === "npm i -g openclaw@latest") {
+      if (key === "npm i -g openclaw@latest --ignore-scripts") {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
@@ -210,7 +210,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === "npm i -g openclaw@latest")).toBe(true);
+    expect(calls.some((call) => call === "npm i -g openclaw@latest --ignore-scripts")).toBe(true);
   });
 
   it("uses update channel for global npm installs when tag is omitted", async () => {
@@ -233,7 +233,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm root -g") {
         return { stdout: nodeModules, stderr: "", code: 0 };
       }
-      if (key === "npm i -g openclaw@beta") {
+      if (key === "npm i -g openclaw@beta --ignore-scripts") {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
@@ -258,7 +258,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === "npm i -g openclaw@beta")).toBe(true);
+    expect(calls.some((call) => call === "npm i -g openclaw@beta --ignore-scripts")).toBe(true);
   });
 
   it("cleans stale npm rename dirs before global update", async () => {
@@ -285,7 +285,7 @@ describe("runGatewayUpdate", () => {
       if (key === "pnpm root -g") {
         return { stdout: "", stderr: "", code: 1 };
       }
-      if (key === "npm i -g openclaw@latest") {
+      if (key === "npm i -g openclaw@latest --ignore-scripts") {
         stalePresentAtInstall = await pathExists(staleDir);
         return { stdout: "ok", stderr: "", code: 0 };
       }
@@ -323,7 +323,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm root -g") {
         return { stdout: nodeModules, stderr: "", code: 0 };
       }
-      if (key === "npm i -g openclaw@beta") {
+      if (key === "npm i -g openclaw@beta --ignore-scripts") {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
@@ -348,7 +348,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === "npm i -g openclaw@beta")).toBe(true);
+    expect(calls.some((call) => call === "npm i -g openclaw@beta --ignore-scripts")).toBe(true);
   });
 
   it("updates global bun installs when detected", async () => {
@@ -379,7 +379,7 @@ describe("runGatewayUpdate", () => {
         if (key === "pnpm root -g") {
           return { stdout: "", stderr: "", code: 1 };
         }
-        if (key === "bun add -g openclaw@latest") {
+        if (key === "bun add -g openclaw@latest --ignore-scripts") {
           await fs.writeFile(
             path.join(pkgRoot, "package.json"),
             JSON.stringify({ name: "openclaw", version: "2.0.0" }),
@@ -400,7 +400,9 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
+      expect(calls.some((call) => call === "bun add -g openclaw@latest --ignore-scripts")).toBe(
+        true,
+      );
     } finally {
       if (oldBunInstall === undefined) {
         delete process.env.BUN_INSTALL;
@@ -601,5 +603,125 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("ui-assets-missing");
+  });
+});
+
+describe("VULN-215: update runner uses --ignore-scripts for supply chain security", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-security-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("global npm installs use --ignore-scripts to prevent postinstall RCE", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      // Accept the install command with --ignore-scripts
+      if (key === "npm i -g openclaw@latest --ignore-scripts") {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: pkgRoot,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    // Verify --ignore-scripts is present in the install command
+    const npmInstallCall = calls.find((call) => call.startsWith("npm i -g openclaw@"));
+    expect(npmInstallCall).toBe("npm i -g openclaw@latest --ignore-scripts");
+  });
+
+  it("global bun installs use --ignore-scripts to prevent postinstall RCE", async () => {
+    const oldBunInstall = process.env.BUN_INSTALL;
+    const bunInstall = path.join(tempDir, "bun-install");
+    process.env.BUN_INSTALL = bunInstall;
+
+    try {
+      const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
+      const pkgRoot = path.join(bunGlobalRoot, "openclaw");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(pkgRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
+
+      const calls: string[] = [];
+      const runCommand = async (argv: string[]) => {
+        const key = argv.join(" ");
+        calls.push(key);
+        if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+          return { stdout: "", stderr: "not a git repository", code: 128 };
+        }
+        if (key === "npm root -g") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (key === "pnpm root -g") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        // Accept the install command with --ignore-scripts
+        if (key === "bun add -g openclaw@latest --ignore-scripts") {
+          await fs.writeFile(
+            path.join(pkgRoot, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+            "utf-8",
+          );
+          return { stdout: "ok", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
+
+      const result = await runGatewayUpdate({
+        cwd: pkgRoot,
+        runCommand: async (argv, _options) => runCommand(argv),
+        timeoutMs: 5000,
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.mode).toBe("bun");
+      // Verify --ignore-scripts is present in the install command
+      const bunInstallCall = calls.find((call) => call.startsWith("bun add -g openclaw@"));
+      expect(bunInstallCall).toBe("bun add -g openclaw@latest --ignore-scripts");
+    } finally {
+      if (oldBunInstall === undefined) {
+        delete process.env.BUN_INSTALL;
+      } else {
+        process.env.BUN_INSTALL = oldBunInstall;
+      }
+    }
   });
 });

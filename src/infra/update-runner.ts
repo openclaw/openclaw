@@ -341,13 +341,16 @@ function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args
 }
 
 function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
+  // SECURITY: Always use --ignore-scripts to prevent postinstall/preinstall RCE
+  // during updates. Malicious packages could execute arbitrary code via lifecycle
+  // scripts during dependency installation. (VULN-215)
   if (manager === "pnpm") {
-    return ["pnpm", "install"];
+    return ["pnpm", "install", "--ignore-scripts"];
   }
   if (manager === "bun") {
-    return ["bun", "install"];
+    return ["bun", "install", "--ignore-scripts"];
   }
-  return ["npm", "install"];
+  return ["npm", "install", "--ignore-scripts"];
 }
 
 function normalizeTag(tag?: string) {
