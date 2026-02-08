@@ -62,16 +62,19 @@ describe("normalizeInboundTextNewlines", () => {
     expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
   });
 
-  it("decodes literal \\n to newlines when no real newlines exist", () => {
-    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\nb");
+  it("preserves literal backslash-n sequences (Windows paths)", () => {
+    // Windows paths like C:\Work\nxxx should NOT have \n converted to newlines
+    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\\nb");
+    expect(normalizeInboundTextNewlines("C:\\Work\\nxxx")).toBe("C:\\Work\\nxxx");
   });
 });
 
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
-      Body: "a\\nb\r\nc",
-      RawBody: "raw\\nline",
+      // Use actual CRLF for newline normalization test, not literal \n sequences
+      Body: "a\r\nb\r\nc",
+      RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
       GroupSubject: "Test",
@@ -85,6 +88,19 @@ describe("finalizeInboundContext", () => {
     expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("preserves literal backslash-n in Windows paths", () => {
+    const ctx: MsgContext = {
+      Body: "C:\\Work\\nxxx\\README.md",
+      RawBody: "raw",
+      ChatType: "direct",
+      From: "web:user",
+    };
+
+    const out = finalizeInboundContext(ctx);
+    expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
