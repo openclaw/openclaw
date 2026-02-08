@@ -227,7 +227,7 @@ Flow:
 
 - The Gateway runs locally (same machine) or a node host runs on the browser machine.
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
-- You click the **OpenClaw Browser Relay** extension icon on a tab to attach (it does not auto-attach).
+- You click the **OpenClaw Browser Relay** extension icon on a tab to attach, or use the CLI launcher to auto-attach.
 - The agent controls that tab via the normal `browser` tool, by selecting the right profile.
 
 If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
@@ -251,6 +251,13 @@ openclaw browser extension install
 - Chrome → `chrome://extensions` → enable “Developer mode”
 - “Load unpacked” → select the directory printed by `openclaw browser extension path`
 - Pin the extension, then click it on the tab you want to control (badge shows `ON`).
+
+Optional: auto-attach via CLI:
+
+```bash
+openclaw browser relay launch
+openclaw browser relay launch https://example.com
+```
 
 2. Use it:
 

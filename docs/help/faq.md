@@ -1150,7 +1150,7 @@ Full guide (including remote Gateway + security notes): [Chrome extension](/tool
 
 If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need anything extra.
 If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
-You still need to click the extension button on the tab you want to control (it doesn't auto-attach).
+You still need to click the extension button on the tab you want to control, or use `openclaw browser relay launch` to auto-attach a launch tab.
 
 ## Sandboxing and memory
 
