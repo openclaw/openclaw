@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
@@ -69,7 +70,33 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       return null;
     }
 
-    const resolvedPath = realpathSync(geminiPath);
+    let resolvedPath = realpathSync(geminiPath);
+
+    // If realpath points to 'mise' (or 'rtx'), it's a shim.
+    // Execute `mise which gemini` to get the real path.
+    if (resolvedPath.endsWith("/mise") || resolvedPath.endsWith("/rtx")) {
+      const misePath = findInPath("mise");
+      const rtxPath = findInPath("rtx");
+      let actualCommand = "";
+
+      if (misePath) {
+        actualCommand = `"${misePath}" which gemini`;
+      } else if (rtxPath) {
+        actualCommand = `"${rtxPath}" which gemini`;
+      }
+
+      if (actualCommand) {
+        try {
+          const actualGeminiPath = execSync(actualCommand, { encoding: "utf-8" }).trim();
+          if (actualGeminiPath) {
+            resolvedPath = realpathSync(actualGeminiPath);
+          }
+        } catch {
+          // Fallback to original resolvedPath if shim resolution fails
+        }
+      }
+    }
+
     const geminiCliDir = dirname(dirname(resolvedPath));
 
     const searchPaths = [
