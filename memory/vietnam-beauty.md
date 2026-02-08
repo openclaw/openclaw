@@ -630,13 +630,13 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - 커밋: `f154d8e`, `66e1098`, `11ffce1`, `f1c5b68`
 - 문서: D023 (Merchant Center 가이드), I033 (구현 기록)
 
-### UCP Admin Phase A 구현 (2026-02-08)
-- 3개 서브에이전트 병렬 실행으로 구현
-- **백엔드**: UCP 통계 API + 이벤트 API + Feed 헬스체크 API + Railway 배포
-- **프론트엔드 주문**: 타입 + API + 훅 + 주문 페이지 + 상세 패널 + 상태 배지 + 타임라인
-- **프론트엔드 대시보드**: UCP 위젯 + 사이드바 메뉴 추가 (7→9개)
-- 커밋 13개, 전부 push 완료
-- Admin 메뉴: 🛒 UCP 주문 + 📡 UCP Feed 추가
+### UCP Admin 모듈 구현 (2026-02-08) — Phase A~C 전체 완료
+- **Phase A** (3 서브에이전트 병렬): 백엔드 API 3개 + 주문 모듈 + 대시보드 위젯 (13 커밋)
+- **Phase B** (서브에이전트): Feed 관리 페이지 — Overview/Preview/StructuredData/HealthCheck/Conversational (6 커밋)
+- **Phase C** (서브에이전트): UCP 설정 탭 + I034 문서 + STATUS 업데이트 (4 커밋)
+- **Admin 메뉴 7→9개**: 🛒 UCP 주문 + 📡 UCP Feed 추가
+- **총 ~25개 커밋** push 완료
+- 문서: D024 (PRD), D025 (설계), D026 (개발계획), I034 (구현 기록)
 
 ### 지니 액션 필요 (Merchant Center)
 - [ ] Google Merchant Center 계정 생성 (베트남 시장)
@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `0516ac9 docs: update D018 with UCP order process (02-08)`
 - `b4849ab docs: update STATUS with UCP Admin Phase A~C completion (02-08)`
 - `64a6dad docs: I034 UCP Admin implementation record (02-08)`
 - `3974d9e feat(web): add UCP Feed management page (02-08)`
 - `373e28a feat(web): add UCP tab to settings page (02-08)`
-- `6eeb7e2 feat(web): add conversational metadata preview (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
