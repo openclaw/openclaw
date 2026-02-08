@@ -82,6 +82,8 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
+  /** Surface tool failure fallback message when no user-facing reply exists (default: true). */
+  toolErrorFallback?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

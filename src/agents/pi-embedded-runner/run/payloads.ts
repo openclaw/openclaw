@@ -190,7 +190,8 @@ export function buildEmbeddedRunPayloads(params: {
     });
   }
 
-  if (params.lastToolError) {
+  const toolErrorFallbackEnabled = params.config?.messages?.toolErrorFallback !== false;
+  if (params.lastToolError && toolErrorFallbackEnabled) {
     const lastAssistantHasToolCalls =
       Array.isArray(params.lastAssistant?.content) &&
       params.lastAssistant?.content.some((block) =>

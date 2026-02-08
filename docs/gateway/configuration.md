@@ -1511,6 +1511,7 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
     removeAckAfterReply: false,
+    toolErrorFallback: true,
   },
 }
 ```
@@ -1586,6 +1587,10 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 
 `removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
 (Slack/Discord/Telegram/Google Chat only). Default: `false`.
+
+`toolErrorFallback` controls whether OpenClaw emits a user-facing tool failure
+fallback (e.g., `⚠️ ... failed`) when a tool errors and no other reply exists.
+Default: `true`. Set to `false` to suppress these messages.
 
 #### `messages.tts`
 
