@@ -136,6 +136,12 @@ function resolveSubagentWaitTimeoutMs(
   cfg: ReturnType<typeof loadConfig>,
   runTimeoutSeconds?: number,
 ) {
+  // sessions_spawn omits `agent.timeout` when runTimeoutSeconds is 0,
+  // which makes the spawned run use the default agent timeout. Mirror that
+  // behavior for the follow-up `agent.wait` call to avoid huge wait windows.
+  if (runTimeoutSeconds === 0) {
+    return resolveAgentTimeoutMs({ cfg });
+  }
   return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds });
 }
 

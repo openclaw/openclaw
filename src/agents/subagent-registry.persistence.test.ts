@@ -2,15 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 const noop = () => {};
+const callGatewayMock = vi.fn(async () => ({
+  status: "ok",
+  startedAt: 111,
+  endedAt: 222,
+}));
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({
-    status: "ok",
-    startedAt: 111,
-    endedAt: 222,
-  })),
+  callGateway: callGatewayMock,
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -28,6 +31,7 @@ describe("subagent registry persistence", () => {
 
   afterEach(async () => {
     announceSpy.mockClear();
+    callGatewayMock.mockClear();
     vi.resetModules();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
@@ -98,6 +102,42 @@ describe("subagent registry persistence", () => {
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
     expect(first.requesterOrigin?.channel).toBe("whatsapp");
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
+  });
+
+  it("uses default wait timeout when runTimeoutSeconds is 0", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    vi.resetModules();
+    const mod = await import("./subagent-registry.js");
+
+    mod.registerSubagentRun({
+      runId: "run-timeout-zero",
+      childSessionKey: "agent:main:subagent:timeout-zero",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait",
+      cleanup: "keep",
+      runTimeoutSeconds: 0,
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const waitCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string } | undefined)?.method === "agent.wait",
+    )?.[0] as
+      | {
+          method?: string;
+          params?: { runId?: string; timeoutMs?: number };
+          timeoutMs?: number;
+        }
+      | undefined;
+
+    expect(waitCall?.method).toBe("agent.wait");
+    expect(waitCall?.params?.runId).toBe("run-timeout-zero");
+    const expectedWaitTimeoutMs = resolveAgentTimeoutMs({ cfg: loadConfig() });
+    expect(waitCall?.params?.timeoutMs).toBe(expectedWaitTimeoutMs);
+    expect(waitCall?.timeoutMs).toBe(expectedWaitTimeoutMs + 10_000);
   });
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
