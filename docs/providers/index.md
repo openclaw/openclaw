@@ -1,9 +1,9 @@
 ---
-summary: 'Model providers (LLMs) supported by OpenClaw'
+summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
-title: 'Model Providers'
+title: "Model Providers"
 ---
 
 # Model Providers
@@ -29,7 +29,7 @@ See [Venice AI](/providers/venice).
 
 ```json5
 {
-  agents: { defaults: { model: { primary: 'anthropic/claude-opus-4-6' } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
