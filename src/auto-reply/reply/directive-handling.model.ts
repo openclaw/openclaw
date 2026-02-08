@@ -363,6 +363,20 @@ export function resolveModelSelectionFromDirective(params: {
           explicit.ref.model === params.defaultModel,
         ...(explicit.alias ? { alias: explicit.alias } : {}),
       };
+    } else {
+      // Allow any model from explicitly configured providers (e.g. ollama)
+      // even if not in the curated catalog
+      const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+      if (configuredProviders[normalizeProviderId(explicit.ref.provider)] != null) {
+        modelSelection = {
+          provider: explicit.ref.provider,
+          model: explicit.ref.model,
+          isDefault:
+            explicit.ref.provider === params.defaultProvider &&
+            explicit.ref.model === params.defaultModel,
+          ...(explicit.alias ? { alias: explicit.alias } : {}),
+        };
+      }
     }
   }
 
