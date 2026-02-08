@@ -43,17 +43,25 @@ function captureEnv(): EnvSnapshot {
   };
 }
 
+function restoreEnvVar(key: keyof NodeJS.ProcessEnv, value: string | undefined): void {
+  if (value == null) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
 function restoreEnv(prev: EnvSnapshot): void {
-  process.env.HOME = prev.home;
-  process.env.OPENCLAW_STATE_DIR = prev.stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-  process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-  process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
-  process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-  process.env.OPENCLAW_GATEWAY_PASSWORD = prev.password;
-  process.env.OPENCLAW_DISABLE_CONFIG_CACHE = prev.disableConfigCache;
+  restoreEnvVar("HOME", prev.home);
+  restoreEnvVar("OPENCLAW_STATE_DIR", prev.stateDir);
+  restoreEnvVar("OPENCLAW_CONFIG_PATH", prev.configPath);
+  restoreEnvVar("OPENCLAW_SKIP_CHANNELS", prev.skipChannels);
+  restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", prev.skipGmail);
+  restoreEnvVar("OPENCLAW_SKIP_CRON", prev.skipCron);
+  restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", prev.skipCanvas);
+  restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", prev.token);
+  restoreEnvVar("OPENCLAW_GATEWAY_PASSWORD", prev.password);
+  restoreEnvVar("OPENCLAW_DISABLE_CONFIG_CACHE", prev.disableConfigCache);
 }
 
 async function withOnboardEnv(
