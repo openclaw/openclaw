@@ -552,7 +552,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    const threadRootId = post.root_id?.trim() || (kind !== "dm" ? post.id : undefined);
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
       threadId: threadRootId,
