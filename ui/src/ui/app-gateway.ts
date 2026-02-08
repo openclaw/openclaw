@@ -89,6 +89,16 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   if (!defaults?.mainSessionKey) {
     return;
   }
+
+  // If session was explicitly set from URL, don't override with defaults
+  // This ensures direct links to specific sessions work correctly
+  const hostWithFlag = host as GatewayHost & { sessionFromUrl?: boolean };
+  if (hostWithFlag.sessionFromUrl) {
+    // Clear the flag after first connection so future reconnects can apply defaults if needed
+    hostWithFlag.sessionFromUrl = false;
+    return;
+  }
+
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,

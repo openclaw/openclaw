@@ -119,6 +119,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
     const session = sessionRaw.trim();
     if (session) {
       host.sessionKey = session;
+      // Mark that this session was explicitly set from URL to prevent override by defaults
+      (host as { sessionFromUrl?: boolean }).sessionFromUrl = true;
       applySettings(host, {
         ...host.settings,
         sessionKey: session,
