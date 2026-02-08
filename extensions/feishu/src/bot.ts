@@ -200,7 +200,7 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
     return false;
   }
   if (!botOpenId) {
-    return mentions.length > 0;
+    return false;
   }
   return mentions.some((m) => m.id.open_id === botOpenId);
 }

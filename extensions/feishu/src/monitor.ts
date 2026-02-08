@@ -42,7 +42,9 @@ async function monitorSingleAccount(params: {
 
   // Fetch bot open_id
   const botOpenId = await fetchBotOpenId(account);
-  botOpenIds.set(accountId, botOpenId ?? "");
+  if (botOpenId) {
+    botOpenIds.set(accountId, botOpenId);
+  }
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
   const connectionMode = account.config.connectionMode ?? "websocket";
