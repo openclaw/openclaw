@@ -609,11 +609,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `3b5ce76 docs: I032 UCP Phase 2 implementation record + STATUS update (02-08)`
 - `881bfe3 fix(ucp): fix order status update — JSONB mutation + shipping type (02-08)`
 - `de06981 feat(ucp): Phase 2 — checkout, payment, orders, events (02-08)`
 - `1982d09 docs(STATUS): add UCP Phase 1 to development overview — architecture, integrations, doc index, next steps (02-08)`
 - `e58291c docs(I031): UCP Phase 1 implementation record — task-by-task details, schema mapping, deployment verification (02-08)`
-- `dfec940 feat(ucp): Phase 1 — UCP Discovery + Product Catalog integration (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
