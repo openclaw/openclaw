@@ -15,6 +15,34 @@ import {
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
+    id: "memorySearch->agents.defaults.memorySearch",
+    describe: "Move top-level memorySearch to agents.defaults.memorySearch",
+    apply: (raw, changes) => {
+      const legacyMemorySearch = getRecord(raw.memorySearch);
+      if (!legacyMemorySearch) {
+        return;
+      }
+
+      const agents = ensureRecord(raw, "agents");
+      const defaults = ensureRecord(agents, "defaults");
+      const existing = getRecord(defaults.memorySearch);
+      if (!existing) {
+        defaults.memorySearch = legacyMemorySearch;
+        changes.push("Moved memorySearch → agents.defaults.memorySearch.");
+      } else {
+        mergeMissing(existing, legacyMemorySearch);
+        defaults.memorySearch = existing;
+        changes.push(
+          "Merged memorySearch → agents.defaults.memorySearch (preserved explicit agents.defaults overrides).",
+        );
+      }
+
+      agents.defaults = defaults;
+      raw.agents = agents;
+      delete raw.memorySearch;
+    },
+  },
+  {
     id: "auth.anthropic-claude-cli-mode-oauth",
     describe: "Switch anthropic:claude-cli auth profile mode to oauth",
     apply: (raw, changes) => {

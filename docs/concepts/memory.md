@@ -85,6 +85,8 @@ Defaults:
 
 - Enabled by default.
 - Watches memory files for changes (debounced).
+- Configure memory search under `agents.defaults.memorySearch` (not top-level
+  `memorySearch`).
 - Uses remote embeddings by default. If `memorySearch.provider` is not set, OpenClaw auto-selects:
   1. `local` if a `memorySearch.local.modelPath` is configured and the file exists.
   2. `openai` if an OpenAI key can be resolved.
