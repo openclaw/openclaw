@@ -39,6 +39,7 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { sanitizeTranscriptEntry } from "../transcript-sanitize.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -133,7 +134,13 @@ function appendAssistantTranscriptMessage(params: {
   };
 
   try {
-    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      const sanitized = sanitizeTranscriptEntry(transcriptPath, transcriptEntry, {
+        // Hard cap for a single JSONL line; prevents session bloat + prompt blowups.
+        // 128KB is conservative and keeps UI/history healthy.
+        maxEntryBytes: 128 * 1024,
+        previewChars: 2048,
+      }).entry;
+      fs.appendFileSync(transcriptPath, `${JSON.stringify(sanitized)}\n`, "utf-8");
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -673,7 +680,13 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Append to transcript file
     try {
-      fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      const sanitized = sanitizeTranscriptEntry(transcriptPath, transcriptEntry, {
+        // Hard cap for a single JSONL line; prevents session bloat + prompt blowups.
+        // 128KB is conservative and keeps UI/history healthy.
+        maxEntryBytes: 128 * 1024,
+        previewChars: 2048,
+      }).entry;
+      fs.appendFileSync(transcriptPath, `${JSON.stringify(sanitized)}\n`, "utf-8");
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
       respond(
