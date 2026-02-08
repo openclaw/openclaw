@@ -256,7 +256,7 @@ const FIELD_LABELS: Record<string, string> = {
     "Memory Search Hybrid Candidate Multiplier",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
-  memory: "Memory",
+  "memory": "Memory",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
   "memory.qmd.command": "QMD Binary",
