@@ -165,4 +165,91 @@ describe("agents_list", () => {
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
   });
+
+  it("includes description when configured", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            name: "Main Agent",
+            description: "Orchestrates all sub-agents",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            name: "Research Agent",
+            description: "Web research, market analysis, data gathering",
+          },
+        ],
+      },
+    };
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+    }).find((candidate) => candidate.name === "agents_list");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
+
+    const result = await tool.execute("call5", {});
+    const agents = (
+      result.details as {
+        agents?: Array<{ id: string; name?: string; description?: string }>;
+      }
+    ).agents;
+    expect(agents).toHaveLength(2);
+    const mainAgent = agents?.find((agent) => agent.id === "main");
+    expect(mainAgent?.name).toBe("Main Agent");
+    expect(mainAgent?.description).toBe("Orchestrates all sub-agents");
+    const researchAgent = agents?.find((agent) => agent.id === "research");
+    expect(researchAgent?.name).toBe("Research Agent");
+    expect(researchAgent?.description).toBe("Web research, market analysis, data gathering");
+  });
+
+  it("omits description when not configured", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            name: "Main Agent",
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+          {
+            id: "nodesc",
+            name: "No Description Agent",
+          },
+        ],
+      },
+    };
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+    }).find((candidate) => candidate.name === "agents_list");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
+
+    const result = await tool.execute("call6", {});
+    const agents = (
+      result.details as {
+        agents?: Array<{ id: string; description?: string }>;
+      }
+    ).agents;
+    const nodescAgent = agents?.find((agent) => agent.id === "nodesc");
+    expect(nodescAgent?.description).toBeUndefined();
+  });
 });
