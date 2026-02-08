@@ -1,0 +1,1594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Line Balancing – Double End M12 Cable Assembly 5 Pole Female 5M</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #273449;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent2: #818cf8;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --orange: #fb923c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    font-size: 14px;
+  }
+  header {
+    background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    text-align: center;
+  }
+  header h1 { font-size: 1.4rem; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  header p { color: var(--muted); font-size: 0.85rem; }
+  .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
+  .tab-btn {
+    padding: 10px 20px; background: var(--surface); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 8px 8px 0 0; cursor: pointer; font-size: 0.85rem;
+    font-weight: 600; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: var(--surface2); color: var(--text); }
+  .tab-btn.active { background: var(--accent); color: #0f172a; border-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Section */
+  .section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 1rem; font-weight: 700; color: var(--accent);
+    margin-bottom: 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title .badge {
+    font-size: 0.7rem; background: var(--accent); color: #0f172a;
+    padding: 2px 8px; border-radius: 4px;
+  }
+
+  /* Form table */
+  .form-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .form-table th {
+    background: var(--surface2); color: var(--accent); padding: 10px 8px;
+    text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+    white-space: nowrap; position: sticky; top: 0; z-index: 10;
+  }
+  .form-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .form-table tr:hover td { background: rgba(56,189,248,0.05); }
+  .form-table input, .form-table select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 8px; font-size: 0.8rem;
+  }
+  .form-table input:focus, .form-table select:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .form-table input[type="number"] { text-align: right; }
+  .form-table .readonly {
+    background: var(--surface2); color: var(--muted);
+    border-color: transparent; text-align: right;
+  }
+  .form-table .row-num { color: var(--muted); text-align: center; width: 30px; }
+  .form-table .actions { white-space: nowrap; }
+  .form-table .actions button {
+    padding: 4px 8px; margin: 0 2px; font-size: 0.75rem; border-radius: 4px;
+  }
+  .btn-delete { background: var(--red); color: #fff; border: none; cursor: pointer; }
+  .btn-up, .btn-down { background: var(--surface2); color: var(--text); border: 1px solid var(--border); cursor: pointer; }
+  .btn-add {
+    margin-top: 12px; padding: 8px 16px; background: var(--green); color: #0f172a;
+    border: none; border-radius: 6px; cursor: pointer; font-weight: 600;
+  }
+  .table-scroll { max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+  /* Controls */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding: 16px; background: var(--surface); border-radius: 12px;
+    border: 1px solid var(--border); margin-bottom: 20px;
+  }
+  .control-group { display: flex; align-items: center; gap: 8px; }
+  .control-group label { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+  .control-group select, .control-group input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 0.8rem;
+  }
+  .control-group input[type="range"] { width: 100px; accent-color: var(--accent); }
+  button {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #0f172a; font-weight: 600; border: none; border-radius: 6px;
+    padding: 8px 16px; cursor: pointer; font-size: 0.8rem;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(56,189,248,0.3); }
+  button:active { transform: translateY(0); }
+  button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* KPI Cards */
+  .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .kpi-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; text-align: center;
+  }
+  .kpi-card .kpi-value { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+  .kpi-card .kpi-label { font-size: 0.65rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .kpi-card.highlight { border-color: var(--green); background: rgba(74,222,128,0.1); }
+  .kpi-card.highlight .kpi-value { color: var(--green); }
+  .kpi-card.cost { border-color: var(--orange); background: rgba(251,146,60,0.1); }
+  .kpi-card.cost .kpi-value { color: var(--orange); }
+
+  /* Bar chart */
+  .chart-wrapper { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow-x: auto; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 280px; padding-top: 20px; position: relative; min-width: fit-content; }
+  .bar-chart .grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); pointer-events: none; }
+  .bar-chart .grid-label { position: absolute; left: -4px; transform: translateX(-100%); color: var(--muted); font-size: 0.65rem; }
+  .station-col { flex: 1; min-width: 70px; max-width: 120px; display: flex; flex-direction: column; align-items: center; }
+  .station-bar-stack { width: 100%; display: flex; flex-direction: column-reverse; align-items: stretch; }
+  .task-segment {
+    border-radius: 4px; margin-bottom: 2px; display: flex; align-items: center; justify-content: center;
+    font-size: 0.6rem; font-weight: 600; color: #fff; cursor: pointer; position: relative;
+    transition: height 0.6s ease;
+  }
+  .task-segment:hover { filter: brightness(1.2); z-index: 10; }
+  .task-segment .tooltip {
+    display: none; position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%); background: #0f172a; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px; font-size: 0.7rem; color: var(--text);
+    white-space: nowrap; z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 200px; text-align: left;
+  }
+  .task-segment:hover .tooltip { display: block; }
+  .station-label { margin-top: 6px; font-size: 0.7rem; color: var(--muted); font-weight: 600; }
+  .station-time { font-size: 0.65rem; color: var(--accent); font-weight: 700; }
+  .takt-line { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--red); z-index: 5; }
+  .takt-label { position: absolute; right: 0; transform: translateY(-100%); background: var(--red); color: #fff; font-size: 0.6rem; font-weight: 700; padding: 2px 6px; border-radius: 4px 4px 0 0; }
+
+  /* Resource cards */
+  .resource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .resource-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .resource-card:hover { border-color: var(--accent); }
+  .resource-card .rc-header { display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .resource-card .rc-title { font-size: 0.8rem; font-weight: 700; color: var(--accent); }
+  .resource-card .rc-time { font-size: 0.7rem; color: var(--muted); }
+  .resource-card .rc-tasks { font-size: 0.65rem; color: var(--muted); margin-bottom: 8px; max-height: 50px; overflow-y: auto; line-height: 1.4; }
+  .resource-card .rc-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .resource-card .rc-row-label { font-size: 0.75rem; color: var(--text); font-weight: 600; }
+  .rc-counter { display: flex; align-items: center; gap: 4px; }
+  .rc-counter button { width: 24px; height: 24px; padding: 0; font-size: 0.9rem; border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+  .rc-counter input { width: 50px; text-align: center; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.8rem; }
+  .rc-machines { margin-top: 4px; }
+  .rc-machine-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .rc-machine-row select { flex: 1; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.7rem; }
+  .rc-machine-row input { width: 36px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px; font-size: 0.7rem; text-align: center; }
+  .rc-machine-row button.rc-remove { width: 20px; height: 20px; padding: 0; font-size: 0.7rem; background: var(--red); color: #fff; border-radius: 4px; }
+  .rc-add-machine { margin-top: 4px; font-size: 0.65rem; padding: 4px 8px; background: var(--surface); color: var(--accent); border: 1px dashed var(--accent); border-radius: 4px; cursor: pointer; width: 100%; }
+  .rc-effective { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .rc-effective .rc-eff-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; }
+  .rc-effective .rc-eff-value { font-size: 0.9rem; font-weight: 700; }
+
+  /* Two column layout */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  @media (max-width: 1000px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Gantt */
+  .gantt-row { display: flex; align-items: center; margin-bottom: 4px; gap: 6px; }
+  .gantt-label { width: 90px; font-size: 0.7rem; color: var(--muted); font-weight: 600; text-align: right; flex-shrink: 0; }
+  .gantt-bar-track { flex: 1; height: 24px; background: var(--bg); border-radius: 4px; position: relative; overflow: hidden; }
+  .gantt-bar { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 600; color: #fff; }
+
+  /* Gauge */
+  .gauge-container { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 16px; }
+  .gauge-ring { width: 120px; height: 120px; position: relative; }
+  .gauge-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .gauge-ring .bg-ring { fill: none; stroke: var(--border); stroke-width: 10; }
+  .gauge-ring .fg-ring { fill: none; stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 1s ease, stroke 0.5s; }
+  .gauge-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; }
+  .gauge-center .value { font-size: 1.4rem; font-weight: 700; }
+  .gauge-center .label { font-size: 0.65rem; color: var(--muted); }
+
+  /* Worker schedule */
+  .schedule-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+  .schedule-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .schedule-card h4 { font-size: 0.8rem; color: var(--accent); margin-bottom: 8px; }
+  .schedule-card .stat { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 4px; }
+  .schedule-card .stat-label { color: var(--muted); }
+  .schedule-card .stat-value { color: var(--text); font-weight: 600; }
+
+  footer { text-align: center; padding: 20px; color: var(--muted); font-size: 0.7rem; border-top: 1px solid var(--border); margin-top: 20px; }
+
+  /* Colors for tasks */
+  .color-0 { background: #38bdf8; } .color-1 { background: #818cf8; } .color-2 { background: #a78bfa; }
+  .color-3 { background: #f472b6; } .color-4 { background: #fb923c; } .color-5 { background: #4ade80; }
+  .color-6 { background: #fbbf24; } .color-7 { background: #f87171; } .color-8 { background: #2dd4bf; }
+  .color-9 { background: #e879f9; } .color-10 { background: #94a3b8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Line Balancing System</h1>
+  <p>Double End M12 Cable Assembly – 5 Pole Female – 5 Meters</p>
+</header>
+
+<div class="container">
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="setup">📋 Process Setup</button>
+    <button class="tab-btn" data-tab="workers">👷 Workforce</button>
+    <button class="tab-btn" data-tab="balance">⚖️ Line Balancing</button>
+    <button class="tab-btn" data-tab="analysis">📊 Analysis & Output</button>
+  </div>
+
+  <!-- TAB: Process Setup -->
+  <div id="tab-setup" class="tab-content active">
+    <div class="section">
+      <div class="section-title">Production Process Definition <span class="badge">CRUD</span></div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="secondary" onclick="exportProcessesCSV()">📥 Export CSV</button>
+        <button class="secondary" onclick="document.getElementById('importProcessCSV').click()">📤 Import CSV</button>
+        <input type="file" id="importProcessCSV" accept=".csv" style="display:none" onchange="importProcessesCSV(this)">
+        <button class="secondary" onclick="clearProcessData()" style="margin-left:auto;">🗑️ Clear All</button>
+      </div>
+      <div class="table-scroll">
+        <table class="form-table" id="processTable">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th style="width:90px">SAP No.</th>
+              <th style="min-width:200px">Description</th>
+              <th style="width:80px">Cycle Time (s)</th>
+              <th style="width:70px">Efficiency %</th>
+              <th style="width:60px">2-Side Mult.</th>
+              <th style="width:80px">Adj. Cycle</th>
+              <th style="width:70px">Total (s)</th>
+              <th style="width:70px">P-OPH</th>
+              <th style="width:100px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="processTableBody"></tbody>
+        </table>
+      </div>
+      <button class="btn-add" onclick="addProcess()">+ Add Process</button>
+      <p style="font-size:0.7rem;color:var(--muted);margin-top:12px;">💾 Data is auto-saved to browser storage and persists after refresh.</p>
+    </div>
+  </div>
+
+  <!-- TAB: Workforce -->
+  <div id="tab-workers" class="tab-content">
+    <div class="section">
+      <div class="section-title">Worker Roster & Schedule</div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="secondary" onclick="exportWorkersCSV()">📥 Export CSV</button>
+        <button class="secondary" onclick="document.getElementById('importWorkerCSV').click()">📤 Import CSV</button>
+        <input type="file" id="importWorkerCSV" accept=".csv" style="display:none" onchange="importWorkersCSV(this)">
+        <button class="secondary" onclick="clearWorkerData()">🗑️ Clear All</button>
+        <div class="control-group" style="margin-left:auto;">
+          <label>Default Hourly Rate ($/hr):</label>
+          <input type="number" id="defaultHourlyRate" value="15.00" min="0" step="0.50" style="width:100px" onchange="updateWorkerCosts()">
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="form-table" id="workerTable">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th style="width:100px">Employee Code</th>
+              <th style="min-width:150px">Name</th>
+              <th style="width:80px">Shift Start</th>
+              <th style="width:80px">Shift End</th>
+              <th style="width:80px">Break (min)</th>
+              <th style="width:80px">Work Hours</th>
+              <th style="width:80px">Hourly Rate</th>
+              <th style="width:80px">Daily Cost</th>
+              <th style="width:80px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="workerTableBody"></tbody>
+        </table>
+      </div>
+      <button class="btn-add" onclick="addWorker()">+ Add Worker</button>
+
+      <div class="schedule-summary" id="scheduleSummary"></div>
+    </div>
+  </div>
+
+  <!-- TAB: Line Balancing -->
+  <div id="tab-balance" class="tab-content">
+    <div class="controls">
+      <div class="control-group">
+        <label>Target Stations:</label>
+        <input type="range" id="stationSlider" min="2" max="15" value="5">
+        <span id="stationCount" style="min-width:20px;text-align:center;">5</span>
+      </div>
+      <div class="control-group">
+        <label>Algorithm:</label>
+        <select id="algoSelect">
+          <option value="lct">Largest Candidate Time</option>
+          <option value="rpw">Ranked Positional Weight</option>
+          <option value="killbridge">Kilbridge & Wester</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Speed:</label>
+        <select id="speedSelect">
+          <option value="1200">Slow</option>
+          <option value="600" selected>Normal</option>
+          <option value="300">Fast</option>
+        </select>
+      </div>
+      <button id="balanceBtn" onclick="runBalance()">▶ Balance Line</button>
+      <button class="secondary" onclick="resetBalance()">Reset</button>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <!-- Chart -->
+    <div class="section">
+      <div class="section-title">Station Workload Chart <span class="badge" id="chartBadge">UNBALANCED</span></div>
+      <div class="chart-wrapper">
+        <div class="bar-chart" id="barChart"></div>
+      </div>
+    </div>
+
+    <!-- Resources -->
+    <div class="section">
+      <div class="section-title">Station Resources — Workers & Machines</div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
+        💡 Tip: Worker values can be decimals (e.g., 0.5 = shared worker across 2 stations). Values are retained during balancing.
+      </p>
+      <div class="resource-grid" id="resourceGrid"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="section">
+        <div class="section-title">Line Efficiency</div>
+        <div class="gauge-container">
+          <div class="gauge-ring">
+            <svg viewBox="0 0 160 160">
+              <circle class="bg-ring" cx="80" cy="80" r="65"></circle>
+              <circle class="fg-ring" id="gaugeRing" cx="80" cy="80" r="65" stroke-dasharray="408.4" stroke-dashoffset="408.4"></circle>
+            </svg>
+            <div class="gauge-center">
+              <div class="value" id="gaugeValue">0%</div>
+              <div class="label">Efficiency</div>
+            </div>
+          </div>
+          <div style="font-size:0.75rem;">
+            <div style="color:var(--muted);margin-bottom:6px;">Targets:</div>
+            <div style="margin-bottom:3px;"><span style="color:var(--green);">●</span> &gt;85% Excellent</div>
+            <div style="margin-bottom:3px;"><span style="color:var(--yellow);">●</span> 70-85% Good</div>
+            <div><span style="color:var(--red);">●</span> &lt;70% Needs Work</div>
+          </div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">Station Timeline (Gantt)</div>
+        <div id="ganttChart"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Analysis -->
+  <div id="tab-analysis" class="tab-content">
+    <div class="section">
+      <div class="section-title">Production Output & Cost Analysis</div>
+      <div class="kpi-row" id="analysisKPIs"></div>
+      <div class="schedule-summary" id="analysisSummary"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Process Summary Table</div>
+      <div class="table-scroll">
+        <table class="form-table" id="summaryTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>SAP No.</th>
+              <th>Description</th>
+              <th>Station</th>
+              <th>Raw Time (s)</th>
+              <th>Workers</th>
+              <th>Eff. Time (s)</th>
+              <th>Utilization %</th>
+            </tr>
+          </thead>
+          <tbody id="summaryTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Line Balancing System — Double End M12 Cable Assembly 5 Pole Female 5 Meters
+</footer>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// DATA MODELS
+// ══════════════════════════════════════════════════════════════
+
+let processes = [
+  { uid: 'p1', sapNo: 'PP000001', desc: 'Cable Cutting (5 Meter) and Binding', cycle: 45.0, eff: 80, mult: 1 },
+  { uid: 'p2', sapNo: 'PP000002', desc: 'Removal of Fillers', cycle: 12.0, eff: 80, mult: 2 },
+  { uid: 'p3', sapNo: 'PP000003', desc: 'Stripping & Crimping Brown/Blue Wires – 18 AWG Short Contact', cycle: 19.6, eff: 80, mult: 2 },
+  { uid: 'p4', sapNo: 'PP000004', desc: 'Stripping & Crimping Black/White Wires – 22 AWG Short Contact', cycle: 35.0, eff: 80, mult: 2 },
+  { uid: 'p5', sapNo: 'PP000005', desc: 'Stripping & Crimping Gray Wire – 22 AWG Long Contact', cycle: 26.2, eff: 80, mult: 2 },
+  { uid: 'p6', sapNo: 'PP000006', desc: 'Wire Guide Assembly & Pressing to Contact Holder', cycle: 69.0, eff: 80, mult: 2 },
+  { uid: 'p7', sapNo: 'PP000007', desc: 'Overmolding (One Side)', cycle: 25.6, eff: 80, mult: 2 },
+  { uid: 'p8', sapNo: 'PP000008', desc: 'Electrical Testing Male or Female', cycle: 12.0, eff: 80, mult: 1 },
+  { uid: 'p9', sapNo: 'PP000009', desc: 'O-ring Mounting to Female M12', cycle: 5.0, eff: 80, mult: 2 },
+  { uid: 'p10', sapNo: 'PP000014', desc: 'Printing', cycle: 12.0, eff: 80, mult: 2 },
+  { uid: 'p11', sapNo: 'PP000013', desc: 'Packaging', cycle: 7.0, eff: 80, mult: 1 },
+];
+
+let workers = [
+  { uid: 'w1', code: 'EMP001', name: 'John Smith', shiftStart: '08:00', shiftEnd: '17:00', breakMin: 60, hourlyRate: 15.00 },
+  { uid: 'w2', code: 'EMP002', name: 'Maria Garcia', shiftStart: '08:00', shiftEnd: '17:00', breakMin: 60, hourlyRate: 15.00 },
+  { uid: 'w3', code: 'EMP003', name: 'David Chen', shiftStart: '08:00', shiftEnd: '17:00', breakMin: 60, hourlyRate: 16.50 },
+  { uid: 'w4', code: 'EMP004', name: 'Sarah Johnson', shiftStart: '08:00', shiftEnd: '17:00', breakMin: 60, hourlyRate: 15.00 },
+  { uid: 'w5', code: 'EMP005', name: 'Ahmed Hassan', shiftStart: '08:00', shiftEnd: '17:00', breakMin: 60, hourlyRate: 17.00 },
+];
+
+const MACHINE_CATALOGUE = [
+  'Cutting Machine', 'Stripping Machine', 'Crimping Machine (Manual)', 'Crimping Machine (Auto)',
+  'Wire Guide Fixture', 'Pressing Tool', 'Overmolding Machine', 'Electrical Tester',
+  'O-ring Assembly Fixture', 'Inkjet Printer', 'Label Printer', 'Packaging Station',
+  'Conveyor', 'Soldering Station', 'Heat Shrink Tool', 'Microscope / Inspection',
+];
+
+const DEFAULT_MACHINES = {
+  'PP000001': [{ name: 'Cutting Machine', qty: 1 }],
+  'PP000003': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Auto)', qty: 1 }],
+  'PP000004': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Auto)', qty: 1 }],
+  'PP000005': [{ name: 'Stripping Machine', qty: 1 }, { name: 'Crimping Machine (Manual)', qty: 1 }],
+  'PP000006': [{ name: 'Wire Guide Fixture', qty: 1 }, { name: 'Pressing Tool', qty: 1 }],
+  'PP000007': [{ name: 'Overmolding Machine', qty: 1 }],
+  'PP000008': [{ name: 'Electrical Tester', qty: 1 }],
+  'PP000009': [{ name: 'O-ring Assembly Fixture', qty: 1 }],
+  'PP000014': [{ name: 'Inkjet Printer', qty: 1 }],
+  'PP000013': [{ name: 'Packaging Station', qty: 1 }],
+};
+
+// ══════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════
+
+let stations = [];
+let taskResources = {}; // uid -> { workers, machines }
+let stationResources = {}; // stationIdx -> { workers, machines }
+let animating = false;
+let uidCounter = 100;
+
+function genUid() { return 'u' + (++uidCounter); }
+
+// ══════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════
+
+function calcProcess(p) {
+  const effFactor = 1 + (1 - p.eff / 100);
+  p.adjCycle = +(p.cycle * effFactor).toFixed(4);
+  p.total = +(p.adjCycle * p.mult).toFixed(4);
+  p.poph = p.total > 0 ? +(3600 / p.total).toFixed(2) : 0;
+}
+
+function recalcAllProcesses() {
+  processes.forEach(calcProcess);
+}
+
+function getTotalTime() {
+  return processes.reduce((s, p) => s + p.total, 0);
+}
+
+function getWorkerHours(w) {
+  const [sh, sm] = w.shiftStart.split(':').map(Number);
+  const [eh, em] = w.shiftEnd.split(':').map(Number);
+  const totalMin = (eh * 60 + em) - (sh * 60 + sm) - w.breakMin;
+  return Math.max(0, totalMin / 60);
+}
+
+function getWorkerDailyCost(w) {
+  return +(getWorkerHours(w) * w.hourlyRate).toFixed(2);
+}
+
+function getTotalDailyWorkHours() {
+  return workers.reduce((s, w) => s + getWorkerHours(w), 0);
+}
+
+function getTotalDailyLaborCost() {
+  return workers.reduce((s, w) => s + getWorkerDailyCost(w), 0);
+}
+
+function getAvgWorkHoursPerWorker() {
+  if (workers.length === 0) return 0;
+  return getTotalDailyWorkHours() / workers.length;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PROCESS CRUD
+// ══════════════════════════════════════════════════════════════
+
+function renderProcessTable() {
+  recalcAllProcesses();
+  const tbody = document.getElementById('processTableBody');
+  let html = '';
+  processes.forEach((p, i) => {
+    html += `<tr>
+      <td class="row-num">${i + 1}</td>
+      <td><input type="text" value="${p.sapNo}" onchange="updateProcess(${i},'sapNo',this.value)"></td>
+      <td><input type="text" value="${p.desc}" onchange="updateProcess(${i},'desc',this.value)"></td>
+      <td><input type="number" value="${p.cycle}" min="0" step="0.1" onchange="updateProcess(${i},'cycle',parseFloat(this.value)||0)"></td>
+      <td><input type="number" value="${p.eff}" min="1" max="200" step="1" onchange="updateProcess(${i},'eff',parseFloat(this.value)||80)"></td>
+      <td><input type="number" value="${p.mult}" min="1" max="10" step="1" onchange="updateProcess(${i},'mult',parseInt(this.value)||1)"></td>
+      <td><input type="text" class="readonly" value="${p.adjCycle.toFixed(2)}" readonly></td>
+      <td><input type="text" class="readonly" value="${p.total.toFixed(2)}" readonly></td>
+      <td><input type="text" class="readonly" value="${p.poph.toFixed(1)}" readonly></td>
+      <td class="actions">
+        <button class="btn-up" onclick="moveProcess(${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn-down" onclick="moveProcess(${i},1)" ${i === processes.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn-delete" onclick="deleteProcess(${i})">✕</button>
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+function updateProcess(idx, field, value) {
+  processes[idx][field] = value;
+  recalcAllProcesses();
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function addProcess() {
+  processes.push({
+    uid: genUid(),
+    sapNo: 'PP' + String(processes.length + 1).padStart(6, '0'),
+    desc: 'New Process',
+    cycle: 10,
+    eff: 80,
+    mult: 1
+  });
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function deleteProcess(idx) {
+  if (processes.length <= 1) return alert('Must have at least one process.');
+  const uid = processes[idx].uid;
+  delete taskResources[uid];
+  processes.splice(idx, 1);
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+function moveProcess(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= processes.length) return;
+  [processes[idx], processes[newIdx]] = [processes[newIdx], processes[idx]];
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// WORKER CRUD
+// ══════════════════════════════════════════════════════════════
+
+function renderWorkerTable() {
+  const tbody = document.getElementById('workerTableBody');
+  let html = '';
+  workers.forEach((w, i) => {
+    const hrs = getWorkerHours(w);
+    const cost = getWorkerDailyCost(w);
+    html += `<tr>
+      <td class="row-num">${i + 1}</td>
+      <td><input type="text" value="${w.code}" onchange="updateWorker(${i},'code',this.value)"></td>
+      <td><input type="text" value="${w.name}" onchange="updateWorker(${i},'name',this.value)"></td>
+      <td><input type="time" value="${w.shiftStart}" onchange="updateWorker(${i},'shiftStart',this.value)"></td>
+      <td><input type="time" value="${w.shiftEnd}" onchange="updateWorker(${i},'shiftEnd',this.value)"></td>
+      <td><input type="number" value="${w.breakMin}" min="0" step="5" onchange="updateWorker(${i},'breakMin',parseInt(this.value)||0)"></td>
+      <td><input type="text" class="readonly" value="${hrs.toFixed(2)}" readonly></td>
+      <td><input type="number" value="${w.hourlyRate.toFixed(2)}" min="0" step="0.50" onchange="updateWorker(${i},'hourlyRate',parseFloat(this.value)||0)"></td>
+      <td><input type="text" class="readonly" value="$${cost.toFixed(2)}" readonly></td>
+      <td class="actions">
+        <button class="btn-delete" onclick="deleteWorker(${i})">✕</button>
+      </td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+  renderScheduleSummary();
+}
+
+function updateWorker(idx, field, value) {
+  workers[idx][field] = value;
+  renderWorkerTable();
+  renderAll();
+}
+
+function addWorker() {
+  const rate = parseFloat(document.getElementById('defaultHourlyRate').value) || 15;
+  workers.push({
+    uid: genUid(),
+    code: 'EMP' + String(workers.length + 1).padStart(3, '0'),
+    name: 'New Worker',
+    shiftStart: '08:00',
+    shiftEnd: '17:00',
+    breakMin: 60,
+    hourlyRate: rate
+  });
+  renderWorkerTable();
+  renderAll();
+}
+
+function deleteWorker(idx) {
+  workers.splice(idx, 1);
+  renderWorkerTable();
+  renderAll();
+}
+
+function updateWorkerCosts() {
+  renderWorkerTable();
+}
+
+function renderScheduleSummary() {
+  const totalHrs = getTotalDailyWorkHours();
+  const totalCost = getTotalDailyLaborCost();
+  const avgHrs = getAvgWorkHoursPerWorker();
+  const avgRate = workers.length > 0 ? totalCost / totalHrs : 0;
+
+  document.getElementById('scheduleSummary').innerHTML = `
+    <div class="schedule-card">
+      <h4>Workforce Summary</h4>
+      <div class="stat"><span class="stat-label">Total Workers:</span><span class="stat-value">${workers.length}</span></div>
+      <div class="stat"><span class="stat-label">Total Daily Hours:</span><span class="stat-value">${totalHrs.toFixed(1)} hrs</span></div>
+      <div class="stat"><span class="stat-label">Avg Hours/Worker:</span><span class="stat-value">${avgHrs.toFixed(1)} hrs</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Labor Cost</h4>
+      <div class="stat"><span class="stat-label">Total Daily Cost:</span><span class="stat-value">$${totalCost.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Avg Rate:</span><span class="stat-value">$${avgRate.toFixed(2)}/hr</span></div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════════════
+// STATIONS & RESOURCES
+// ══════════════════════════════════════════════════════════════
+
+function initStations() {
+  stations = processes.map((p, i) => ({ tasks: [i] }));
+  buildStationResourcesFromTasks();
+}
+
+function buildStationResourcesFromTasks() {
+  stationResources = {};
+  stations.forEach((st, si) => {
+    let maxWorkers = 1;
+    const machMap = {};
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      const tr = taskResources[p.uid];
+      if (tr) {
+        maxWorkers = Math.max(maxWorkers, tr.workers);
+        (tr.machines || []).forEach(m => {
+          machMap[m.name] = Math.max(machMap[m.name] || 0, m.qty);
+        });
+      } else {
+        // Default machines
+        const dm = DEFAULT_MACHINES[p.sapNo] || [];
+        dm.forEach(m => {
+          machMap[m.name] = Math.max(machMap[m.name] || 0, m.qty);
+        });
+      }
+    });
+    stationResources[si] = {
+      workers: maxWorkers,
+      machines: Object.entries(machMap).map(([name, qty]) => ({ name, qty }))
+    };
+  });
+}
+
+function saveStationResourcesToTasks() {
+  stations.forEach((st, si) => {
+    const res = stationResources[si];
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      taskResources[p.uid] = {
+        workers: res.workers,
+        machines: JSON.parse(JSON.stringify(res.machines))
+      };
+    });
+  });
+}
+
+function rawStationTime(st) {
+  return st.tasks.reduce((s, ti) => s + processes[ti].total, 0);
+}
+
+function effectiveStationTime(si) {
+  const raw = rawStationTime(stations[si]);
+  const w = (stationResources[si] && stationResources[si].workers) || 1;
+  return raw / w;
+}
+
+// ══════════════════════════════════════════════════════════════
+// BALANCING ALGORITHMS
+// ══════════════════════════════════════════════════════════════
+
+function balanceLCT(numStations) {
+  recalcAllProcesses();
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const sorted = processes.map((_, i) => i).sort((a, b) => processes[b].total - processes[a].total);
+  const result = [{ tasks: [] }];
+  let stIdx = 0, remaining = maxTakt;
+  for (const ti of sorted) {
+    if (processes[ti].total <= remaining + 0.01) {
+      result[stIdx].tasks.push(ti);
+      remaining -= processes[ti].total;
+    } else {
+      stIdx++;
+      result.push({ tasks: [ti] });
+      remaining = maxTakt - processes[ti].total;
+    }
+  }
+  result.forEach(s => s.tasks.sort((a, b) => a - b));
+  return enforceStationCount(result, numStations);
+}
+
+function balanceRPW(numStations) {
+  recalcAllProcesses();
+  const n = processes.length;
+  const weights = processes.map((_, i) => {
+    let w = 0;
+    for (let j = i; j < n; j++) w += processes[j].total;
+    return w;
+  });
+  const sorted = processes.map((_, i) => i).sort((a, b) => weights[b] - weights[a]);
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const result = [{ tasks: [] }];
+  let remaining = maxTakt;
+  for (const ti of sorted) {
+    if (processes[ti].total <= remaining + 0.01) {
+      result[result.length - 1].tasks.push(ti);
+      remaining -= processes[ti].total;
+    } else {
+      result.push({ tasks: [ti] });
+      remaining = maxTakt - processes[ti].total;
+    }
+  }
+  result.forEach(s => s.tasks.sort((a, b) => a - b));
+  return enforceStationCount(result, numStations);
+}
+
+function balanceKillbridge(numStations) {
+  recalcAllProcesses();
+  const totalTime = getTotalTime();
+  const takt = totalTime / numStations;
+  const maxTakt = Math.max(takt, Math.max(...processes.map(p => p.total)));
+  const result = [{ tasks: [] }];
+  let remaining = maxTakt;
+  for (let i = 0; i < processes.length; i++) {
+    if (processes[i].total <= remaining + 0.01) {
+      result[result.length - 1].tasks.push(i);
+      remaining -= processes[i].total;
+    } else {
+      result.push({ tasks: [i] });
+      remaining = maxTakt - processes[i].total;
+    }
+  }
+  return enforceStationCount(result, numStations);
+}
+
+// Enforce exact target station count by merging or splitting stations
+function enforceStationCount(stations, target) {
+  // Cannot have more stations than processes
+  target = Math.min(target, processes.length);
+  // Must have at least 1 station
+  target = Math.max(target, 1);
+
+  // Helper to calculate station time
+  const stationTime = (st) => st.tasks.reduce((s, ti) => s + processes[ti].total, 0);
+
+  // If too many stations, merge the two smallest repeatedly
+  while (stations.length > target) {
+    // Find the two stations with smallest combined time
+    let minCombined = Infinity;
+    let mergeI = 0, mergeJ = 1;
+    for (let i = 0; i < stations.length; i++) {
+      for (let j = i + 1; j < stations.length; j++) {
+        const combined = stationTime(stations[i]) + stationTime(stations[j]);
+        if (combined < minCombined) {
+          minCombined = combined;
+          mergeI = i;
+          mergeJ = j;
+        }
+      }
+    }
+    // Merge station j into station i
+    stations[mergeI].tasks = [...stations[mergeI].tasks, ...stations[mergeJ].tasks].sort((a, b) => a - b);
+    stations.splice(mergeJ, 1);
+  }
+
+  // If too few stations, split the largest station repeatedly
+  while (stations.length < target) {
+    // Find station with most tasks (must have at least 2 tasks to split)
+    let maxTasks = 0;
+    let splitIdx = -1;
+    for (let i = 0; i < stations.length; i++) {
+      if (stations[i].tasks.length > maxTasks && stations[i].tasks.length >= 2) {
+        maxTasks = stations[i].tasks.length;
+        splitIdx = i;
+      }
+    }
+
+    // If no station can be split, we've reached the limit
+    if (splitIdx === -1) break;
+
+    // Split station into two - try to balance the time
+    const tasks = stations[splitIdx].tasks;
+    const totalT = stationTime(stations[splitIdx]);
+    const targetHalf = totalT / 2;
+
+    // Greedy split: accumulate tasks until we pass half
+    let sum = 0;
+    let splitPoint = 1;
+    for (let i = 0; i < tasks.length - 1; i++) {
+      sum += processes[tasks[i]].total;
+      if (sum >= targetHalf) {
+        splitPoint = i + 1;
+        break;
+      }
+      splitPoint = i + 1;
+    }
+
+    const firstHalf = tasks.slice(0, splitPoint);
+    const secondHalf = tasks.slice(splitPoint);
+
+    stations[splitIdx] = { tasks: firstHalf };
+    stations.splice(splitIdx + 1, 0, { tasks: secondHalf });
+  }
+
+  return stations;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ANIMATION
+// ══════════════════════════════════════════════════════════════
+
+async function runBalance() {
+  if (animating) return;
+  animating = true;
+  document.getElementById('balanceBtn').disabled = true;
+  document.getElementById('chartBadge').textContent = 'BALANCING...';
+  document.getElementById('chartBadge').style.background = 'var(--yellow)';
+
+  // Save current resources to tasks before balancing
+  saveStationResourcesToTasks();
+
+  const numStations = parseInt(document.getElementById('stationSlider').value);
+  const algo = document.getElementById('algoSelect').value;
+  let target;
+  switch (algo) {
+    case 'rpw': target = balanceRPW(numStations); break;
+    case 'killbridge': target = balanceKillbridge(numStations); break;
+    default: target = balanceLCT(numStations);
+  }
+
+  const speed = parseInt(document.getElementById('speedSelect').value);
+  const snapshots = buildSnapshots(target);
+
+  for (const snap of snapshots) {
+    stations = snap;
+    buildStationResourcesFromTasks();
+    renderAll();
+    await sleep(speed);
+  }
+
+  stations = target;
+  buildStationResourcesFromTasks();
+  document.getElementById('chartBadge').textContent = 'BALANCED';
+  document.getElementById('chartBadge').style.background = 'var(--green)';
+  renderAll();
+  animating = false;
+  document.getElementById('balanceBtn').disabled = false;
+}
+
+function buildSnapshots(target) {
+  const snapshots = [];
+  let current = processes.map((_, i) => ({ tasks: [i] }));
+  for (const ts of target) {
+    if (ts.tasks.length <= 1) continue;
+    for (let k = 1; k < ts.tasks.length; k++) {
+      const taskToMerge = ts.tasks[k];
+      const destIdx = current.findIndex(s => s.tasks.includes(ts.tasks[0]));
+      const srcIdx = current.findIndex(s => s.tasks.includes(taskToMerge));
+      if (destIdx === -1 || srcIdx === -1 || destIdx === srcIdx) continue;
+      current[srcIdx].tasks = current[srcIdx].tasks.filter(t => t !== taskToMerge);
+      current[destIdx].tasks.push(taskToMerge);
+      current[destIdx].tasks.sort((a, b) => a - b);
+      current = current.filter(s => s.tasks.length > 0);
+      snapshots.push(current.map(s => ({ tasks: [...s.tasks] })));
+    }
+  }
+  return snapshots;
+}
+
+function resetBalance() {
+  if (animating) return;
+  // Clear task resources to start fresh from Process Setup
+  taskResources = {};
+  saveToLocalStorage();
+  initStations();
+  document.getElementById('chartBadge').textContent = 'UNBALANCED';
+  document.getElementById('chartBadge').style.background = 'var(--red)';
+  renderAll();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ══════════════════════════════════════════════════════════════
+// RESOURCE MUTATIONS
+// ══════════════════════════════════════════════════════════════
+
+function changeWorkerCount(si, val) {
+  if (animating) return;
+  stationResources[si].workers = Math.max(0.25, val);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function addMachine(si) {
+  if (animating) return;
+  stationResources[si].machines.push({ name: MACHINE_CATALOGUE[0], qty: 1 });
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function removeMachine(si, mi) {
+  if (animating) return;
+  stationResources[si].machines.splice(mi, 1);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+function changeMachine(si, mi, name) {
+  if (animating) return;
+  stationResources[si].machines[mi].name = name;
+  saveStationResourcesToTasks();
+}
+
+function changeMachineQty(si, mi, qty) {
+  if (animating) return;
+  stationResources[si].machines[mi].qty = Math.max(1, qty);
+  saveStationResourcesToTasks();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════════════════════
+
+function renderAll() {
+  renderKPIs();
+  renderBarChart();
+  renderGantt();
+  renderResources();
+  renderGauge();
+  renderAnalysis();
+}
+
+function renderKPIs() {
+  const numStations = stations.length;
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const totalEffTime = effTimes.reduce((s, t) => s + t, 0);
+  const efficiency = (totalEffTime / (numStations * bottleneck)) * 100;
+  const oph = 3600 / bottleneck;
+  const idleTime = (numStations * bottleneck) - totalEffTime;
+  const totalWorkers = Object.values(stationResources).reduce((s, r) => s + r.workers, 0);
+  const totalMachines = Object.values(stationResources).reduce((s, r) => s + r.machines.reduce((ms, m) => ms + m.qty, 0), 0);
+
+  // Calculate labor cost per unit
+  const avgHourlyRate = workers.length > 0 ? getTotalDailyLaborCost() / getTotalDailyWorkHours() : 15;
+  const laborCostPerUnit = totalWorkers > 0 ? (totalWorkers * avgHourlyRate * (bottleneck / 3600)) : 0;
+
+  const effColor = efficiency > 85 ? 'var(--green)' : efficiency > 70 ? 'var(--yellow)' : 'var(--red)';
+
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi-card"><div class="kpi-value">${getTotalTime().toFixed(1)}s</div><div class="kpi-label">Total Cycle Time</div></div>
+    <div class="kpi-card"><div class="kpi-value">${numStations}</div><div class="kpi-label">Stations</div></div>
+    <div class="kpi-card"><div class="kpi-value">${bottleneck.toFixed(1)}s</div><div class="kpi-label">Bottleneck</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:${effColor}">${efficiency.toFixed(1)}%</div><div class="kpi-label">Line Efficiency</div></div>
+    <div class="kpi-card highlight"><div class="kpi-value">${oph.toFixed(1)}</div><div class="kpi-label">Output / Hour</div></div>
+    <div class="kpi-card"><div class="kpi-value">${idleTime.toFixed(1)}s</div><div class="kpi-label">Idle Time</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalWorkers.toFixed(2)}</div><div class="kpi-label">Total Workers</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalMachines}</div><div class="kpi-label">Total Machines</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">$${laborCostPerUnit.toFixed(3)}</div><div class="kpi-label">Labor Cost/Unit</div></div>
+  `;
+}
+
+function renderBarChart() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const maxTime = Math.max(...effTimes, 1);
+  const chartHeight = 240;
+
+  let html = '';
+  for (let pct = 0; pct <= 100; pct += 25) {
+    const y = chartHeight - (pct / 100) * chartHeight;
+    html += `<div class="grid-line" style="top:${y + 20}px;"></div>`;
+    html += `<div class="grid-label" style="top:${y + 14}px;">${(pct / 100 * maxTime).toFixed(0)}s</div>`;
+  }
+
+  if (stations.length > 1) {
+    html += `<div class="takt-line" style="top:20px;"><span class="takt-label">Bottleneck: ${maxTime.toFixed(1)}s</span></div>`;
+  }
+
+  stations.forEach((st, si) => {
+    const effT = effectiveStationTime(si);
+    const workers = stationResources[si]?.workers || 1;
+    let stackHtml = '';
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      const segTime = p.total / workers;
+      const h = Math.max(2, (segTime / maxTime) * chartHeight);
+      stackHtml += `<div class="task-segment color-${ti % 11}" style="height:${h}px;">
+        ${p.sapNo.slice(-3)}
+        <div class="tooltip">
+          <strong>${p.sapNo}</strong><br>${p.desc}<br>
+          Cycle: ${p.cycle}s | Eff: ${p.eff}%<br>
+          Total: ${p.total.toFixed(2)}s | Workers: ${workers}<br>
+          Effective: ${segTime.toFixed(2)}s
+        </div>
+      </div>`;
+    });
+
+    const utilPct = (effT / maxTime * 100);
+    const utilColor = utilPct > 85 ? 'var(--green)' : utilPct > 70 ? 'var(--yellow)' : 'var(--red)';
+
+    html += `<div class="station-col">
+      <div class="station-bar-stack">${stackHtml}</div>
+      <div class="station-label">Stn ${si + 1}</div>
+      <div class="station-time">${effT.toFixed(1)}s</div>
+      <div style="font-size:0.6rem;color:${utilColor};">${utilPct.toFixed(0)}%</div>
+      <div style="font-size:0.55rem;color:var(--muted);">${workers}W</div>
+    </div>`;
+  });
+
+  document.getElementById('barChart').innerHTML = html;
+  document.getElementById('barChart').style.paddingLeft = '36px';
+}
+
+function renderGantt() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const maxTime = Math.max(...effTimes, 1);
+  let html = '';
+
+  stations.forEach((st, si) => {
+    const workers = stationResources[si]?.workers || 1;
+    let barHtml = '', offset = 0;
+    st.tasks.forEach(ti => {
+      const p = processes[ti];
+      const segT = p.total / workers;
+      const left = (offset / maxTime) * 100;
+      const width = (segT / maxTime) * 100;
+      barHtml += `<div class="gantt-bar color-${ti % 11}" style="left:${left}%;width:${Math.max(1, width)}%;">${p.sapNo.slice(-3)}</div>`;
+      offset += segT;
+    });
+    html += `<div class="gantt-row">
+      <div class="gantt-label">Stn ${si + 1} (${workers}W)</div>
+      <div class="gantt-bar-track">${barHtml}</div>
+    </div>`;
+  });
+  document.getElementById('ganttChart').innerHTML = html;
+}
+
+function renderResources() {
+  let html = '';
+  stations.forEach((st, si) => {
+    const res = stationResources[si] || { workers: 1, machines: [] };
+    const raw = rawStationTime(st);
+    const eff = raw / res.workers;
+    const effCol = eff <= 60 ? 'var(--green)' : eff <= 120 ? 'var(--yellow)' : 'var(--red)';
+    const taskList = st.tasks.map(ti => processes[ti].sapNo + ' ' + processes[ti].desc.substring(0, 25)).join('<br>');
+
+    let machHtml = '';
+    res.machines.forEach((m, mi) => {
+      machHtml += `<div class="rc-machine-row">
+        <select onchange="changeMachine(${si},${mi},this.value)">
+          ${MACHINE_CATALOGUE.map(c => `<option value="${c}" ${c === m.name ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+        <input type="number" value="${m.qty}" min="1" max="20" onchange="changeMachineQty(${si},${mi},parseInt(this.value)||1)">
+        <button class="rc-remove" onclick="removeMachine(${si},${mi})">✕</button>
+      </div>`;
+    });
+
+    html += `<div class="resource-card">
+      <div class="rc-header">
+        <span class="rc-title">Station ${si + 1}</span>
+        <span class="rc-time">${raw.toFixed(1)}s raw</span>
+      </div>
+      <div class="rc-tasks">${taskList}</div>
+      <div class="rc-row">
+        <span class="rc-row-label">Workers</span>
+        <div class="rc-counter">
+          <button onclick="changeWorkerCount(${si},${res.workers - 0.25})">−</button>
+          <input type="number" value="${res.workers}" min="0.25" step="0.25" onchange="changeWorkerCount(${si},parseFloat(this.value)||1)">
+          <button onclick="changeWorkerCount(${si},${res.workers + 0.25})">+</button>
+        </div>
+      </div>
+      <div class="rc-row" style="align-items:flex-start;">
+        <span class="rc-row-label">Machines</span>
+        <span style="font-size:0.65rem;color:var(--muted);">${res.machines.reduce((s, m) => s + m.qty, 0)} total</span>
+      </div>
+      <div class="rc-machines">${machHtml}</div>
+      <button class="rc-add-machine" onclick="addMachine(${si})">+ Add Machine</button>
+      <div class="rc-effective">
+        <span class="rc-eff-label">Effective Time</span>
+        <span class="rc-eff-value" style="color:${effCol};">${eff.toFixed(1)}s</span>
+      </div>
+    </div>`;
+  });
+  document.getElementById('resourceGrid').innerHTML = html;
+}
+
+function renderGauge() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const totalEffTime = effTimes.reduce((s, t) => s + t, 0);
+  const efficiency = Math.min(100, (totalEffTime / (stations.length * bottleneck)) * 100);
+  const circumference = 2 * Math.PI * 65;
+  const offset = circumference - (efficiency / 100) * circumference;
+  const color = efficiency > 85 ? 'var(--green)' : efficiency > 70 ? 'var(--yellow)' : 'var(--red)';
+
+  const ring = document.getElementById('gaugeRing');
+  ring.style.strokeDashoffset = offset;
+  ring.style.stroke = color;
+
+  const valEl = document.getElementById('gaugeValue');
+  valEl.textContent = efficiency.toFixed(1) + '%';
+  valEl.style.color = color;
+}
+
+function renderAnalysis() {
+  const effTimes = stations.map((_, si) => effectiveStationTime(si));
+  const bottleneck = Math.max(...effTimes, 0.01);
+  const oph = 3600 / bottleneck;
+
+  // Daily production based on workforce
+  const totalWorkHours = getTotalDailyWorkHours();
+  const avgWorkHours = getAvgWorkHoursPerWorker();
+  const dailyOutputPerWorker = avgWorkHours * oph;
+  const theoreticalDailyOutput = Math.floor(avgWorkHours * 3600 / bottleneck);
+
+  // Costs
+  const totalDailyCost = getTotalDailyLaborCost();
+  const totalWorkers = Object.values(stationResources).reduce((s, r) => s + r.workers, 0);
+  const avgHourlyRate = workers.length > 0 ? totalDailyCost / totalWorkHours : 15;
+  const laborCostPerUnit = totalWorkers > 0 ? (totalWorkers * avgHourlyRate * (bottleneck / 3600)) : 0;
+  const totalDailyLaborCost = theoreticalDailyOutput * laborCostPerUnit;
+
+  document.getElementById('analysisKPIs').innerHTML = `
+    <div class="kpi-card highlight"><div class="kpi-value">${theoreticalDailyOutput}</div><div class="kpi-label">Daily Output (units)</div></div>
+    <div class="kpi-card"><div class="kpi-value">${oph.toFixed(1)}</div><div class="kpi-label">Output/Hour</div></div>
+    <div class="kpi-card"><div class="kpi-value">${avgWorkHours.toFixed(1)}h</div><div class="kpi-label">Avg Work Hours</div></div>
+    <div class="kpi-card"><div class="kpi-value">${workers.length}</div><div class="kpi-label">Workers in Roster</div></div>
+    <div class="kpi-card"><div class="kpi-value">${totalWorkers.toFixed(2)}</div><div class="kpi-label">Workers Assigned</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">$${laborCostPerUnit.toFixed(3)}</div><div class="kpi-label">Labor Cost/Unit</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">$${totalDailyLaborCost.toFixed(2)}</div><div class="kpi-label">Daily Labor Cost</div></div>
+    <div class="kpi-card cost"><div class="kpi-value">$${totalDailyCost.toFixed(2)}</div><div class="kpi-label">Daily Wages</div></div>
+  `;
+
+  document.getElementById('analysisSummary').innerHTML = `
+    <div class="schedule-card">
+      <h4>Production Calculations</h4>
+      <div class="stat"><span class="stat-label">Bottleneck Time:</span><span class="stat-value">${bottleneck.toFixed(2)}s</span></div>
+      <div class="stat"><span class="stat-label">Units per Hour:</span><span class="stat-value">${oph.toFixed(1)}</span></div>
+      <div class="stat"><span class="stat-label">Work Hours (avg):</span><span class="stat-value">${avgWorkHours.toFixed(2)} hrs</span></div>
+      <div class="stat"><span class="stat-label">Theoretical Daily:</span><span class="stat-value">${theoreticalDailyOutput} units</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Cost Analysis</h4>
+      <div class="stat"><span class="stat-label">Workers Assigned:</span><span class="stat-value">${totalWorkers.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Avg Hourly Rate:</span><span class="stat-value">$${avgHourlyRate.toFixed(2)}</span></div>
+      <div class="stat"><span class="stat-label">Labor/Unit:</span><span class="stat-value">$${laborCostPerUnit.toFixed(4)}</span></div>
+      <div class="stat"><span class="stat-label">Daily Labor Cost:</span><span class="stat-value">$${totalDailyLaborCost.toFixed(2)}</span></div>
+    </div>
+    <div class="schedule-card">
+      <h4>Efficiency Metrics</h4>
+      <div class="stat"><span class="stat-label">Line Efficiency:</span><span class="stat-value">${((effTimes.reduce((s, t) => s + t, 0) / (stations.length * bottleneck)) * 100).toFixed(1)}%</span></div>
+      <div class="stat"><span class="stat-label">Stations:</span><span class="stat-value">${stations.length}</span></div>
+      <div class="stat"><span class="stat-label">Total Cycle:</span><span class="stat-value">${getTotalTime().toFixed(1)}s</span></div>
+      <div class="stat"><span class="stat-label">Idle Time:</span><span class="stat-value">${((stations.length * bottleneck) - effTimes.reduce((s, t) => s + t, 0)).toFixed(1)}s</span></div>
+    </div>
+  `;
+
+  // Summary table
+  const assignment = new Array(processes.length).fill(0);
+  stations.forEach((st, si) => st.tasks.forEach(ti => assignment[ti] = si));
+
+  let tableHtml = '';
+  processes.forEach((p, i) => {
+    const si = assignment[i];
+    const workers = stationResources[si]?.workers || 1;
+    const effTime = p.total / workers;
+    const bottleneck = Math.max(...stations.map((_, si) => effectiveStationTime(si)));
+    const util = (effTime / bottleneck * 100);
+    tableHtml += `<tr>
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td>${p.sapNo}</td>
+      <td>${p.desc}</td>
+      <td>Station ${si + 1}</td>
+      <td>${p.total.toFixed(2)}</td>
+      <td>${workers}</td>
+      <td>${effTime.toFixed(2)}</td>
+      <td style="color:${util > 85 ? 'var(--green)' : util > 70 ? 'var(--yellow)' : 'var(--red)'}">${util.toFixed(1)}%</td>
+    </tr>`;
+  });
+  document.getElementById('summaryTableBody').innerHTML = tableHtml;
+}
+
+// ══════════════════════════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════════════════════════
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+document.getElementById('stationSlider').addEventListener('input', function() {
+  document.getElementById('stationCount').textContent = this.value;
+});
+
+// ══════════════════════════════════════════════════════════════
+// CSV EXPORT/IMPORT - PROCESSES
+// ══════════════════════════════════════════════════════════════
+
+function exportProcessesCSV() {
+  const headers = ['SAP No','Description','Cycle Time (s)','Efficiency %','2-Side Mult'];
+  const rows = processes.map(p => [
+    p.sapNo,
+    '"' + p.desc.replace(/"/g, '""') + '"',
+    p.cycle,
+    p.eff,
+    p.mult
+  ].join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  downloadCSV(csv, 'process-setup.csv');
+}
+
+function importProcessesCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    if (rows.length < 2) {
+      alert('CSV file is empty or invalid.');
+      return;
+    }
+    // Skip header row
+    const newProcesses = [];
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i];
+      if (cols.length < 5) continue;
+      newProcesses.push({
+        uid: genUid(),
+        sapNo: cols[0] || '',
+        desc: cols[1] || '',
+        cycle: parseFloat(cols[2]) || 0,
+        eff: parseFloat(cols[3]) || 80,
+        mult: parseInt(cols[4]) || 1
+      });
+    }
+    if (newProcesses.length > 0) {
+      processes = newProcesses;
+      taskResources = {}; // Clear task resources for fresh import
+      saveToLocalStorage();
+      recalcAllProcesses();
+      renderProcessTable();
+      initStations();
+      renderAll();
+      alert(`Imported ${newProcesses.length} processes successfully.`);
+    } else {
+      alert('No valid processes found in CSV.');
+    }
+    input.value = ''; // Reset file input
+  };
+  reader.readAsText(file);
+}
+
+function clearProcessData() {
+  if (!confirm('Are you sure you want to clear all process data?')) return;
+  processes = [{
+    uid: genUid(),
+    sapNo: 'PP000001',
+    desc: 'New Process',
+    cycle: 10,
+    eff: 80,
+    mult: 1
+  }];
+  taskResources = {};
+  saveToLocalStorage();
+  recalcAllProcesses();
+  renderProcessTable();
+  initStations();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CSV EXPORT/IMPORT - WORKERS
+// ══════════════════════════════════════════════════════════════
+
+function exportWorkersCSV() {
+  const headers = ['Employee Code','Name','Shift Start','Shift End','Break (min)','Hourly Rate'];
+  const rows = workers.map(w => [
+    w.code,
+    '"' + w.name.replace(/"/g, '""') + '"',
+    w.shiftStart,
+    w.shiftEnd,
+    w.breakMin,
+    w.hourlyRate.toFixed(2)
+  ].join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  downloadCSV(csv, 'workforce.csv');
+}
+
+function importWorkersCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    if (rows.length < 2) {
+      alert('CSV file is empty or invalid.');
+      return;
+    }
+    // Skip header row
+    const newWorkers = [];
+    for (let i = 1; i < rows.length; i++) {
+      const cols = rows[i];
+      if (cols.length < 6) continue;
+      newWorkers.push({
+        uid: genUid(),
+        code: cols[0] || '',
+        name: cols[1] || '',
+        shiftStart: cols[2] || '08:00',
+        shiftEnd: cols[3] || '17:00',
+        breakMin: parseInt(cols[4]) || 60,
+        hourlyRate: parseFloat(cols[5]) || 15.00
+      });
+    }
+    if (newWorkers.length > 0) {
+      workers = newWorkers;
+      saveToLocalStorage();
+      renderWorkerTable();
+      renderAll();
+      alert(`Imported ${newWorkers.length} workers successfully.`);
+    } else {
+      alert('No valid workers found in CSV.');
+    }
+    input.value = ''; // Reset file input
+  };
+  reader.readAsText(file);
+}
+
+function clearWorkerData() {
+  if (!confirm('Are you sure you want to clear all worker data?')) return;
+  workers = [];
+  saveToLocalStorage();
+  renderWorkerTable();
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CSV UTILITIES
+// ══════════════════════════════════════════════════════════════
+
+function downloadCSV(csv, filename) {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let currentRow = [];
+  let currentField = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentField += '"';
+        i++; // Skip the next quote
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentField += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        currentRow.push(currentField.trim());
+        currentField = '';
+      } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+        currentRow.push(currentField.trim());
+        if (currentRow.length > 0 && currentRow.some(f => f !== '')) {
+          rows.push(currentRow);
+        }
+        currentRow = [];
+        currentField = '';
+        if (char === '\r') i++; // Skip \n after \r
+      } else if (char !== '\r') {
+        currentField += char;
+      }
+    }
+  }
+
+  // Don't forget the last field/row
+  if (currentField || currentRow.length > 0) {
+    currentRow.push(currentField.trim());
+    if (currentRow.some(f => f !== '')) {
+      rows.push(currentRow);
+    }
+  }
+
+  return rows;
+}
+
+// ══════════════════════════════════════════════════════════════
+// LOCAL STORAGE PERSISTENCE
+// ══════════════════════════════════════════════════════════════
+
+const STORAGE_KEY_PROCESSES = 'lineBalancing_processes';
+const STORAGE_KEY_WORKERS = 'lineBalancing_workers';
+const STORAGE_KEY_TASK_RESOURCES = 'lineBalancing_taskResources';
+
+function saveToLocalStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY_PROCESSES, JSON.stringify(processes));
+    localStorage.setItem(STORAGE_KEY_WORKERS, JSON.stringify(workers));
+    localStorage.setItem(STORAGE_KEY_TASK_RESOURCES, JSON.stringify(taskResources));
+  } catch (e) {
+    console.warn('Failed to save to localStorage:', e);
+  }
+}
+
+function loadFromLocalStorage() {
+  try {
+    const savedProcesses = localStorage.getItem(STORAGE_KEY_PROCESSES);
+    const savedWorkers = localStorage.getItem(STORAGE_KEY_WORKERS);
+    const savedTaskResources = localStorage.getItem(STORAGE_KEY_TASK_RESOURCES);
+
+    if (savedProcesses) {
+      const parsed = JSON.parse(savedProcesses);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        processes = parsed;
+      }
+    }
+    if (savedWorkers) {
+      const parsed = JSON.parse(savedWorkers);
+      if (Array.isArray(parsed)) {
+        workers = parsed;
+      }
+    }
+    if (savedTaskResources) {
+      const parsed = JSON.parse(savedTaskResources);
+      if (parsed && typeof parsed === 'object') {
+        taskResources = parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load from localStorage:', e);
+  }
+}
+
+// Wrap existing update functions to auto-save
+const originalUpdateProcess = updateProcess;
+updateProcess = function(idx, field, value) {
+  originalUpdateProcess(idx, field, value);
+  saveToLocalStorage();
+};
+
+const originalAddProcess = addProcess;
+addProcess = function() {
+  originalAddProcess();
+  saveToLocalStorage();
+};
+
+const originalDeleteProcess = deleteProcess;
+deleteProcess = function(idx) {
+  originalDeleteProcess(idx);
+  saveToLocalStorage();
+};
+
+const originalMoveProcess = moveProcess;
+moveProcess = function(idx, dir) {
+  originalMoveProcess(idx, dir);
+  saveToLocalStorage();
+};
+
+const originalUpdateWorker = updateWorker;
+updateWorker = function(idx, field, value) {
+  originalUpdateWorker(idx, field, value);
+  saveToLocalStorage();
+};
+
+const originalAddWorker = addWorker;
+addWorker = function() {
+  originalAddWorker();
+  saveToLocalStorage();
+};
+
+const originalDeleteWorker = deleteWorker;
+deleteWorker = function(idx) {
+  originalDeleteWorker(idx);
+  saveToLocalStorage();
+};
+
+const originalSaveStationResourcesToTasks = saveStationResourcesToTasks;
+saveStationResourcesToTasks = function() {
+  originalSaveStationResourcesToTasks();
+  saveToLocalStorage();
+};
+
+// ══════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════
+
+// Load data from localStorage first
+loadFromLocalStorage();
+
+recalcAllProcesses();
+renderProcessTable();
+renderWorkerTable();
+initStations();
+renderAll();
+</script>
+</body>
+</html>
