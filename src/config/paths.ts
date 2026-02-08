@@ -157,7 +157,6 @@ export function resolveConfigPath(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   const newConfigExists = fs.existsSync(path.join(stateDir, CONFIG_FILENAME));
   const candidates = [
     path.join(stateDir, CONFIG_FILENAME),
@@ -173,14 +172,19 @@ export function resolveConfigPath(
   if (existing) {
     return existing;
   }
+  // When OPENCLAW_STATE_DIR is set (or stateDir was explicitly provided),
+  // return directly under stateDir rather than falling through to
+  // resolveConfigPathCandidate which checks multiple default locations
+  // and could find a config in a different directory.
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (stateOverride) {
     return path.join(stateDir, CONFIG_FILENAME);
   }
   const defaultStateDir = resolveStateDir(env, homedir);
-  if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
-    return resolveConfigPathCandidate(env, homedir);
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
+    return path.join(stateDir, CONFIG_FILENAME);
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return resolveConfigPathCandidate(env, homedir);
 }
 
 export const CONFIG_PATH = resolveConfigPathCandidate();
