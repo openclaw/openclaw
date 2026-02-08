@@ -108,6 +108,10 @@ export const HelloOkSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    identity: Type.Optional(Type.Object({
+      name: Type.String(),
+      avatar: Type.Optional(Type.String()),
+    })),
   },
   { additionalProperties: false },
 );
