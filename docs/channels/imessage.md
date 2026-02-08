@@ -235,7 +235,8 @@ Groups:
 
 ## How it works (behavior)
 
-- `imsg` streams message events; the gateway normalizes them into the shared channel envelope.
+- The gateway spawns `imsg rpc` and subscribes via `watch.subscribe` for real-time message notifications.
+- If your environment does not receive real-time push events (e.g. messages appear in Messages but the agent does not react), set `channels.imessage.pollIntervalMs` to a positive value (e.g. `5000`). The gateway will then poll `imsg history` periodically so incoming messages are still delivered. Real-time and polled messages are deduplicated.
 - Replies always route back to the same chat id or handle.
 
 ## Group-ish threads (`is_group=false`)
@@ -312,6 +313,7 @@ Provider options:
 - `channels.imessage.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
 - `channels.imessage.includeAttachments`: ingest attachments into context.
 - `channels.imessage.mediaMaxMb`: inbound/outbound media cap (MB).
+- `channels.imessage.pollIntervalMs`: when > 0, poll `imsg history` at this interval (ms) as a fallback when RPC watch does not push; 0 = real-time only (default).
 - `channels.imessage.textChunkLimit`: outbound chunk size (chars).
 - `channels.imessage.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 

@@ -661,6 +661,9 @@ export const IMessageAccountSchemaBase = z
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    /** Poll interval in ms for history-based fallback when RPC watch does not push (0 = disabled). */
+    pollIntervalMs: z.number().int().min(0).optional(),
+    probeTimeoutMs: z.number().int().min(100).optional(),
   })
   .strict();
 

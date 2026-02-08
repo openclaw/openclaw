@@ -1402,6 +1402,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
+      pollIntervalMs: 0, // when > 0, poll imsg history as fallback if RPC watch does not push (e.g. 5000)
     },
   },
 }
@@ -1416,6 +1417,7 @@ Notes:
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
 - `channels.imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
 - For remote SSH wrappers, set `channels.imessage.remoteHost` to fetch attachments via SCP when `includeAttachments` is enabled.
+- If the agent does not receive iMessage in real time (RPC `watch.subscribe` not pushing), set `channels.imessage.pollIntervalMs` to a positive value (e.g. `5000`) so the gateway polls `imsg history` periodically and still delivers incoming messages.
 
 Example wrapper:
 

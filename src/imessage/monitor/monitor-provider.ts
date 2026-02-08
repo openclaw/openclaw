@@ -41,8 +41,9 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { resolveUserPath, truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
@@ -55,6 +56,43 @@ import {
 } from "../targets.js";
 import { deliverReplies } from "./deliver.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+
+/** Bounded deduplication so the same message is not delivered twice (watch + poll). */
+function chatKeyForDedup(message: IMessagePayload): string {
+  return String(message.chat_id ?? message.chat_guid ?? message.chat_identifier ?? "unknown");
+}
+
+const MAX_DEDUPE_ENTRIES = 1000;
+
+class InboundMessageDeduper {
+  private keys: string[] = [];
+  private seen = new Set<string>();
+
+  mark(chatKey: string, messageId: number | string | null | undefined): void {
+    if (messageId == null || messageId === "") {
+      return;
+    }
+    const key = `${chatKey}:${messageId}`;
+    if (this.seen.has(key)) {
+      return;
+    }
+    this.seen.add(key);
+    this.keys.push(key);
+    while (this.keys.length > MAX_DEDUPE_ENTRIES) {
+      const oldest = this.keys.shift();
+      if (oldest) {
+        this.seen.delete(oldest);
+      }
+    }
+  }
+
+  has(chatKey: string, messageId: number | string | null | undefined): boolean {
+    if (messageId == null || messageId === "") {
+      return false;
+    }
+    return this.seen.has(`${chatKey}:${messageId}`);
+  }
+}
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -172,6 +210,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = new SentMessageCache();
+  const inboundDeduper = new InboundMessageDeduper();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -187,6 +226,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
   const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+  const pollIntervalMs = Math.max(0, imessageCfg.pollIntervalMs ?? 0);
+  const resolvedDbPath = dbPath?.trim() ? resolveUserPath(dbPath) : undefined;
 
   // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
   let remoteHost = imessageCfg.remoteHost;
@@ -670,6 +711,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (!message) {
       return;
     }
+    const key = chatKeyForDedup(message);
+    const id = message.id;
+    if (id != null && inboundDeduper.has(key, id)) {
+      return;
+    }
+    inboundDeduper.mark(key, id);
     await inboundDebouncer.enqueue({ message });
   };
 
@@ -729,6 +776,94 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   };
   abort?.addEventListener("abort", onAbort, { once: true });
+
+  type ChatsListResult = { chats?: Array<{ id?: number }> };
+  const pollOnce = async (): Promise<void> => {
+    let chats: Array<{ id?: number }> = [];
+    try {
+      const list = await client.request<ChatsListResult>("chats.list", {
+        limit: 50,
+      });
+      if (Array.isArray(list)) {
+        chats = list as Array<{ id?: number }>;
+      } else if (list?.chats && Array.isArray(list.chats)) {
+        chats = list.chats;
+      }
+    } catch (err) {
+      if (!abort?.aborted) {
+        runtime.error?.(`imessage poll chats.list failed: ${String(err)}`);
+      }
+      return;
+    }
+    const historyLimitPerChat = 5;
+    const timeoutMs = Math.min(probeTimeoutMs, 15_000);
+    for (const chat of chats) {
+      if (abort?.aborted) {
+        break;
+      }
+      const cid = chat?.id;
+      if (cid == null || typeof cid !== "number") {
+        continue;
+      }
+      const args = [
+        cliPath,
+        "history",
+        "--chat-id",
+        String(cid),
+        "--limit",
+        String(historyLimitPerChat),
+        "--json",
+      ];
+      if (resolvedDbPath) {
+        args.push("--db", resolvedDbPath);
+      }
+      if (includeAttachments) {
+        args.push("--attachments");
+      }
+      try {
+        const res = await runCommandWithTimeout(args, { timeoutMs });
+        if (res.code !== 0 || !res.stdout.trim()) {
+          continue;
+        }
+        const lines = res.stdout.split(/\r?\n/).filter((l) => l.trim());
+        for (const line of lines) {
+          try {
+            const message = JSON.parse(line) as IMessagePayload;
+            if (message?.is_from_me) {
+              continue;
+            }
+            await handleMessage({ message });
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      } catch {
+        // Per-chat errors are non-fatal; continue with next chat
+      }
+    }
+  };
+
+  if (pollIntervalMs > 0) {
+    const pollLoop = async (): Promise<void> => {
+      while (!abort?.aborted) {
+        await pollOnce();
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, pollIntervalMs);
+          const onAbort = (): void => {
+            clearTimeout(t);
+            abort?.removeEventListener("abort", onAbort);
+            resolve();
+          };
+          abort?.addEventListener("abort", onAbort);
+        });
+      }
+    };
+    void pollLoop().catch((err) => {
+      if (!abort?.aborted) {
+        runtime.error?.(danger(`imessage poll loop failed: ${String(err)}`));
+      }
+    });
+  }
 
   try {
     const result = await client.request<{ subscription?: number }>("watch.subscribe", {
