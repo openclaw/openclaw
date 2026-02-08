@@ -219,7 +219,11 @@ export async function initSessionState(params: {
     resetOverride: channelReset,
   });
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? evaluateSessionFreshness({
+        updatedAt: entry.updatedAt,
+        now,
+        policy: resetPolicy,
+      }).fresh
     : false;
 
   if (!isNewSession && freshEntry) {
@@ -302,7 +306,11 @@ export async function initSessionState(params: {
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
-  const threadLabel = ctx.ThreadLabel?.trim();
+  let threadLabel = ctx.ThreadLabel?.trim();
+  // If DM topic and no label, generate a human-readable label
+  if (!threadLabel && ctx.MessageThreadId && ctx.ChatType === "direct") {
+    threadLabel = `DM Topic #${ctx.MessageThreadId}`;
+  }
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
   }

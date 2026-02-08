@@ -175,7 +175,9 @@ export const buildTelegramMessageContext = async ({
   });
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
-  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  // Always preserve message_thread_id for DMs, even if is_forum is false
+  const dmThreadId =
+    !isGroup && typeof messageThreadId !== "undefined" ? messageThreadId : undefined;
   const threadKeys =
     dmThreadId != null
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
@@ -204,7 +206,7 @@ export const buildTelegramMessageContext = async ({
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
-      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
+      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(threadSpec.id)),
     });
   };
 
@@ -213,7 +215,7 @@ export const buildTelegramMessageContext = async ({
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
         fn: () =>
-          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
+          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(threadSpec.id)),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
