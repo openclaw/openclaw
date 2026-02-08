@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { SecretsProvider } from "./provider.js";
 import {
   resolveConfigSecrets,

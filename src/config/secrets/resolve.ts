@@ -25,15 +25,10 @@
 
 import type { SecretsProvider } from "./provider.js";
 import type { SecretsConfig } from "./types.js";
-import { createAwsSecretsProvider } from "./aws.js";
-import { createBitwardenSecretsProvider } from "./bitwarden.js";
-import { createDopplerSecretsProvider } from "./doppler.js";
 import { createEnvSecretsProvider } from "./env.js";
 import { createGcpSecretsProvider } from "./gcp.js";
 import { createKeyringSecretsProvider } from "./keyring.js";
-import { createOnePasswordSecretsProvider } from "./onepassword.js";
 import { defaultResolveAll } from "./provider.js";
-import { createVaultSecretsProvider } from "./vault.js";
 
 /** Pattern for valid secret names: alphanumeric, hyphens, underscores, dots. */
 const SECRET_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/;
