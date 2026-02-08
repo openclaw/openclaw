@@ -1,4 +1,4 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import type { MatrixClient } from "../sdk.js";
 import type { CoreConfig } from "../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient } from "../active-client.js";
@@ -60,7 +60,6 @@ export async function resolveMatrixClient(opts: {
       // Ignore crypto prep failures for one-off sends; normal sync will retry.
     }
   }
-  // @vector-im/matrix-bot-sdk uses start() instead of startClient()
   await client.start();
   return { client, stopOnDone: true };
 }

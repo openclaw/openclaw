@@ -193,11 +193,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       statusLines: [
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
-      selectionHint: !sdkReady
-        ? "install @vector-im/matrix-bot-sdk"
-        : configured
-          ? "configured"
-          : "needs auth",
+      selectionHint: !sdkReady ? "install matrix-js-sdk" : configured ? "configured" : "needs auth",
     };
   },
   configure: async ({ cfg, runtime, prompter, forceAllowFrom }) => {

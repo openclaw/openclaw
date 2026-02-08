@@ -1,4 +1,4 @@
-import { ConsoleLogger, LogService } from "@vector-im/matrix-bot-sdk";
+import { ConsoleLogger, LogService } from "../sdk.js";
 
 let matrixSdkLoggingConfigured = false;
 const matrixSdkBaseLogger = new ConsoleLogger();

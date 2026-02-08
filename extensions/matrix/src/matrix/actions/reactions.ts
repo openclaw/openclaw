@@ -21,7 +21,7 @@ export async function listMatrixReactions(
       typeof opts.limit === "number" && Number.isFinite(opts.limit)
         ? Math.max(1, Math.floor(opts.limit))
         : 100;
-    // @vector-im/matrix-bot-sdk uses doRequest for relations
+    // Relations are queried via the low-level endpoint for compatibility.
     const res = (await client.doRequest(
       "GET",
       `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`,

@@ -1,4 +1,3 @@
-import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -9,6 +8,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
+import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import {
   formatPollAsText,
@@ -116,7 +116,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted messages are decrypted automatically by @vector-im/matrix-bot-sdk with crypto enabled
+        // Encrypted payloads are emitted separately after decryption.
         return;
       }
 
@@ -446,7 +446,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         threadReplies,
         messageId,
         threadRootId,
-        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
+        isThreadRoot: false, // Raw event payload does not carry explicit thread-root metadata.
       });
 
       const route = core.channel.routing.resolveAgentRoute({

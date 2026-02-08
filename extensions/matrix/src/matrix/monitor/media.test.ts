@@ -28,7 +28,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+    } as unknown as import("../sdk.js").MatrixClient;
 
     const file = {
       url: "mxc://example/file",
@@ -69,7 +69,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+    } as unknown as import("../sdk.js").MatrixClient;
 
     const file = {
       url: "mxc://example/file",

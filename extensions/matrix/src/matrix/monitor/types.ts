@@ -1,4 +1,4 @@
-import type { EncryptedFile, MessageEventContent } from "@vector-im/matrix-bot-sdk";
+import type { EncryptedFile, MessageEventContent } from "../sdk.js";
 
 export const EventType = {
   RoomMessage: "m.room.message",

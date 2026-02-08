@@ -1,7 +1,7 @@
-import { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { CoreConfig } from "../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { MatrixClient } from "../sdk.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 
 function clean(value?: string): string {
@@ -65,6 +65,10 @@ export async function resolveMatrixAuth(params?: {
   // If we have an access token, we can fetch userId via whoami if not provided
   if (resolved.accessToken) {
     let userId = resolved.userId;
+    const knownDeviceId =
+      cachedCredentials && cachedCredentials.accessToken === resolved.accessToken
+        ? cachedCredentials.deviceId
+        : undefined;
     if (!userId) {
       // Fetch userId from access token via whoami
       ensureMatrixSdkLoggingConfigured();
@@ -76,6 +80,7 @@ export async function resolveMatrixAuth(params?: {
         homeserver: resolved.homeserver,
         userId,
         accessToken: resolved.accessToken,
+        deviceId: knownDeviceId,
       });
     } else if (cachedCredentials && cachedCredentials.accessToken === resolved.accessToken) {
       touchMatrixCredentials(env);
@@ -84,6 +89,7 @@ export async function resolveMatrixAuth(params?: {
       homeserver: resolved.homeserver,
       userId,
       accessToken: resolved.accessToken,
+      deviceId: knownDeviceId,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
@@ -96,6 +102,7 @@ export async function resolveMatrixAuth(params?: {
       homeserver: cachedCredentials.homeserver,
       userId: cachedCredentials.userId,
       accessToken: cachedCredentials.accessToken,
+      deviceId: cachedCredentials.deviceId,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
@@ -112,24 +119,15 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
-  // Login with password using HTTP API
-  const loginResponse = await fetch(`${resolved.homeserver}/_matrix/client/v3/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: resolved.userId },
-      password: resolved.password,
-      initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
-    }),
-  });
-
-  if (!loginResponse.ok) {
-    const errorText = await loginResponse.text();
-    throw new Error(`Matrix login failed: ${errorText}`);
-  }
-
-  const login = (await loginResponse.json()) as {
+  // Login with password using the same hardened request path as other Matrix HTTP calls.
+  ensureMatrixSdkLoggingConfigured();
+  const loginClient = new MatrixClient(resolved.homeserver, "");
+  const login = (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
+    type: "m.login.password",
+    identifier: { type: "m.id.user", user: resolved.userId },
+    password: resolved.password,
+    initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+  })) as {
     access_token?: string;
     user_id?: string;
     device_id?: string;
@@ -144,6 +142,7 @@ export async function resolveMatrixAuth(params?: {
     homeserver: resolved.homeserver,
     userId: login.user_id ?? resolved.userId,
     accessToken,
+    deviceId: login.device_id,
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
     encryption: resolved.encryption,

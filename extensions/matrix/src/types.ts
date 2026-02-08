@@ -53,7 +53,7 @@ export type MatrixConfig = {
   password?: string;
   /** Optional device name when logging in via password. */
   deviceName?: string;
-  /** Initial sync limit for startup (default: @vector-im/matrix-bot-sdk default). */
+  /** Initial sync limit for startup (defaults to matrix-js-sdk behavior). */
   initialSyncLimit?: number;
   /** Enable end-to-end encryption (E2EE). Default: false. */
   encryption?: boolean;

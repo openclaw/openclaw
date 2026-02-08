@@ -9,10 +9,8 @@ export async function getMatrixMemberInfo(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
-    // @vector-im/matrix-bot-sdk uses getUserProfile
     const profile = await client.getUserProfile(userId);
-    // Note: @vector-im/matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
-    // We'd need to fetch room state separately if needed
+    // Membership and power levels are not included in profile calls; fetch state separately if needed.
     return {
       userId,
       profile: {
@@ -35,7 +33,6 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    // @vector-im/matrix-bot-sdk uses getRoomState for state events
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;
@@ -43,21 +40,21 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
 
     try {
       const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
-      name = nameState?.name ?? null;
+      name = typeof nameState?.name === "string" ? nameState.name : null;
     } catch {
       // ignore
     }
 
     try {
       const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
-      topic = topicState?.topic ?? null;
+      topic = typeof topicState?.topic === "string" ? topicState.topic : null;
     } catch {
       // ignore
     }
 
     try {
       const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
-      canonicalAlias = aliasState?.alias ?? null;
+      canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
     } catch {
       // ignore
     }

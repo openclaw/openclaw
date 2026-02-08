@@ -6,7 +6,7 @@ import type {
   TextualMessageEventContent,
   TimedFileInfo,
   VideoFileInfo,
-} from "@vector-im/matrix-bot-sdk";
+} from "../sdk.js";
 
 // Message types
 export const MsgType = {
@@ -85,7 +85,7 @@ export type MatrixSendResult = {
 };
 
 export type MatrixSendOpts = {
-  client?: import("@vector-im/matrix-bot-sdk").MatrixClient;
+  client?: import("../sdk.js").MatrixClient;
   mediaUrl?: string;
   accountId?: string;
   replyToId?: string;

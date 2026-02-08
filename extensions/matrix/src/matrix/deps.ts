@@ -5,16 +5,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getMatrixRuntime } from "../runtime.js";
 
-const MATRIX_SDK_PACKAGE = "@vector-im/matrix-bot-sdk";
+const REQUIRED_MATRIX_PACKAGES = ["matrix-js-sdk", "@matrix-org/matrix-sdk-crypto-nodejs"];
 
-export function isMatrixSdkAvailable(): boolean {
+function resolveMissingMatrixPackages(): string[] {
   try {
     const req = createRequire(import.meta.url);
-    req.resolve(MATRIX_SDK_PACKAGE);
-    return true;
+    return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
+      try {
+        req.resolve(pkg);
+        return false;
+      } catch {
+        return true;
+      }
+    });
   } catch {
-    return false;
+    return [...REQUIRED_MATRIX_PACKAGES];
   }
+}
+
+export function isMatrixSdkAvailable(): boolean {
+  return resolveMissingMatrixPackages().length === 0;
 }
 
 function resolvePluginRoot(): string {
@@ -31,9 +41,13 @@ export async function ensureMatrixSdkInstalled(params: {
   }
   const confirm = params.confirm;
   if (confirm) {
-    const ok = await confirm("Matrix requires @vector-im/matrix-bot-sdk. Install now?");
+    const ok = await confirm(
+      "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs. Install now?",
+    );
     if (!ok) {
-      throw new Error("Matrix requires @vector-im/matrix-bot-sdk (install dependencies first).");
+      throw new Error(
+        "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs (install dependencies first).",
+      );
     }
   }
 
@@ -53,8 +67,11 @@ export async function ensureMatrixSdkInstalled(params: {
     );
   }
   if (!isMatrixSdkAvailable()) {
+    const missing = resolveMissingMatrixPackages();
     throw new Error(
-      "Matrix dependency install completed but @vector-im/matrix-bot-sdk is still missing.",
+      missing.length > 0
+        ? `Matrix dependency install completed but required packages are still missing: ${missing.join(", ")}`
+        : "Matrix dependency install completed but Matrix dependencies are still missing.",
     );
   }
 }

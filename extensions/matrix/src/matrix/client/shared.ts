@@ -1,7 +1,7 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { LogService } from "@vector-im/matrix-bot-sdk";
+import type { MatrixClient } from "../sdk.js";
 import type { CoreConfig } from "../types.js";
 import type { MatrixAuth } from "./types.js";
+import { LogService } from "../sdk.js";
 import { resolveMatrixAuth } from "./config.js";
 import { createMatrixClient } from "./create-client.js";
 import { DEFAULT_ACCOUNT_KEY } from "./storage.js";
@@ -36,8 +36,10 @@ async function createSharedMatrixClient(params: {
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
     accessToken: params.auth.accessToken,
+    deviceId: params.auth.deviceId,
     encryption: params.auth.encryption,
     localTimeoutMs: params.timeoutMs,
+    initialSyncLimit: params.auth.initialSyncLimit,
     accountId: params.accountId,
   });
   return {
@@ -158,7 +160,7 @@ export async function waitForMatrixSync(_params: {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  // @vector-im/matrix-bot-sdk handles sync internally in start()
+  // matrix-js-sdk handles sync lifecycle in start() for this integration.
   // This is kept for API compatibility but is essentially a no-op now
 }
 

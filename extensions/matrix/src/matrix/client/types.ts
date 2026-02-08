@@ -2,6 +2,7 @@ export type MatrixResolvedConfig = {
   homeserver: string;
   userId: string;
   accessToken?: string;
+  deviceId?: string;
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number;
@@ -19,6 +20,7 @@ export type MatrixAuth = {
   homeserver: string;
   userId: string;
   accessToken: string;
+  deviceId?: string;
   deviceName?: string;
   initialSyncLimit?: number;
   encryption?: boolean;

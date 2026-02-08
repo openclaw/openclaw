@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { resolveMatrixConfig } from "./client.js";
+import { resolveMatrixAuth, resolveMatrixConfig } from "./client.js";
+import * as sdkModule from "./sdk.js";
+
+const saveMatrixCredentialsMock = vi.fn();
+
+vi.mock("./credentials.js", () => ({
+  loadMatrixCredentials: vi.fn(() => null),
+  saveMatrixCredentials: (...args: unknown[]) => saveMatrixCredentialsMock(...args),
+  credentialsMatchConfig: vi.fn(() => false),
+  touchMatrixCredentials: vi.fn(),
+}));
 
 describe("resolveMatrixConfig", () => {
   it("prefers config over env", () => {
@@ -52,5 +62,61 @@ describe("resolveMatrixConfig", () => {
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);
+  });
+});
+
+describe("resolveMatrixAuth", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    saveMatrixCredentialsMock.mockReset();
+  });
+
+  it("uses the hardened client request path for password login and persists deviceId", async () => {
+    const doRequestSpy = vi.spyOn(sdkModule.MatrixClient.prototype, "doRequest").mockResolvedValue({
+      access_token: "tok-123",
+      user_id: "@bot:example.org",
+      device_id: "DEVICE123",
+    });
+
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          password: "secret",
+          encryption: true,
+        },
+      },
+    } as CoreConfig;
+
+    const auth = await resolveMatrixAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(doRequestSpy).toHaveBeenCalledWith(
+      "POST",
+      "/_matrix/client/v3/login",
+      undefined,
+      expect.objectContaining({
+        type: "m.login.password",
+      }),
+    );
+    expect(auth).toMatchObject({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok-123",
+      deviceId: "DEVICE123",
+      encryption: true,
+    });
+    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+        deviceId: "DEVICE123",
+      }),
+    );
   });
 });

@@ -43,13 +43,14 @@ export async function probeMatrix(params: {
     };
   }
   try {
+    const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
-      userId: params.userId ?? "",
+      userId: inputUserId,
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
     });
-    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
+    // The client wrapper resolves user ID via whoami when needed.
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

@@ -2,22 +2,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 
-vi.mock("@vector-im/matrix-bot-sdk", () => ({
-  ConsoleLogger: class {
-    trace = vi.fn();
-    debug = vi.fn();
-    info = vi.fn();
-    warn = vi.fn();
-    error = vi.fn();
-  },
-  LogService: {
-    setLogger: vi.fn(),
-  },
-  MatrixClient: vi.fn(),
-  SimpleFsStorageProvider: vi.fn(),
-  RustSdkCryptoStorageProvider: vi.fn(),
-}));
-
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
   fileName: "photo.png",
@@ -59,7 +43,7 @@ const makeClient = () => {
     sendMessage,
     uploadContent,
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-  } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+  } as unknown as import("./sdk.js").MatrixClient;
   return { client, sendMessage, uploadContent };
 };
 

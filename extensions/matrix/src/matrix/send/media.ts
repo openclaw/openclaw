@@ -1,3 +1,4 @@
+import { parseBuffer, type IFileInfo } from "music-metadata";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -5,8 +6,7 @@ import type {
   MatrixClient,
   TimedFileInfo,
   VideoFileInfo,
-} from "@vector-im/matrix-bot-sdk";
-import { parseBuffer, type IFileInfo } from "music-metadata";
+} from "../sdk.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { applyMatrixFormatting } from "./formatting.js";
 import {

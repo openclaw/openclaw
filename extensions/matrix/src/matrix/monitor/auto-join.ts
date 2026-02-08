@@ -1,7 +1,6 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
 import type { CoreConfig } from "../../types.js";
+import type { MatrixClient } from "../sdk.js";
 import { getMatrixRuntime } from "../../runtime.js";
 
 export function registerMatrixAutoJoin(params: {
@@ -18,47 +17,52 @@ export function registerMatrixAutoJoin(params: {
     runtime.log?.(message);
   };
   const autoJoin = cfg.channels?.matrix?.autoJoin ?? "always";
-  const autoJoinAllowlist = cfg.channels?.matrix?.autoJoinAllowlist ?? [];
+  const autoJoinAllowlist = new Set(
+    (cfg.channels?.matrix?.autoJoinAllowlist ?? [])
+      .map((entry) => String(entry).trim())
+      .filter(Boolean),
+  );
 
   if (autoJoin === "off") {
     return;
   }
 
   if (autoJoin === "always") {
-    // Use the built-in autojoin mixin for "always" mode
-    AutojoinRoomsMixin.setupOnClient(client);
     logVerbose("matrix: auto-join enabled for all invites");
-    return;
+  } else {
+    logVerbose("matrix: auto-join enabled for allowlist invites");
   }
 
-  // For "allowlist" mode, handle invites manually
+  // Handle invites directly so both "always" and "allowlist" modes share the same path.
   client.on("room.invite", async (roomId: string, _inviteEvent: unknown) => {
-    if (autoJoin !== "allowlist") {
-      return;
-    }
+    if (autoJoin === "allowlist") {
+      let alias: string | undefined;
+      let altAliases: string[] = [];
+      try {
+        const aliasState = await client
+          .getRoomStateEvent(roomId, "m.room.canonical_alias", "")
+          .catch(() => null);
+        alias = aliasState && typeof aliasState.alias === "string" ? aliasState.alias : undefined;
+        altAliases =
+          aliasState && Array.isArray(aliasState.alt_aliases)
+            ? aliasState.alt_aliases
+                .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+                .filter(Boolean)
+            : [];
+      } catch {
+        // Ignore errors
+      }
 
-    // Get room alias if available
-    let alias: string | undefined;
-    let altAliases: string[] = [];
-    try {
-      const aliasState = await client
-        .getRoomStateEvent(roomId, "m.room.canonical_alias", "")
-        .catch(() => null);
-      alias = aliasState?.alias;
-      altAliases = Array.isArray(aliasState?.alt_aliases) ? aliasState.alt_aliases : [];
-    } catch {
-      // Ignore errors
-    }
+      const allowed =
+        autoJoinAllowlist.has("*") ||
+        autoJoinAllowlist.has(roomId) ||
+        (alias ? autoJoinAllowlist.has(alias) : false) ||
+        altAliases.some((value) => autoJoinAllowlist.has(value));
 
-    const allowed =
-      autoJoinAllowlist.includes("*") ||
-      autoJoinAllowlist.includes(roomId) ||
-      (alias ? autoJoinAllowlist.includes(alias) : false) ||
-      altAliases.some((value) => autoJoinAllowlist.includes(value));
-
-    if (!allowed) {
-      logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
-      return;
+      if (!allowed) {
+        logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);
+        return;
+      }
     }
 
     try {
