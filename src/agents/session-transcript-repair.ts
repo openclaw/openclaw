@@ -18,6 +18,13 @@ type ToolCallBlock = {
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
+  // Skip aborted messages — their tool calls are incomplete/partial and
+  // must not trigger synthetic tool_result generation. (#6788)
+  const stopReason = (msg as { stopReason?: unknown }).stopReason;
+  if (stopReason === "aborted") {
+    return [];
+  }
+
   const content = msg.content;
   if (!Array.isArray(content)) {
     return [];

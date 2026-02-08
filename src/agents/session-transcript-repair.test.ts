@@ -93,6 +93,40 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(results[0]?.toolCallId).toBe("call_1");
   });
 
+  it("does not synthesize tool results for aborted assistant messages (#6788)", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [
+          { type: "thinking", thinking: "let me edit that file" },
+          { type: "toolCall", id: "call_aborted", name: "edit", arguments: {} },
+        ],
+      },
+      { role: "user", content: "never mind, do something else" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("still synthesizes tool results for non-aborted assistant messages", () => {
+    const input = [
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "ok" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
+    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+  });
+
   it("drops orphan tool results that do not match any tool call", () => {
     const input = [
       { role: "user", content: "hello" },
