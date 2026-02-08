@@ -7,11 +7,13 @@ import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationMs } from "../infra/format-duration.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
+import { resolveTelegramToken } from "./token.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
@@ -104,11 +106,22 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   try {
     const cfg = opts.config ?? loadConfig();
+    const tokenOverride = opts.token?.trim();
+    let accountId = opts.accountId;
+    if (tokenOverride && !accountId) {
+      const ids = [DEFAULT_ACCOUNT_ID, ...listTelegramAccountIds(cfg)];
+      const match = ids.find(
+        (candidate) => resolveTelegramToken(cfg, { accountId: candidate }).token === tokenOverride,
+      );
+      if (match) {
+        accountId = match;
+      }
+    }
     const account = resolveTelegramAccount({
       cfg,
-      accountId: opts.accountId,
+      accountId,
     });
-    const token = opts.token?.trim() || account.token;
+    const token = tokenOverride || account.token;
     if (!token) {
       throw new Error(
         `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
