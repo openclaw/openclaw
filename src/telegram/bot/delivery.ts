@@ -484,16 +484,8 @@ function buildTelegramSendParams(opts?: {
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
-  const quoteText = opts?.replyQuoteText?.trim();
   if (opts?.replyToMessageId) {
-    if (quoteText) {
-      params.reply_parameters = {
-        message_id: Math.trunc(opts.replyToMessageId),
-        quote: quoteText,
-      };
-    } else {
-      params.reply_to_message_id = opts.replyToMessageId;
-    }
+    params.reply_to_message_id = opts.replyToMessageId;
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
