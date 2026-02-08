@@ -9,18 +9,12 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SpoolDispatchResult } from "../spool/types.js";
 import { getChildLogger } from "../logging.js";
-import { resolveSpoolEventsDir, resolveSpoolDeadLetterDir } from "../spool/paths.js";
-import {
-  createSpoolWatcher,
-  type SpoolWatcher,
-  type SpoolWatcherHandle,
-} from "../spool/watcher.js";
+import { resolveSpoolEventsDir } from "../spool/paths.js";
+import { createSpoolWatcher, type SpoolWatcher } from "../spool/watcher.js";
 
 export type GatewaySpoolState = {
   watcher: SpoolWatcher;
-  handle: SpoolWatcherHandle | null;
   eventsDir: string;
-  deadLetterDir: string;
   spoolEnabled: boolean;
 };
 
@@ -31,7 +25,6 @@ export function buildGatewaySpoolService(params: {
 }): GatewaySpoolState {
   const spoolLogger = getChildLogger({ module: "spool" });
   const eventsDir = resolveSpoolEventsDir();
-  const deadLetterDir = resolveSpoolDeadLetterDir();
   const spoolEnabled =
     process.env.OPENCLAW_SKIP_SPOOL !== "1" && params.cfg.spool?.enabled !== false;
 
@@ -49,32 +42,20 @@ export function buildGatewaySpoolService(params: {
 
   return {
     watcher,
-    handle: null,
     eventsDir,
-    deadLetterDir,
     spoolEnabled,
   };
 }
 
-export async function startGatewaySpoolWatcher(
-  state: GatewaySpoolState,
-): Promise<SpoolWatcherHandle | null> {
+export async function startGatewaySpoolWatcher(state: GatewaySpoolState): Promise<void> {
   if (!state.spoolEnabled) {
-    return null;
+    return;
   }
-
   await state.watcher.start();
-  state.handle = {
-    watcher: state.watcher,
-    stop: () => state.watcher.stop(),
-  };
-
-  return state.handle;
 }
 
 export async function stopGatewaySpoolWatcher(state: GatewaySpoolState): Promise<void> {
-  // Always stop the watcher directly, even if handle is unset (startup in flight)
+  // Always stop the watcher directly, even if startup was in flight
   // The watcher's stop() is safe to call regardless of running state
   await state.watcher.stop();
-  state.handle = null;
 }
