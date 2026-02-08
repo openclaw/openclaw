@@ -74,6 +74,12 @@ export async function loadProviderUsageSummary(
             };
           case "zai":
             return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
+          case "huawei-maas":
+            return {
+              provider: "huawei-maas",
+              displayName: PROVIDER_LABELS["huawei-maas"],
+              windows: [],
+            };
           default:
             return {
               provider: auth.provider,

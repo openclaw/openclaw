@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyHuaweiMaasConfig,
+  applyHuaweiMaasProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyQianfanConfig,
@@ -48,6 +50,7 @@ import {
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setHuaweiMaasApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -110,6 +113,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
+    } else if (params.opts.tokenProvider === "huawei") {
+      authChoice = "huawei-maas-api-key";
     }
   }
 
@@ -850,6 +855,54 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyQianfanConfig,
         applyProviderConfig: applyQianfanProviderConfig,
         noteDefault: QIANFAN_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "huawei-maas-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "huawei") {
+      await setHuaweiMaasApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("huawei-maas");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing HUAWEI_MAAS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setHuaweiMaasApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Huawei Cloud MAAS API key",
+        validate: validateApiKeyInput,
+      });
+      await setHuaweiMaasApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "huawei-maas:default",
+      provider: "huawei-maas",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: "huawei-maas/deepseek-v3.2",
+        applyDefaultConfig: applyHuaweiMaasConfig,
+        applyProviderConfig: applyHuaweiMaasProviderConfig,
+        noteDefault: "huawei-maas/deepseek-v3.2",
         noteAgentModel,
         prompter: params.prompter,
       });

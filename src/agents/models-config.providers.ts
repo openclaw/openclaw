@@ -10,6 +10,16 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import {
+  HUAWEI_MAAS_API_BASE_URL,
+  HUAWEI_MAAS_BASE_URL,
+  HUAWEI_MAAS_DEFAULT_COST,
+  HUAWEI_MAAS_DEFAULT_CONTEXT_WINDOW,
+  HUAWEI_MAAS_DEFAULT_MAX_TOKENS,
+  HUAWEI_MAAS_DEFAULT_MODELS,
+  HuaweiMaasResponse,
+  generateFriendlyModelName,
+} from "./huawei-maas-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -145,6 +155,45 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function discoverHuaweiMaasModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const response = await fetch(`${HUAWEI_MAAS_API_BASE_URL}/v2/models`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const data = (await response.json()) as HuaweiMaasResponse;
+    if (!data.data || data.data.length === 0) {
+      return [];
+    }
+    return data.data.map((model) => {
+      const modelId = model.id;
+      const isReasoning =
+        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+      const friendlyName = generateFriendlyModelName(modelId);
+
+      return {
+        id: modelId,
+        name: friendlyName,
+        reasoning: isReasoning,
+        input: ["text" as const],
+        cost: HUAWEI_MAAS_DEFAULT_COST,
+        contextWindow: HUAWEI_MAAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: HUAWEI_MAAS_DEFAULT_MAX_TOKENS,
+      };
+    });
+  } catch {
     return [];
   }
 }
@@ -441,6 +490,21 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export async function buildHuaweiMaasProvider(apiKey: string = ""): Promise<ProviderConfig> {
+  let models: ModelDefinitionConfig[] = await discoverHuaweiMaasModels(apiKey);
+  // 如果没有获取到模型，使用默认模型
+  if (models.length === 0) {
+    models = HUAWEI_MAAS_DEFAULT_MODELS;
+  }
+
+  return {
+    baseUrl: HUAWEI_MAAS_BASE_URL,
+    api: "openai-completions",
+    apiKey: apiKey || undefined,
+    models,
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -483,6 +547,14 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const huaweiMaasEnv = resolveEnvApiKey("huawei-maas");
+  const huaweiMaasKey =
+    huaweiMaasEnv?.apiKey ??
+    resolveApiKeyFromProfiles({ provider: "huawei-maas", store: authStore });
+  if (huaweiMaasKey) {
+    providers["huawei-maas"] = await buildHuaweiMaasProvider(huaweiMaasKey);
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

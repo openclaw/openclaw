@@ -24,7 +24,8 @@ export type AuthChoiceGroupId =
   | "venice"
   | "qwen"
   | "qianfan"
-  | "xai";
+  | "xai"
+  | "huawei";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -39,6 +40,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
   hint?: string;
   choices: AuthChoice[];
 }[] = [
+  {
+    value: "huawei",
+    label: "Huawei Cloud MAAS",
+    hint: "ModelArts MAAS API key",
+    choices: ["huawei-maas-api-key"],
+  },
   {
     value: "openai",
     label: "OpenAI",
@@ -212,6 +219,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  });
+  options.push({
+    value: "huawei-maas-api-key",
+    label: "Huawei Cloud MAAS API key",
+    hint: "Supports multiple models including DeepSeek, Qwen, and Kimi",
   });
   options.push({
     value: "minimax-portal",
