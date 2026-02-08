@@ -372,9 +372,11 @@ export async function stopLaunchAgent({
 }): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  // Use `kill SIGTERM` to stop the process without unloading the service.
+  // This keeps the LaunchAgent loaded so `start` works without reinstalling.
+  const res = await execLaunchctl(["kill", "SIGTERM", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
