@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-const TIME_TUNNEL_QUERY_PATH = "/app/workspace/hooks/time-tunnel/query.js";
+// TIME_TUNNEL_QUERY_PATH resolved dynamically from workspaceDir
 
 export interface NarrativeVariant {
   field_pattern: string;
@@ -61,15 +61,17 @@ let timeTunnelModule: {
   }>;
 } | null = null;
 
-async function loadTimeTunnel() {
+async function loadTimeTunnel(workspaceDir: string) {
   if (timeTunnelModule) return timeTunnelModule;
   try {
-    if (!existsSync(TIME_TUNNEL_QUERY_PATH)) return null;
-    const mod = await import(TIME_TUNNEL_QUERY_PATH);
+    const queryPath = path.join(workspaceDir, "hooks/time-tunnel/query.js");
+    if (!existsSync(queryPath)) return null;
+    const mod = await import(queryPath);
     if (typeof mod.getChatMessages !== "function") return null;
     timeTunnelModule = { getChatMessages: mod.getChatMessages };
     return timeTunnelModule;
-  } catch {
+  } catch (err) {
+    console.warn("[narrative-engine] loadTimeTunnel failed:", (err as Error).message);
     return null;
   }
 }
@@ -88,7 +90,8 @@ function loadNarrativeConfig(workspaceDir: string): NarrativeConfig | null {
 
     cachedConfig = { config, expiresAt: Date.now() + CONFIG_CACHE_TTL };
     return config;
-  } catch {
+  } catch (err) {
+    console.warn("[narrative-engine] loadNarrativeConfig failed:", (err as Error).message);
     return null;
   }
 }
@@ -128,6 +131,7 @@ async function trackConversion(
   chatId: string,
   agendas: Array<{ id: string; talkingPoints: string[] }>,
   windowMinutes: number,
+  workspaceDir: string,
 ): Promise<Map<string, number>> {
   // Use cache if fresh
   if (cachedConversions && Date.now() < cachedConversions.expiresAt) {
@@ -137,7 +141,7 @@ async function trackConversion(
   const scores = new Map<string, number>();
 
   try {
-    const mod = await loadTimeTunnel();
+    const mod = await loadTimeTunnel(workspaceDir);
     if (!mod) return scores;
 
     const messages = mod.getChatMessages(chatId, { limit: 200, minutesBack: windowMinutes });
@@ -164,8 +168,8 @@ async function trackConversion(
       const score = Math.round((hits / agenda.talkingPoints.length) * 100);
       scores.set(agenda.id, score);
     }
-  } catch {
-    // Silently fail
+  } catch (err) {
+    console.warn("[narrative-engine] trackConversion error:", (err as Error).message);
   }
 
   cachedConversions = { scores, expiresAt: Date.now() + CONVERSION_CACHE_TTL };
@@ -209,6 +213,7 @@ export async function buildNarrativeGuide(
           talkingPoints: m.variant.talking_points,
         })),
         config.tracking.conversion_window_minutes || 120,
+        workspaceDir,
       );
     }
 
@@ -246,7 +251,8 @@ export async function buildNarrativeGuide(
       result = result.slice(0, 1180) + "\n[/Narrative Guide]";
     }
     return result;
-  } catch {
+  } catch (err) {
+    console.warn("[narrative-engine] buildNarrativeGuide error:", (err as Error).message);
     return "";
   }
 }

@@ -9,7 +9,7 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
-const TIME_TUNNEL_QUERY_PATH = "/app/workspace/hooks/time-tunnel/query.js";
+// TIME_TUNNEL_QUERY_PATH resolved dynamically from workspaceDir
 
 // Cache the briefing for 5 minutes to avoid re-querying on every message
 let cachedBriefing: { text: string; expiresAt: number; chatId: string } | null = null;
@@ -47,20 +47,22 @@ let timeTunnelModule: {
   ) => ChatMessage[];
 } | null = null;
 
-async function loadTimeTunnel() {
+async function loadTimeTunnel(workspaceDir: string) {
   if (timeTunnelModule) return timeTunnelModule;
 
   try {
-    if (!existsSync(TIME_TUNNEL_QUERY_PATH)) return null;
+    const queryPath = path.join(workspaceDir, "hooks/time-tunnel/query.js");
+    if (!existsSync(queryPath)) return null;
 
-    const mod = await import(TIME_TUNNEL_QUERY_PATH);
+    const mod = await import(queryPath);
     if (typeof mod.getChatMessages !== "function") {
       return null;
     }
 
     timeTunnelModule = { getChatMessages: mod.getChatMessages };
     return timeTunnelModule;
-  } catch {
+  } catch (err) {
+    console.warn("[warroom-briefing] loadTimeTunnel failed:", (err as Error).message);
     return null;
   }
 }
@@ -75,7 +77,8 @@ function loadWarroomConfig(workspaceDir: string): WarroomConfig | null {
     if (!cfg?.monitored_chats?.length) return null;
 
     return cfg;
-  } catch {
+  } catch (err) {
+    console.warn("[warroom-briefing] loadWarroomConfig failed:", (err as Error).message);
     return null;
   }
 }
@@ -245,7 +248,7 @@ export async function buildWarroomBriefing(
     const config = loadWarroomConfig(workspaceDir);
     if (!config) return "";
 
-    const mod = await loadTimeTunnel();
+    const mod = await loadTimeTunnel(workspaceDir);
     if (!mod) return "";
 
     const chatResults: ChatResult[] = [];
@@ -279,7 +282,8 @@ export async function buildWarroomBriefing(
     cachedBriefing = { text, expiresAt: Date.now() + CACHE_TTL_MS, chatId: currentChatId || "" };
 
     return text;
-  } catch {
+  } catch (err) {
+    console.warn("[warroom-briefing] buildWarroomBriefing error:", (err as Error).message);
     return "";
   }
 }

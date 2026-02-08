@@ -7,8 +7,7 @@
  */
 
 import { existsSync } from "fs";
-
-const TIME_TUNNEL_QUERY_PATH = "/app/workspace/hooks/time-tunnel/query.js";
+import path from "path";
 
 // Cache to avoid repeated queries for rapid-fire messages
 let cached: { text: string; expiresAt: number; key: string } | null = null;
@@ -80,13 +79,14 @@ interface TimeTunnelModule {
 
 let timeTunnelModule: TimeTunnelModule | null = null;
 
-async function loadTimeTunnel(): Promise<TimeTunnelModule | null> {
+async function loadTimeTunnel(workspaceDir: string): Promise<TimeTunnelModule | null> {
   if (timeTunnelModule) return timeTunnelModule;
 
   try {
-    if (!existsSync(TIME_TUNNEL_QUERY_PATH)) return null;
+    const queryPath = path.join(workspaceDir, "hooks/time-tunnel/query.js");
+    if (!existsSync(queryPath)) return null;
 
-    const mod = await import(TIME_TUNNEL_QUERY_PATH);
+    const mod = await import(queryPath);
     if (typeof mod.search !== "function") return null;
 
     timeTunnelModule = {
@@ -97,7 +97,8 @@ async function loadTimeTunnel(): Promise<TimeTunnelModule | null> {
         typeof mod.searchKnowledgeVec === "function" ? mod.searchKnowledgeVec : () => [],
     };
     return timeTunnelModule;
-  } catch {
+  } catch (err) {
+    console.warn("[proactive-recall] loadTimeTunnel failed:", (err as Error).message);
     return null;
   }
 }
@@ -335,7 +336,7 @@ export async function buildProactiveRecall(
   }
 
   try {
-    const mod = await loadTimeTunnel();
+    const mod = await loadTimeTunnel(workspaceDir);
     if (!mod) return "";
 
     const searchQuery = extractSearchKeywords(messageBody);
@@ -354,8 +355,8 @@ export async function buildProactiveRecall(
         limit: MAX_SEARCH_RESULTS,
         minScore: 0.2,
       });
-    } catch {
-      // vector search may not be available
+    } catch (err) {
+      console.warn("[proactive-recall] searchSemantic error:", (err as Error).message);
     }
 
     // Merge and deduplicate (prefer vector results for relevance)
@@ -393,8 +394,8 @@ export async function buildProactiveRecall(
     let knowledgeResults: KnowledgeResult[] = [];
     try {
       knowledgeResults = mod.searchKnowledgeVec(messageBody, { limit: 3 });
-    } catch {
-      // knowledge search may not be available
+    } catch (err) {
+      console.warn("[proactive-recall] searchKnowledgeVec error:", (err as Error).message);
     }
 
     // Reminder rules check
@@ -405,8 +406,8 @@ export async function buildProactiveRecall(
         sender: senderName,
         chat: chatName,
       });
-    } catch {
-      // checkReminders may fail if reminder_rules table doesn't exist — that's fine
+    } catch (err) {
+      console.warn("[proactive-recall] checkReminders error:", (err as Error).message);
     }
 
     const hasSearch = mergedResults.length > 0;
@@ -449,7 +450,8 @@ export async function buildProactiveRecall(
     cached = { text, expiresAt: Date.now() + CACHE_TTL_MS, key: cacheKey };
 
     return text;
-  } catch {
+  } catch (err) {
+    console.warn("[proactive-recall] buildProactiveRecall error:", (err as Error).message);
     return "";
   }
 }

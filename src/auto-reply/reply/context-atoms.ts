@@ -9,8 +9,7 @@
  */
 
 import { existsSync } from "fs";
-
-const TIME_TUNNEL_QUERY_PATH = "/app/workspace/hooks/time-tunnel/query.js";
+import path from "path";
 const MAX_OUTPUT_CHARS = 2000;
 const CACHE_TTL_MS = 3 * 60 * 1000;
 
@@ -22,15 +21,17 @@ let timeTunnelModule: {
   ) => Array<{ source_file: string; heading: string; content: string; similarity: number }>;
 } | null = null;
 
-async function loadTimeTunnel() {
+async function loadTimeTunnel(workspaceDir: string) {
   if (timeTunnelModule) return timeTunnelModule;
   try {
-    if (!existsSync(TIME_TUNNEL_QUERY_PATH)) return null;
-    const mod = await import(TIME_TUNNEL_QUERY_PATH);
+    const queryPath = path.join(workspaceDir, "hooks/time-tunnel/query.js");
+    if (!existsSync(queryPath)) return null;
+    const mod = await import(queryPath);
     if (typeof mod.retrieveContextAtoms !== "function") return null;
     timeTunnelModule = { retrieveContextAtoms: mod.retrieveContextAtoms };
     return timeTunnelModule;
-  } catch {
+  } catch (err) {
+    console.warn("[context-atoms] loadTimeTunnel failed:", (err as Error).message);
     return null;
   }
 }
@@ -59,7 +60,7 @@ function formatAtoms(
  * Returns formatted string for injection as a context segment.
  */
 export async function buildContextAtoms(
-  _workspaceDir: string,
+  workspaceDir: string,
   messageBody: string,
   senderName?: string,
 ): Promise<string> {
@@ -70,7 +71,7 @@ export async function buildContextAtoms(
   }
 
   try {
-    const mod = await loadTimeTunnel();
+    const mod = await loadTimeTunnel(workspaceDir);
     if (!mod) return "";
 
     // Build query from message + sender context
@@ -84,7 +85,8 @@ export async function buildContextAtoms(
     // Cache
     cachedAtoms = { text, expiresAt: Date.now() + CACHE_TTL_MS, key: cacheKey };
     return text;
-  } catch {
+  } catch (err) {
+    console.warn("[context-atoms] buildContextAtoms error:", (err as Error).message);
     return "";
   }
 }
