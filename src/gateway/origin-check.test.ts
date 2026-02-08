@@ -62,5 +62,4 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(false);
   });
-
 });
