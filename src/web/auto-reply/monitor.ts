@@ -186,6 +186,10 @@ export async function monitorWebChannel(
       if (msg.replyToId || msg.replyToBody) {
         return false;
       }
+      // Poll votes are atomic; never merge two votes into a single debounced body.
+      if (msg.pollVote) {
+        return false;
+      }
       return !hasControlCommand(msg.body, cfg);
     };
 

@@ -129,6 +129,20 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * Structured poll-vote data when the inbound message is a WhatsApp poll response.
+   * Agents can use this to programmatically act on poll taps without parsing the body text.
+   */
+  PollVote?: {
+    /** Message-key ID of the poll creation message. */
+    pollMsgId: string;
+    /** The poll question text. */
+    question: string;
+    /** Option labels the voter selected. */
+    selectedOptions: string[];
+    /** All option labels available on the poll. */
+    allOptions: string[];
+  };
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

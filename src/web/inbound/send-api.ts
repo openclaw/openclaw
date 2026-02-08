@@ -1,7 +1,9 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import crypto from "node:crypto";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+import { storePoll } from "./poll-store.js";
 
 export function createWebSendApi(params: {
   sock: {
@@ -61,16 +63,19 @@ export function createWebSendApi(params: {
           : "unknown";
       return { messageId };
     },
+
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
+      const messageSecret = crypto.randomBytes(32);
       const result = await params.sock.sendMessage(jid, {
         poll: {
           name: poll.question,
           values: poll.options,
           selectableCount: poll.maxSelections ?? 1,
+          messageSecret,
         },
       } as AnyMessageContent);
       recordChannelActivity({
@@ -82,8 +87,17 @@ export function createWebSendApi(params: {
         typeof result === "object" && result && "key" in result
           ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
           : "unknown";
+      storePoll(messageId, {
+        pollMsgId: messageId,
+        messageSecret: messageSecret.toString("base64"),
+        options: poll.options,
+        question: poll.question,
+        chatJid: jid,
+        createdAt: Date.now(),
+      });
       return { messageId };
     },
+
     sendReaction: async (
       chatJid: string,
       messageId: string,
@@ -104,6 +118,7 @@ export function createWebSendApi(params: {
         },
       } as AnyMessageContent);
     },
+
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
       await params.sock.sendPresenceUpdate("composing", jid);

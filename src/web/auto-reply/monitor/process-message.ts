@@ -304,6 +304,7 @@ export async function processMessage(params: {
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
     OriginatingTo: params.msg.from,
+    ...(params.msg.pollVote ? { PollVote: params.msg.pollVote } : {}),
   });
 
   if (dmRouteTarget) {

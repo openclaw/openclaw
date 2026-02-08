@@ -39,4 +39,15 @@ export type WebInboundMessage = {
   mediaType?: string;
   mediaUrl?: string;
   wasMentioned?: boolean;
+  /** Structured poll-vote payload; populated when the message is a tapped poll response. */
+  pollVote?: {
+    /** Message-key ID of the original poll creation message. */
+    pollMsgId: string;
+    /** The poll question text. */
+    question: string;
+    /** Option labels the voter selected. */
+    selectedOptions: string[];
+    /** All option labels that were available on the poll. */
+    allOptions: string[];
+  };
 };
