@@ -1507,6 +1507,9 @@ export async function maybeApplyTtsToPayload(params: {
   const maxLength = getTtsMaxLength(prefsPath);
   // Strip markdown formatting so TTS engines don't vocalize symbols like ** or `
   let textForAudio = stripMarkdownForTts(ttsText.trim());
+  if (textForAudio.length < 10) {
+    return nextPayload;
+  }
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
