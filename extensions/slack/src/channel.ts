@@ -355,6 +355,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
 
       if (action === "read") {
         const limit = readNumberParam(params, "limit", { integer: true });
+        const threadId = readStringParam(params, "threadId");
         return await getSlackRuntime().channel.slack.handleSlackAction(
           {
             action: "readMessages",
@@ -362,6 +363,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
             limit,
             before: readStringParam(params, "before"),
             after: readStringParam(params, "after"),
+            threadId: threadId ?? undefined,
             accountId: accountId ?? undefined,
           },
           cfg,
