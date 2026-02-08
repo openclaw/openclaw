@@ -118,3 +118,4 @@ pnpm test
 ## License
 
 MIT (inherits upstream licensing unless otherwise noted).
+OpenClaw remains control-plane infrastructure; Real Dispatch is a distinct dispatch product built on top.

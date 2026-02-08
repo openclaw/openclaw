@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea or improvement for Clawdbot.
+about: Suggest an idea or improvement for Real Dispatch.
 title: "[Feature]: "
 labels: enhancement
 ---
@@ -11,7 +11,7 @@ Describe the problem you are trying to solve or the opportunity you see.
 
 ## Proposed solution
 
-What would you like Clawdbot to do?
+What would you like Real Dispatch to do?
 
 ## Alternatives considered
 

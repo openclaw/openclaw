@@ -2,7 +2,15 @@
   "name": "real-dispatch",
   "version": "2026.2.6-3",
   "description": "AI-first dispatch and closeout system for field service, built on the OpenClaw scaffold",
-  "keywords": [],
+  "keywords": [
+    "dispatch",
+    "field-service",
+    "workflow-orchestration",
+    "job-management",
+    "audit-log",
+    "closeout",
+    "scheduling"
+  ],
   "license": "MIT",
   "author": "",
   "bin": {
