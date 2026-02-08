@@ -506,6 +506,28 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
+    // Hide assistant messages that contain only tool calls/thinking when thinking is off
+    if (
+      !props.showThinking &&
+      normalized.role === "assistant" &&
+      Array.isArray(raw.content) &&
+      raw.content.length > 0 &&
+      (raw.content as Array<Record<string, unknown>>).every((block) => {
+        const ct = (
+          typeof block.type === "string" ? block.type : ""
+        ).toLowerCase();
+        return (
+          ct === "toolcall" ||
+          ct === "tool_call" ||
+          ct === "tooluse" ||
+          ct === "tool_use" ||
+          ct === "thinking"
+        );
+      })
+    ) {
+      continue;
+    }
+
     items.push({
       kind: "message",
       key: messageKey(msg, i),
