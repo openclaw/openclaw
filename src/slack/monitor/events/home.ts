@@ -1,6 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { AgentConfig } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { SlackHomeTabConfig } from "../../../config/types.slack.js";
 import type { SlackMonitorContext } from "../context.js";
 import { danger, logVerbose } from "../../../globals.js";
 import { VERSION } from "../../../version.js";
@@ -52,15 +53,107 @@ export function resolveAgentModelDisplay(
   return "—";
 }
 
+/**
+ * Template variable context for Home Tab blocks.
+ * Used to substitute `{{var_name}}` placeholders in custom block templates.
+ */
+export interface HomeTabTemplateVars {
+  agent_name: string;
+  version: string;
+  model: string;
+  uptime: string;
+  channels: string;
+  slash_command: string;
+}
+
+/**
+ * Recursively substitute `{{var_name}}` template variables in Block Kit JSON.
+ * @internal Exported for testing only.
+ */
+export function substituteTemplateVars(obj: unknown, vars: HomeTabTemplateVars): unknown {
+  if (typeof obj === "string") {
+    return obj.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
+      const val = vars[key as keyof HomeTabTemplateVars];
+      return val !== undefined ? val : match;
+    });
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => substituteTemplateVars(item, vars));
+  }
+  if (obj !== null && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      result[key] = substituteTemplateVars(value, vars);
+    }
+    return result;
+  }
+  return obj;
+}
+
+/**
+ * Resolve template variables from the current config/runtime state.
+ * @internal Exported for testing only.
+ */
+export function resolveTemplateVars(params: {
+  cfg?: OpenClawConfig;
+  slashCommand?: string;
+  uptimeMs?: number;
+}): HomeTabTemplateVars {
+  const cfg = params.cfg;
+  const agents = cfg?.agents?.list ?? [];
+  const defaultAgent = agents.find((a) => a.default) ?? agents[0];
+  const agentName = defaultAgent?.name ?? cfg?.ui?.assistant?.name ?? "OpenClaw";
+  const model = resolveAgentModelDisplay(defaultAgent, cfg ?? {});
+  const uptimeMs = params.uptimeMs ?? Date.now() - GATEWAY_START_MS;
+  const cmd = params.slashCommand ?? "/openclaw";
+
+  const slackCfg = cfg?.channels?.slack;
+  const channelIds: string[] = [];
+  if (slackCfg) {
+    if (slackCfg.channels) {
+      channelIds.push(...Object.keys(slackCfg.channels));
+    }
+    if (slackCfg.accounts) {
+      for (const account of Object.values(slackCfg.accounts)) {
+        if (account?.channels) {
+          channelIds.push(...Object.keys(account.channels));
+        }
+      }
+    }
+  }
+
+  return {
+    agent_name: agentName,
+    version: VERSION,
+    model,
+    uptime: formatUptime(uptimeMs),
+    channels:
+      channelIds.length > 0 ? channelIds.map((id) => `<#${id}>`).join(", ") : "None configured",
+    slash_command: cmd,
+  };
+}
+
 /** @internal Exported for testing only. */
 export function buildHomeTabBlocks(params: {
   botUserId: string;
   slashCommand?: string;
   cfg?: OpenClawConfig;
   uptimeMs?: number;
+  homeTabConfig?: SlackHomeTabConfig;
 }): Record<string, unknown>[] {
   const cmd = params.slashCommand ?? "/openclaw";
   const cfg = params.cfg;
+
+  // If custom blocks are configured, substitute template variables and return.
+  if (params.homeTabConfig?.blocks && params.homeTabConfig.blocks.length > 0) {
+    const vars = resolveTemplateVars({
+      cfg,
+      slashCommand: cmd,
+      uptimeMs: params.uptimeMs,
+    });
+    return substituteTemplateVars(params.homeTabConfig.blocks, vars) as Record<string, unknown>[];
+  }
+
   const blocks: Record<string, unknown>[] = [];
 
   // --- Header: Agent name & status ---
@@ -162,6 +255,15 @@ export function buildHomeTabBlocks(params: {
 export function registerSlackHomeTabEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
+  // Resolve home tab config from Slack account config
+  const homeTabConfig = ctx.cfg?.channels?.slack?.homeTab;
+
+  // If explicitly disabled, don't register the event at all
+  if (homeTabConfig?.enabled === false) {
+    logVerbose("slack: home tab disabled via config");
+    return;
+  }
+
   ctx.app.event(
     "app_home_opened",
     async ({ event, body }: SlackEventMiddlewareArgs<"app_home_opened">) => {
@@ -198,6 +300,7 @@ export function registerSlackHomeTabEvents(params: { ctx: SlackMonitorContext })
           botUserId: ctx.botUserId,
           slashCommand: ctx.slashCommand.name ? `/${ctx.slashCommand.name}` : undefined,
           cfg: ctx.cfg,
+          homeTabConfig,
         });
 
         await ctx.app.client.views.publish({

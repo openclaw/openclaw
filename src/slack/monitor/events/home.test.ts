@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { buildHomeTabBlocks, formatUptime, resolveAgentModelDisplay } from "./home.js";
+import {
+  buildHomeTabBlocks,
+  formatUptime,
+  resolveAgentModelDisplay,
+  resolveTemplateVars,
+  substituteTemplateVars,
+} from "./home.js";
 
 describe("formatUptime", () => {
   it("formats minutes only", () => {
@@ -184,5 +190,112 @@ describe("buildHomeTabBlocks", () => {
     expect(fullText).not.toContain("token");
     expect(fullText).not.toContain("Dashboard");
     expect(fullText).not.toContain("127.0.0.1");
+  });
+
+  it("uses custom blocks from homeTabConfig when provided", () => {
+    const customBlocks = [
+      { type: "header", text: { type: "plain_text", text: "Hello {{agent_name}}!" } },
+      { type: "section", text: { type: "mrkdwn", text: "Running {{version}} on {{model}}" } },
+    ];
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, name: "MyBot", model: "gpt-5" }] },
+    };
+    const blocks = buildHomeTabBlocks({
+      botUserId: "U99",
+      cfg,
+      homeTabConfig: { blocks: customBlocks },
+    });
+    expect(blocks[0]).toMatchObject({
+      type: "header",
+      text: { type: "plain_text", text: "Hello MyBot!" },
+    });
+    expect(blocks[1]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: expect.stringContaining("gpt-5") },
+    });
+  });
+
+  it("falls back to default blocks when homeTabConfig has no blocks", () => {
+    const blocks = buildHomeTabBlocks({
+      botUserId: "U99",
+      homeTabConfig: { enabled: true },
+    });
+    // Should still render default view
+    expect(blocks[0]).toMatchObject({ type: "header" });
+    expect(blocks.length).toBeGreaterThan(3);
+  });
+
+  it("falls back to default blocks when homeTabConfig.blocks is empty", () => {
+    const blocks = buildHomeTabBlocks({
+      botUserId: "U99",
+      homeTabConfig: { blocks: [] },
+    });
+    expect(blocks[0]).toMatchObject({ type: "header" });
+    expect(blocks.length).toBeGreaterThan(3);
+  });
+});
+
+describe("substituteTemplateVars", () => {
+  const vars = {
+    agent_name: "TestBot",
+    version: "1.0.0",
+    model: "gpt-5",
+    uptime: "2h 30m",
+    channels: "<#C123>",
+    slash_command: "/test",
+  };
+
+  it("substitutes string variables", () => {
+    expect(substituteTemplateVars("Hello {{agent_name}}!", vars)).toBe("Hello TestBot!");
+  });
+
+  it("substitutes multiple variables in one string", () => {
+    expect(substituteTemplateVars("{{agent_name}} v{{version}}", vars)).toBe("TestBot v1.0.0");
+  });
+
+  it("leaves unknown variables unchanged", () => {
+    expect(substituteTemplateVars("{{unknown_var}}", vars)).toBe("{{unknown_var}}");
+  });
+
+  it("handles nested objects", () => {
+    const obj = { text: { type: "mrkdwn", text: "Model: {{model}}" } };
+    expect(substituteTemplateVars(obj, vars)).toEqual({
+      text: { type: "mrkdwn", text: "Model: gpt-5" },
+    });
+  });
+
+  it("handles arrays", () => {
+    const arr = ["{{agent_name}}", "{{version}}"];
+    expect(substituteTemplateVars(arr, vars)).toEqual(["TestBot", "1.0.0"]);
+  });
+
+  it("passes through non-string primitives", () => {
+    expect(substituteTemplateVars(42, vars)).toBe(42);
+    expect(substituteTemplateVars(true, vars)).toBe(true);
+    expect(substituteTemplateVars(null, vars)).toBe(null);
+  });
+});
+
+describe("resolveTemplateVars", () => {
+  it("resolves agent name from config", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, name: "MyAgent" }] },
+    };
+    const vars = resolveTemplateVars({ cfg });
+    expect(vars.agent_name).toBe("MyAgent");
+  });
+
+  it("resolves channels from config", () => {
+    const cfg: OpenClawConfig = {
+      channels: { slack: { channels: { C111: {}, C222: {} } } },
+    };
+    const vars = resolveTemplateVars({ cfg });
+    expect(vars.channels).toContain("<#C111>");
+    expect(vars.channels).toContain("<#C222>");
+  });
+
+  it("returns 'None configured' when no channels", () => {
+    const vars = resolveTemplateVars({});
+    expect(vars.channels).toBe("None configured");
   });
 });

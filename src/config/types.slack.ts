@@ -9,6 +9,26 @@ import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/**
+ * Configuration for the Slack App Home Tab.
+ *
+ * When `blocks` is provided, they are used as the Home Tab content (Block Kit JSON).
+ * Template variables are substituted before rendering:
+ *   {{agent_name}}, {{version}}, {{model}}, {{uptime}}, {{channels}}, {{slash_command}}
+ *
+ * When `blocks` is omitted, a sensible default view is rendered.
+ */
+export type SlackHomeTabConfig = {
+  /** Enable the Home Tab (default: true). */
+  enabled?: boolean;
+  /**
+   * Custom Block Kit blocks for the Home Tab.
+   * Supports template variable substitution (e.g. `{{agent_name}}`).
+   * When omitted, the default built-in view is used.
+   */
+  blocks?: Record<string, unknown>[];
+};
+
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
@@ -139,6 +159,8 @@ export type SlackAccountConfig = {
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
+  /** Home Tab configuration. */
+  homeTab?: SlackHomeTabConfig;
   slashCommand?: SlackSlashCommandConfig;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
