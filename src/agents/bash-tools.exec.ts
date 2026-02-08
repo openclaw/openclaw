@@ -124,11 +124,14 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
 const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
+const TIMEOUT_FINALIZE_MS = 1000;
+const PTY_DEFAULT_COLS = 120;
+const PTY_DEFAULT_ROWS = 30;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyListener<T> = (event: T) => void;
 type PtyHandle = {
-  pid: number;
+  readonly pid: number;
   write: (data: string | Buffer) => void;
   onData: (listener: PtyListener<string>) => void;
   onExit: (listener: PtyListener<PtyExitEvent>) => void;
@@ -483,14 +486,14 @@ async function runExecProcess(opts: {
       };
       const spawnPty = ptyModule.spawn ?? ptyModule.default?.spawn;
       if (!spawnPty) {
-        throw new Error("PTY support is unavailable (node-pty spawn not found).");
+        throw new Error("PTY support is unavailable. Please install @lydell/node-pty or run without pty=true.");
       }
       pty = spawnPty(shell, [...shellArgs, opts.command], {
         cwd: opts.workdir,
         env: opts.env,
         name: process.env.TERM ?? "xterm-256color",
-        cols: 120,
-        rows: 30,
+        cols: PTY_DEFAULT_COLS,
+        rows: PTY_DEFAULT_ROWS,
       });
       stdin = {
         destroyed: false,
@@ -602,7 +605,7 @@ async function runExecProcess(opts: {
   let timeoutTimer: NodeJS.Timeout | null = null;
   let timeoutFinalizeTimer: NodeJS.Timeout | null = null;
   let timedOut = false;
-  const timeoutFinalizeMs = 1000;
+  const timeoutFinalizeMs = TIMEOUT_FINALIZE_MS;
   let resolveFn: ((outcome: ExecProcessOutcome) => void) | null = null;
 
   const settle = (outcome: ExecProcessOutcome) => {
@@ -845,8 +848,8 @@ export function createExecTool(
         node?: string;
       };
 
-      if (!params.command) {
-        throw new Error("Provide a command to start.");
+      if (!params.command?.trim()) {
+        throw new Error("Command is required. Please provide a valid shell command to execute.");
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
