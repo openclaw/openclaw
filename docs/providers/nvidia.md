@@ -3,7 +3,7 @@ summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
 read_when:
   - You want to use NVIDIA models in OpenClaw
   - You need NVIDIA_API_KEY setup
-title: "NVIDIA"
+title: 'NVIDIA'
 ---
 
 # NVIDIA
@@ -12,28 +12,31 @@ NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1
 
 ## CLI setup
 
+Export the key once, then run onboarding without an inline secret:
+
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider nvidia --token "$NVIDIA_API_KEY"
+export NVIDIA_API_KEY="nvapi-..."
+openclaw onboard --auth-choice apiKey --token-provider nvidia
 ```
 
-If `NVIDIA_API_KEY` is already exported, you can omit `--token`.
+If you still pass `--token`, remember it lands in shell history and `ps` output; prefer the env var when possible.
 
 ## Config snippet
 
 ```json5
 {
-  env: { NVIDIA_API_KEY: "nvapi-..." },
+  env: { NVIDIA_API_KEY: 'nvapi-...' },
   models: {
     providers: {
       nvidia: {
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        api: "openai-completions",
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+        api: 'openai-completions',
       },
     },
   },
   agents: {
     defaults: {
-      model: { primary: "nvidia/llama-3.1-nemotron-70b-instruct" },
+      model: { primary: 'nvidia/llama-3.1-nemotron-70b-instruct' },
     },
   },
 }

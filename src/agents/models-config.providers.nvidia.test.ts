@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveApiKeyForProvider } from "./model-auth.js";
 import { buildNvidiaProvider, resolveImplicitProviders } from "./models-config.providers.js";
 
 describe("NVIDIA provider", () => {
@@ -13,7 +14,30 @@ describe("NVIDIA provider", () => {
     try {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.nvidia).toBeDefined();
-      expect(providers?.nvidia?.apiKey).toBe("NVIDIA_API_KEY");
+      expect(providers?.nvidia?.models?.length).toBeGreaterThan(0);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.NVIDIA_API_KEY;
+      } else {
+        process.env.NVIDIA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("resolves the nvidia api key value from env", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const previous = process.env.NVIDIA_API_KEY;
+    process.env.NVIDIA_API_KEY = "nvidia-test-api-key";
+
+    try {
+      const auth = await resolveApiKeyForProvider({
+        provider: "nvidia",
+        agentDir,
+      });
+
+      expect(auth.apiKey).toBe("nvidia-test-api-key");
+      expect(auth.mode).toBe("api-key");
+      expect(auth.source).toContain("NVIDIA_API_KEY");
     } finally {
       if (previous === undefined) {
         delete process.env.NVIDIA_API_KEY;
