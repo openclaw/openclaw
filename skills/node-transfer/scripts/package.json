@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/node-transfer",
+  "version": "1.0.0",
+  "description": "High-speed, memory-efficient file transfer between OpenClaw nodes using native Node.js streams",
+  "main": "transfer.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openclaw",
+    "file-transfer",
+    "streaming",
+    "nodes",
+    "http"
+  ],
+  "author": "OpenClaw Community",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "send.js",
+    "receive.js",
+    "ensure-installed.js",
+    "version.js",
+    "deploy.js",
+    "SKILL.md",
+    "CONTRIBUTING_PROPOSAL.md"
+  ]
+}
