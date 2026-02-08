@@ -6,6 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -86,6 +87,17 @@ export type SignalAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Per-group configuration keyed by group ID. */
+  groups?: Record<
+    string,
+    {
+      /** If true, only reply when bot is mentioned. Default: true (requires mention unless explicitly set to false). */
+      requireMention?: boolean;
+      /** Optional tool policy overrides for this group. */
+      tools?: GroupToolPolicyConfig;
+      toolsBySender?: GroupToolPolicyBySenderConfig;
+    }
+  >;
 };
 
 export type SignalConfig = {

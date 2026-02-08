@@ -14,11 +14,15 @@ import {
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
+import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { resolveSignalGroupRequireMention } from "../../channels/plugins/group-mentions.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
@@ -495,6 +499,71 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         reason: "control command (unauthorized)",
         target: senderDisplay,
+      });
+      return;
+    }
+
+    const route = resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: "signal",
+      accountId: deps.accountId,
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
+    const wasMentioned = matchesMentionPatterns(messageText, mentionRegexes);
+    const requireMention = resolveSignalGroupRequireMention({
+      cfg: deps.cfg,
+      groupId,
+      accountId: deps.accountId,
+    });
+    // Check if bot was explicitly mentioned using Signal's native mentions
+    const botAccount = deps.account; // Bot's phone number (E.164 format)
+    const botMentioned = Boolean(
+      dataMessage?.mentions?.some((mention) => mention.number === botAccount),
+    );
+    const canDetectMention = mentionRegexes.length > 0 || Boolean(dataMessage?.mentions);
+    const mentionGate = resolveMentionGatingWithBypass({
+      isGroup,
+      requireMention,
+      canDetectMention,
+      wasMentioned: wasMentioned || botMentioned,
+      implicitMention: botMentioned,
+      hasAnyMention: false,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    });
+
+    if (isGroup && mentionGate.shouldSkip) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "signal",
+        reason: "no mention",
+        target: senderDisplay,
+      });
+      // Build body text including attachments/quotes for history context
+      let historyBody = messageText;
+      if (!historyBody && dataMessage.attachments?.length) {
+        const kind = mediaKindFromMime(dataMessage.attachments[0]?.contentType ?? undefined);
+        historyBody = kind ? `<media:${kind}>` : "<media:attachment>";
+      }
+      if (!historyBody && dataMessage.quote?.text) {
+        historyBody = dataMessage.quote.text.trim();
+      }
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: deps.groupHistories,
+        historyKey: groupId ?? "",
+        limit: deps.historyLimit,
+        entry: {
+          sender: envelope.sourceName ?? senderDisplay,
+          body: historyBody,
+          timestamp: envelope.timestamp ?? undefined,
+          messageId:
+            typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        },
       });
       return;
     }

@@ -596,6 +596,19 @@ export const SignalAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
+          })
+          .strict()
+          .optional(),
+      )
+      .optional(),
   })
   .strict();
 

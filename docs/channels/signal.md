@@ -116,6 +116,13 @@ Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
 - `channels.signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+- **Mention gating**: use `channels.signal.groups.<groupId>.requireMention` to only respond when the bot is mentioned.
+  - When `requireMention: true`, the bot only replies when mentioned via Signal's native @ mentions OR text patterns.
+  - **Signal native @ mentions**: Fully supported - tap @ in Signal to mention the bot, and it will recognize the mention automatically.
+  - **Text-based patterns**: Also supported via `agents.list[].groupChat.mentionPatterns` or `messages.groupChat.mentionPatterns` (e.g., "bot", "@bot", emojis).
+  - Messages without mentions are stored in history context (if `historyLimit > 0`) but don't trigger a reply.
+  - Use `"*"` as the group ID for a wildcard default: `channels.signal.groups["*"].requireMention = true`.
+  - Specific group configs override the wildcard default.
 
 ## How it works (behavior)
 
@@ -226,3 +233,61 @@ Related global options:
 - `agents.list[].groupChat.mentionPatterns` (Signal does not support native mentions).
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.
+
+## Group mention gating examples
+
+Configure per-group mention requirements:
+
+```json5
+{
+  channels: {
+    signal: {
+      groupPolicy: "open",
+      // Apply to all groups by default
+      groups: {
+        "*": {
+          requireMention: true
+        },
+        // Override for specific group (responds to all messages)
+        "specific-group-id": {
+          requireMention: false
+        }
+      }
+    }
+  },
+  messages: {
+    groupChat: {
+      mentionPatterns: ["@clawd", "clawd", "🦞"]
+    }
+  }
+}
+```
+
+Multi-account with per-account group configs:
+
+```json5
+{
+  channels: {
+    signal: {
+      accounts: {
+        "account1": {
+          account: "+15551111111",
+          groups: {
+            "group-abc": {
+              requireMention: true
+            }
+          }
+        },
+        "account2": {
+          account: "+15552222222",
+          groups: {
+            "*": {
+              requireMention: false
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
