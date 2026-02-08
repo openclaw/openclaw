@@ -110,12 +110,13 @@ export function createGatewayTool(opts?: {
             if (!entry?.deliveryContext && threadIndex !== -1 && baseSessionKey) {
               entry = store[baseSessionKey];
             }
-            if (entry?.deliveryContext) {
-              deliveryContext = {
-                channel: entry.deliveryContext.channel,
-                to: entry.deliveryContext.to,
-                accountId: entry.deliveryContext.accountId,
-              };
+            if (entry) {
+              const channel = entry.deliveryContext?.channel ?? entry.lastChannel ?? undefined;
+              const to = entry.deliveryContext?.to ?? entry.lastTo ?? undefined;
+              const accountId = entry.deliveryContext?.accountId ?? entry.lastAccountId;
+              if (channel && to) {
+                deliveryContext = { channel, to, accountId };
+              }
             }
           } catch {
             // ignore: best-effort
