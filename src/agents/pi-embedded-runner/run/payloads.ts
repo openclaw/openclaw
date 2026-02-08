@@ -94,7 +94,7 @@ export function buildEmbeddedRunPayloads(params: {
         replyToId,
         replyToTag,
         replyToCurrent,
-      } = parseReplyDirectives(agg);
+      } = parseReplyDirectives(agg, { resolveRelativePaths: true });
       if (cleanedText) {
         replyItems.push({
           text: cleanedText,
@@ -176,7 +176,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = parseReplyDirectives(text, { resolveRelativePaths: true });
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }

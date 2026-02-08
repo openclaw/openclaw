@@ -384,6 +384,7 @@ export async function runAgentTurnWithFallback(params: {
                   const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
                     currentMessageId,
                     silentToken: SILENT_REPLY_TOKEN,
+                    resolveRelativePaths: true,
                   });
                   const cleaned = parsed.text || undefined;
                   const hasRenderableMedia =

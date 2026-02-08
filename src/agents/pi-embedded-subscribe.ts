@@ -299,7 +299,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg);
+    const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg, {
+      resolveRelativePaths: true,
+    });
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
       return;
     }
@@ -320,7 +322,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message, {
+      resolveRelativePaths: true,
+    });
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
       return;
     }
@@ -502,9 +506,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
-    replyDirectiveAccumulator.consume(text, options);
+    replyDirectiveAccumulator.consume(text, { ...options, resolveRelativePaths: true });
   const consumePartialReplyDirectives = (text: string, options?: { final?: boolean }) =>
-    partialReplyDirectiveAccumulator.consume(text, options);
+    partialReplyDirectiveAccumulator.consume(text, { ...options, resolveRelativePaths: true });
 
   const flushBlockReplyBuffer = () => {
     if (!params.onBlockReply) {

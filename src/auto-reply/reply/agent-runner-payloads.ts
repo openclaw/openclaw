@@ -68,6 +68,7 @@ export function buildReplyPayloads(params: {
       const parsed = parseReplyDirectives(payload.text ?? "", {
         currentMessageId: params.currentMessageId,
         silentToken: SILENT_REPLY_TOKEN,
+        resolveRelativePaths: true,
       });
       const mediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
       const mediaUrl = payload.mediaUrl ?? parsed.mediaUrl ?? mediaUrls?.[0];

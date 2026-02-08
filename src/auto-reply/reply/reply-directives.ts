@@ -1,6 +1,19 @@
+import path from "node:path";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+
+/**
+ * Resolve a relative media path (starting with ./) to an absolute path.
+ * This must be called while process.cwd() is the workspace directory,
+ * as delivery happens asynchronously when cwd may have changed.
+ */
+function resolveMediaPath(mediaUrl: string): string {
+  if (mediaUrl.startsWith("./")) {
+    return path.resolve(mediaUrl);
+  }
+  return mediaUrl;
+}
 
 export type ReplyDirectiveParseResult = {
   text: string;
@@ -15,7 +28,7 @@ export type ReplyDirectiveParseResult = {
 
 export function parseReplyDirectives(
   raw: string,
-  options: { currentMessageId?: string; silentToken?: string } = {},
+  options: { currentMessageId?: string; silentToken?: string; resolveRelativePaths?: boolean } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw);
   let text = split.text ?? "";
@@ -36,10 +49,17 @@ export function parseReplyDirectives(
     text = "";
   }
 
+  // Resolve relative paths to absolute while cwd is still the workspace.
+  // Delivery happens asynchronously when cwd may have been restored.
+  // Only enabled when the caller is in the agent-runner context (resolveRelativePaths: true).
+  const resolve = options.resolveRelativePaths ? resolveMediaPath : (u: string) => u;
+  const resolvedMediaUrls = split.mediaUrls?.map(resolve);
+  const resolvedMediaUrl = split.mediaUrl ? resolve(split.mediaUrl) : undefined;
+
   return {
     text,
-    mediaUrls: split.mediaUrls,
-    mediaUrl: split.mediaUrl,
+    mediaUrls: resolvedMediaUrls,
+    mediaUrl: resolvedMediaUrl,
     replyToId: replyParsed.replyToId,
     replyToCurrent: replyParsed.replyToCurrent,
     replyToTag: replyParsed.hasReplyTag,
