@@ -1,0 +1,33 @@
+{
+  "id": "glitchward-shield",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "Glitchward Shield API URL"
+      },
+      "apiToken": {
+        "type": "string",
+        "description": "Glitchward Shield API token"
+      },
+      "blockThreshold": {
+        "type": "number",
+        "description": "Risk score threshold to inject security warning (0-1)",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "warnThreshold": {
+        "type": "number",
+        "description": "Risk score threshold to warn (0-1)",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "scanIncoming": {
+        "type": "boolean",
+        "description": "Scan incoming messages for prompt injection"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/glitchward-shield",
+  "version": "2026.2.3",
+  "description": "Glitchward Shield - LLM prompt injection detection and protection",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
