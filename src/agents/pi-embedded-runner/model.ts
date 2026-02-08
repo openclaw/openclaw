@@ -29,6 +29,11 @@ const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 
+// Opus 4.6 supports 1M context window (up from 200K in Opus 4.5).
+// When cloning from a 4.5 template, override to match Anthropic's published specs.
+const ANTHROPIC_OPUS_46_CONTEXT_WINDOW = 1_000_000;
+const ANTHROPIC_OPUS_46_MAX_TOKENS = 128_000;
+
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
@@ -108,6 +113,8 @@ function resolveAnthropicOpus46ForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      contextWindow: ANTHROPIC_OPUS_46_CONTEXT_WINDOW,
+      maxTokens: ANTHROPIC_OPUS_46_MAX_TOKENS,
     } as Model<Api>);
   }
 

@@ -172,7 +172,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
+  it("builds an anthropic forward-compat fallback for claude-opus-4-6 with 1M context window", () => {
     const templateModel = {
       id: "claude-opus-4-5",
       name: "Claude Opus 4.5",
@@ -204,6 +204,42 @@ describe("resolveModel", () => {
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       reasoning: true,
+      contextWindow: 1000000,
+      maxTokens: 128000,
+    });
+  });
+
+  it("builds an anthropic forward-compat fallback for claude-opus-4.6 dot notation", () => {
+    const templateModel = {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "anthropic" && modelId === "claude-opus-4.5") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("anthropic", "claude-opus-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-opus-4.6",
+      contextWindow: 1000000,
+      maxTokens: 128000,
     });
   });
 
