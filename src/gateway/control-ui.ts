@@ -245,16 +245,12 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
 
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+  const isReadMethod = req.method === "GET" || req.method === "HEAD";
+  const isApiPath = (value: string) => value === "/api" || value.startsWith("/api/");
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
@@ -262,11 +258,20 @@ export function handleControlUiHttpRequest(
       respondNotFound(res);
       return true;
     }
+    if (isApiPath(pathname) && isReadMethod) {
+      return false;
+    }
   }
 
   if (basePath) {
     if (pathname === basePath) {
       applyControlUiSecurityHeaders(res);
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
       res.end();
@@ -277,8 +282,20 @@ export function handleControlUiHttpRequest(
     }
   }
 
+  const uiPath =
+    basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  if (isApiPath(uiPath) && isReadMethod) {
+    return false;
+  }
+
   applyControlUiSecurityHeaders(res);
 
+  if (!isReadMethod) {
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
+  }
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
     res.statusCode = 503;
@@ -314,8 +331,6 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const uiPath =
-    basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";

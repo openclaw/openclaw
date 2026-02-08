@@ -156,6 +156,7 @@ Docs: https://docs.openclaw.ai
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed); completion prompt now handled by install/update.
 - TUI: block onboarding output while TUI is active and restore terminal state on exit.
 - CLI/Zsh completion: cache scripts in state dir and escape option descriptions to avoid invalid option errors.
+- fix(ui): skip Control UI SPA fallback for `/api` routes. (#8183)
 - fix(ui): resolve Control UI asset path correctly.
 - fix(ui): refresh agent files after external edits.
 - Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
