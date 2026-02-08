@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { authorizeGatewayConnect } from "./auth.js";
+import { authorizeGatewayConnect, safeEqual } from "./auth.js";
+
+describe("safeEqual", () => {
+  it("returns true for equal strings", () => {
+    expect(safeEqual("secret-token", "secret-token")).toBe(true);
+    expect(safeEqual("", "")).toBe(true);
+    expect(safeEqual("a", "a")).toBe(true);
+  });
+
+  it("returns false for different strings of same length", () => {
+    expect(safeEqual("secret-token", "wrong--token")).toBe(false);
+    expect(safeEqual("abc", "xyz")).toBe(false);
+  });
+
+  it("returns false for different lengths (timing-safe)", () => {
+    // This is the key security test: different lengths should NOT short-circuit
+    expect(safeEqual("short", "longerstring")).toBe(false);
+    expect(safeEqual("longerstring", "short")).toBe(false);
+    expect(safeEqual("", "nonempty")).toBe(false);
+    expect(safeEqual("nonempty", "")).toBe(false);
+  });
+
+  it("handles unicode strings", () => {
+    expect(safeEqual("héllo", "héllo")).toBe(true);
+    expect(safeEqual("héllo", "hello")).toBe(false);
+  });
+});
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {

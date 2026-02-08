@@ -121,3 +121,32 @@ describe("resolveGatewayReloadSettings", () => {
     expect(settings.debounceMs).toBe(300);
   });
 });
+
+describe("config reload max-wait debounce", () => {
+  it("computeDebounceWait respects max-wait ceiling", async () => {
+    const { computeDebounceWait } = await import("./config-reload.js");
+
+    const debounceMs = 100;
+    const maxWaitMs = 300; // 3x debounceMs
+
+    // First call: no start time, should return full debounce and a start time
+    const first = computeDebounceWait({ debounceMs, maxWaitMs, debounceStart: null, now: 1000 });
+    expect(first.wait).toBe(debounceMs);
+    expect(first.debounceStart).toBe(1000);
+
+    // Second call after 50ms: still has 250ms of max-wait, so full debounce
+    const second = computeDebounceWait({ debounceMs, maxWaitMs, debounceStart: 1000, now: 1050 });
+    expect(second.wait).toBe(debounceMs);
+    expect(second.debounceStart).toBe(1000); // unchanged
+
+    // Third call after 250ms: only 50ms of max-wait left, so wait should be 50ms
+    const third = computeDebounceWait({ debounceMs, maxWaitMs, debounceStart: 1000, now: 1250 });
+    expect(third.wait).toBe(50);
+    expect(third.debounceStart).toBe(1000);
+
+    // Fourth call after max-wait exceeded: should trigger immediately (wait = 0)
+    const fourth = computeDebounceWait({ debounceMs, maxWaitMs, debounceStart: 1000, now: 1350 });
+    expect(fourth.wait).toBe(0);
+    expect(fourth.debounceStart).toBe(1000);
+  });
+});

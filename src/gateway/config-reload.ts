@@ -164,6 +164,24 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   return [prefix || "<root>"];
 }
 
+/**
+ * Computes the debounce wait time, respecting a max-wait ceiling.
+ * This prevents infinite delays when rapid events keep resetting the debounce.
+ */
+export function computeDebounceWait(params: {
+  debounceMs: number;
+  maxWaitMs: number;
+  debounceStart: number | null;
+  now: number;
+}): { wait: number; debounceStart: number } {
+  const { debounceMs, maxWaitMs, now } = params;
+  const debounceStart = params.debounceStart ?? now;
+  const elapsed = now - debounceStart;
+  const remaining = Math.max(0, maxWaitMs - elapsed);
+  const wait = Math.min(debounceMs, remaining);
+  return { wait, debounceStart };
+}
+
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =
@@ -268,6 +286,7 @@ export function startGatewayConfigReloader(opts: {
   let currentConfig = opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let debounceStart: number | null = null;
   let pending = false;
   let running = false;
   let stopped = false;
@@ -280,8 +299,26 @@ export function startGatewayConfigReloader(opts: {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    const wait = settings.debounceMs;
+    // Max-wait is 3x debounce to prevent infinite delays from rapid events
+    const maxWaitMs = settings.debounceMs * 3;
+    const result = computeDebounceWait({
+      debounceMs: settings.debounceMs,
+      maxWaitMs,
+      debounceStart,
+      now: Date.now(),
+    });
+    debounceStart = result.debounceStart;
+    const wait = result.wait;
+
+    if (wait <= 0) {
+      // Max-wait exceeded, trigger immediately
+      debounceStart = null;
+      void runReload();
+      return;
+    }
+
     debounceTimer = setTimeout(() => {
+      debounceStart = null;
       void runReload();
     }, wait);
   };

@@ -32,11 +32,21 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+/**
+ * Timing-safe string comparison. Pads both buffers to the same length
+ * to avoid leaking length information through timing differences.
+ */
+export function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  // Use max of lengths or 1 to handle empty strings
+  const maxLen = Math.max(aBuf.length, bBuf.length, 1);
+  const aPadded = Buffer.alloc(maxLen);
+  const bPadded = Buffer.alloc(maxLen);
+  aBuf.copy(aPadded);
+  bBuf.copy(bPadded);
+  // Compare padded buffers, then check lengths match
+  return timingSafeEqual(aPadded, bPadded) && aBuf.length === bBuf.length;
 }
 
 function normalizeLogin(login: string): string {

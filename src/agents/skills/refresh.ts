@@ -29,7 +29,44 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
+  // Ignore common binary/data files to prevent FD exhaustion.
+  // A skills directory with thousands of .wav/.bin files can exhaust
+  // the process file-descriptor limit and break all exec calls.
+  /\.(?:wav|mp3|mp4|avi|mov|flac|ogg|bin|pkl|pt|pth|onnx|h5|hdf5|safetensors|gguf|tar|gz|zip|7z|rar|iso|dmg|exe|dll|so|dylib|o|a|class|jar|joblib|npy|npz|parquet|arrow|feather|tfrecord)$/i,
 ];
+
+/**
+ * Resolves the watch ignored patterns by merging user-provided patterns with defaults.
+ * User patterns are provided as regex strings and converted to RegExp objects.
+ */
+export function resolveWatchIgnoredPatterns(customPatterns?: string[]): RegExp[] {
+  const combined = [...DEFAULT_SKILLS_WATCH_IGNORED];
+  if (!customPatterns || customPatterns.length === 0) {
+    return combined;
+  }
+  for (const pattern of customPatterns) {
+    if (typeof pattern !== "string") {
+      continue;
+    }
+    const trimmed = pattern.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      // Try to parse as RegExp (pattern might be like "/pattern/flags")
+      const regexMatch = trimmed.match(/^\/(.*)\/([gimsuy]*)$/);
+      if (regexMatch) {
+        combined.push(new RegExp(regexMatch[1], regexMatch[2]));
+      } else {
+        // Treat as a plain regex pattern string
+        combined.push(new RegExp(trimmed));
+      }
+    } catch (err) {
+      log.warn(`Invalid watchIgnoredPattern "${trimmed}": ${String(err)}`);
+    }
+  }
+  return combined;
+}
 
 function bumpVersion(current: number): number {
   const now = Date.now();
@@ -134,6 +171,9 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     void existing.watcher.close().catch(() => {});
   }
 
+  const customIgnoredPatterns = params.config?.skills?.load?.watchIgnoredPatterns;
+  const ignoredPatterns = resolveWatchIgnoredPatterns(customIgnoredPatterns);
+
   const watcher = chokidar.watch(watchPaths, {
     ignoreInitial: true,
     awaitWriteFinish: {
@@ -142,7 +182,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     },
     // Avoid FD exhaustion on macOS when a workspace contains huge trees.
     // This watcher only needs to react to skill changes.
-    ignored: DEFAULT_SKILLS_WATCH_IGNORED,
+    ignored: ignoredPatterns,
   });
 
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };

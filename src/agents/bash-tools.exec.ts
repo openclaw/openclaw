@@ -441,7 +441,7 @@ async function runExecProcess(opts: {
   let stdin: SessionStdin | undefined;
 
   if (opts.sandbox) {
-    const { child: spawned } = await spawnWithFallback({
+    const { child: spawned, usedFallback } = await spawnWithFallback({
       argv: [
         "docker",
         ...buildDockerExecArgs({
@@ -473,6 +473,10 @@ async function runExecProcess(opts: {
       },
     });
     child = spawned as ChildProcessWithoutNullStreams;
+    // Unref detached processes to allow clean parent exit
+    if (!usedFallback && process.platform !== "win32") {
+      child.unref?.();
+    }
     stdin = child.stdin;
   } else if (opts.usePty) {
     const { shell, args: shellArgs } = getShellConfig();
@@ -516,7 +520,7 @@ async function runExecProcess(opts: {
       const warning = `Warning: PTY spawn failed (${errText}); retrying without PTY for \`${opts.command}\`.`;
       logWarn(`exec: PTY spawn failed (${errText}); retrying without PTY for "${opts.command}".`);
       opts.warnings.push(warning);
-      const { child: spawned } = await spawnWithFallback({
+      const { child: spawned, usedFallback } = await spawnWithFallback({
         argv: [shell, ...shellArgs, opts.command],
         options: {
           cwd: opts.workdir,
@@ -539,11 +543,15 @@ async function runExecProcess(opts: {
         },
       });
       child = spawned as ChildProcessWithoutNullStreams;
+      // Unref detached processes to allow clean parent exit
+      if (!usedFallback && process.platform !== "win32") {
+        child.unref?.();
+      }
       stdin = child.stdin;
     }
   } else {
     const { shell, args: shellArgs } = getShellConfig();
-    const { child: spawned } = await spawnWithFallback({
+    const { child: spawned, usedFallback } = await spawnWithFallback({
       argv: [shell, ...shellArgs, opts.command],
       options: {
         cwd: opts.workdir,
@@ -566,6 +574,10 @@ async function runExecProcess(opts: {
       },
     });
     child = spawned as ChildProcessWithoutNullStreams;
+    // Unref detached processes to allow clean parent exit
+    if (!usedFallback && process.platform !== "win32") {
+      child.unref?.();
+    }
     stdin = child.stdin;
   }
 

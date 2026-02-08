@@ -153,6 +153,9 @@ export function markExited(
 
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
+  // Unref the child process so the parent can exit cleanly without waiting
+  // for backgrounded processes to complete.
+  session.child?.unref?.();
 }
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
@@ -265,7 +268,7 @@ function startSweeper() {
   sweeper.unref?.();
 }
 
-function stopSweeper() {
+export function stopSweeper() {
   if (!sweeper) {
     return;
   }

@@ -224,14 +224,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
     this.sources = new Set(params.settings.sources);
-    this.db = this.openDatabase();
+    this.db = this.openDatabaseWithRecovery();
     this.providerKey = this.computeProviderKey();
     this.cache = {
       enabled: params.settings.cache.enabled,
       maxEntries: params.settings.cache.maxEntries,
     };
     this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
-    this.ensureSchema();
+    this.ensureSchemaWithRecovery();
     this.vector = {
       enabled: params.settings.store.vector.enabled,
       available: null,
@@ -707,6 +707,65 @@ export class MemoryIndexManager implements MemorySearchManager {
     return this.openDatabaseAtPath(dbPath);
   }
 
+  /**
+   * Opens the database with corruption recovery. If the database file is corrupt,
+   * it deletes the file and creates a fresh database.
+   */
+  private openDatabaseWithRecovery(): DatabaseSync {
+    const dbPath = resolveUserPath(this.settings.store.path);
+    try {
+      return this.openDatabaseAtPath(dbPath);
+    } catch (err: unknown) {
+      if (this.isCorruptionError(err)) {
+        log.warn(`Memory database corrupted during open, rebuilding: ${String(err)}`);
+        this.deleteCorruptDatabase(dbPath);
+        return this.openDatabaseAtPath(dbPath);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Ensures the schema is created, with corruption recovery. If schema creation
+   * fails due to corruption, deletes the database and recreates it.
+   */
+  private ensureSchemaWithRecovery(): void {
+    try {
+      this.ensureSchema();
+    } catch (err: unknown) {
+      if (this.isCorruptionError(err)) {
+        const dbPath = resolveUserPath(this.settings.store.path);
+        log.warn(`Memory database corrupted during schema creation, rebuilding: ${String(err)}`);
+        try {
+          this.db.close();
+        } catch {
+          // Ignore close errors
+        }
+        this.deleteCorruptDatabase(dbPath);
+        this.db = this.openDatabaseAtPath(dbPath);
+        this.ensureSchema();
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private deleteCorruptDatabase(dbPath: string): void {
+    try {
+      fsSync.rmSync(dbPath, { force: true });
+      // Also remove WAL/SHM files if present
+      fsSync.rmSync(`${dbPath}-wal`, { force: true });
+      fsSync.rmSync(`${dbPath}-shm`, { force: true });
+    } catch {
+      // Ignore removal errors
+    }
+  }
+
+  private isCorruptionError(err: unknown): boolean {
+    const msg = String(err);
+    return /SQLITE_CORRUPT|SQLITE_NOTADB|SQLITE_IOERR|malformed|not a database/.test(msg);
+  }
+
   private openDatabaseAtPath(dbPath: string): DatabaseSync {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
@@ -1031,6 +1090,7 @@ export class MemoryIndexManager implements MemorySearchManager {
         log.warn(`memory sync failed (interval): ${String(err)}`);
       });
     }, ms);
+    this.intervalTimer.unref?.();
   }
 
   private scheduleWatchSync() {

@@ -15,6 +15,11 @@ export type SkillsLoadConfig = {
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */
   watchDebounceMs?: number;
+  /**
+   * Additional patterns to ignore when watching skill folders.
+   * Patterns are regex strings that will be merged with the default ignored patterns.
+   */
+  watchIgnoredPatterns?: string[];
 };
 
 export type SkillsInstallConfig = {

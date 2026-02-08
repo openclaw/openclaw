@@ -425,6 +425,21 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
   return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
 }
 
+/**
+ * Counts the number of active (not yet ended) subagent runs.
+ * Used to enforce concurrency limits.
+ */
+export function countActiveSubagentRuns(): number {
+  let count = 0;
+  for (const entry of subagentRuns.values()) {
+    // An active run has no endedAt timestamp
+    if (!entry.endedAt) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }

@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+import fs from "node:fs";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -43,6 +45,87 @@ export type AgentHealthSummary = {
   sessions: HealthSummary["sessions"];
 };
 
+export type FdInfo = {
+  used: number;
+  limit?: number;
+  percent?: number;
+};
+
+/**
+ * Gets file descriptor usage information for the current process.
+ * Works on Linux (via /proc/self/fd) and macOS (via lsof).
+ * Returns null if the information cannot be obtained.
+ */
+export function getFdInfo(): FdInfo | null {
+  try {
+    // Try Linux first (/proc/self/fd)
+    if (fs.existsSync("/proc/self/fd")) {
+      const fds = fs.readdirSync("/proc/self/fd").length;
+      // Try to get the limit from /proc/self/limits
+      let limit: number | undefined;
+      try {
+        const limits = fs.readFileSync("/proc/self/limits", "utf8");
+        const match = limits.match(/Max open files\s+(\d+)/);
+        if (match) {
+          limit = parseInt(match[1], 10);
+        }
+      } catch {
+        // Ignore limit read errors
+      }
+      return {
+        used: fds,
+        limit,
+        percent: limit ? Math.round((fds / limit) * 100) : undefined,
+      };
+    }
+
+    // macOS fallback: use lsof (try common paths)
+    if (process.platform === "darwin") {
+      const pid = process.pid;
+      // lsof may be in /usr/sbin which isn't always in PATH
+      const lsofPaths = ["/usr/sbin/lsof", "/usr/bin/lsof", "lsof"];
+      let output = "";
+      for (const lsofPath of lsofPaths) {
+        try {
+          output = execSync(`${lsofPath} -p ${pid} 2>/dev/null | wc -l`, {
+            encoding: "utf8",
+            timeout: 5000,
+          });
+          break;
+        } catch {
+          continue;
+        }
+      }
+      if (!output) {
+        return null;
+      }
+      const used = parseInt(output.trim(), 10);
+      if (!Number.isNaN(used)) {
+        // Get soft limit via ulimit
+        let limit: number | undefined;
+        try {
+          const limitOut = execSync("ulimit -n", { encoding: "utf8", timeout: 1000 });
+          const parsed = parseInt(limitOut.trim(), 10);
+          if (!Number.isNaN(parsed)) {
+            limit = parsed;
+          }
+        } catch {
+          // Ignore limit errors
+        }
+        return {
+          used,
+          limit,
+          percent: limit ? Math.round((used / limit) * 100) : undefined,
+        };
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export type HealthSummary = {
   /**
    * Convenience top-level flag for UIs (e.g. WebChat) that only need a binary
@@ -68,6 +151,8 @@ export type HealthSummary = {
       age: number | null;
     }>;
   };
+  /** File descriptor usage (may be null on unsupported platforms). */
+  fd?: FdInfo | null;
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -554,6 +639,7 @@ export async function getHealthSnapshot(params?: {
       count: sessions.count,
       recent: sessions.recent,
     },
+    fd: getFdInfo(),
   };
 
   return summary;
