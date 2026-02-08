@@ -109,6 +109,11 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+
+  @state() connectionGate: import("./app-view-state.ts").ConnectionGateState | null = null;
+  @state() connectionShowQr = false;
+  @state() connectionQrDataUrl: string | null = null;
+
   @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() hello: GatewayHelloOk | null = null;
@@ -563,6 +568,75 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  handleConnectionRetryNow() {
+    const client = this.client as unknown as GatewayBrowserClient | null;
+    client?.setReconnectEnabled(true);
+    client?.reconnectNow({ resetBackoff: true });
+    if (this.connectionGate?.retry) {
+      this.connectionGate = {
+        ...this.connectionGate,
+        retry: { ...this.connectionGate.retry, stopped: false },
+      };
+    }
+  }
+
+  handleConnectionStopRetrying() {
+    const client = this.client as unknown as GatewayBrowserClient | null;
+    client?.setReconnectEnabled(false);
+    if (this.connectionGate?.retry) {
+      this.connectionGate = {
+        ...this.connectionGate,
+        retry: { ...this.connectionGate.retry, stopped: true },
+      };
+    }
+  }
+
+  handleConnectionReload() {
+    window.location.reload();
+  }
+
+  handleConnectionOpenTailscale() {
+    // Best-effort deep link. If it fails, iOS will keep the user here.
+    try {
+      window.location.href = "tailscale://";
+    } catch {
+      // ignore
+    }
+  }
+
+  async handleConnectionCopyLink() {
+    const text = this.settings.gatewayUrl;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard may be blocked; we intentionally avoid showing raw errors.
+      console.info("[control-ui] clipboard write blocked");
+    }
+  }
+
+  async handleConnectionToggleQr() {
+    const next = !this.connectionShowQr;
+    this.connectionShowQr = next;
+    if (!next) {
+      return;
+    }
+    if (this.connectionQrDataUrl) {
+      return;
+    }
+    try {
+      const mod = (await import("qrcode")) as unknown as {
+        toDataURL: (t: string, o?: unknown) => Promise<string>;
+      };
+      this.connectionQrDataUrl = await mod.toDataURL(this.settings.gatewayUrl, {
+        margin: 1,
+        width: 160,
+      });
+    } catch {
+      console.info("[control-ui] qr generation failed");
+      this.connectionQrDataUrl = null;
+    }
   }
 
   render() {

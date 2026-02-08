@@ -106,10 +106,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (passwordRaw != null) {
-    const password = passwordRaw.trim();
-    if (password) {
-      (host as { password: string }).password = password;
-    }
+    // Security: never hydrate password from URL params.
+    // We only strip it to avoid leaking secrets via shareable links or logs.
     params.delete("password");
     hashParams.delete("password");
     shouldCleanUrl = true;

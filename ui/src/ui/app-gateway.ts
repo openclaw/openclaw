@@ -1,4 +1,5 @@
 import type { EventLogEntry } from "./app-events.ts";
+import type { ConnectionGateState } from "./app-view-state.ts";
 import type { OpenClawApp } from "./app.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
@@ -13,6 +14,7 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import { parseWsClose } from "./connection-close.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -122,6 +124,10 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalQueue = [];
   host.execApprovalError = null;
 
+  (host as unknown as { connectionGate: unknown }).connectionGate = null;
+  (host as unknown as { connectionShowQr: boolean }).connectionShowQr = false;
+  (host as unknown as { connectionQrDataUrl: string | null }).connectionQrDataUrl = null;
+
   host.client?.stop();
   host.client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
@@ -133,6 +139,7 @@ export function connectGateway(host: GatewayHost) {
       host.connected = true;
       host.lastError = null;
       host.hello = hello;
+      (host as unknown as { connectionGate: unknown }).connectionGate = null;
       applySnapshot(host, hello);
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
@@ -148,10 +155,71 @@ export function connectGateway(host: GatewayHost) {
     },
     onClose: ({ code, reason }) => {
       host.connected = false;
+
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
-      if (code !== 1012) {
-        host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+      if (code === 1012) {
+        host.lastError = null;
+        return;
       }
+
+      const parsed = parseWsClose(code, reason);
+
+      const reasonCategory = parsed.category;
+      const now = Date.now();
+
+      // Minimal telemetry (safe): never log raw reason unless it matches the sentinel exactly.
+      const safeReason = parsed.safeReason;
+      console.info("[control-ui] ws_close", {
+        code,
+        reasonCategory,
+        reason: safeReason ?? undefined,
+      });
+
+      const retryState = (
+        host as unknown as {
+          connectionGate: { retry?: { attempt: number; stopped: boolean } | null } | null;
+        }
+      ).connectionGate?.retry ?? { attempt: 0, stopped: false };
+
+      const gateBase = {
+        retry: retryState,
+        diagnostics: {
+          lastCloseCode: code,
+          reasonCategory,
+          lastCloseAtMs: now,
+        },
+      };
+
+      if (reasonCategory === "PAIRING_REQUIRED") {
+        (host as unknown as { connectionGate: unknown }).connectionGate = {
+          kind: "pairing_required",
+          ...gateBase,
+        };
+        host.lastError = `disconnected (${code})`;
+        return;
+      }
+
+      (host as unknown as { connectionGate: unknown }).connectionGate = {
+        kind: "disconnected",
+        ...gateBase,
+      };
+      host.lastError = `disconnected (${code})`;
+    },
+    onReconnectScheduled: ({ attempt, delayMs, hidden }) => {
+      const gate = (host as unknown as { connectionGate: ConnectionGateState | null })
+        .connectionGate;
+      if (!gate?.retry || gate.retry.stopped) {
+        return;
+      }
+      (host as unknown as { connectionGate: ConnectionGateState | null }).connectionGate = {
+        ...gate,
+        retry: { ...gate.retry, attempt },
+      };
+      console.info("[control-ui] pairing_retry_attempt", {
+        attemptNumber: attempt,
+        backoffMs: delayMs,
+        hidden,
+      });
     },
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {
@@ -159,6 +227,49 @@ export function connectGateway(host: GatewayHost) {
     },
   });
   host.client.start();
+
+  // iOS Safari / PWA lifecycle: throttle reconnect while hidden, and reconnect promptly on resume.
+  const anyHost = host as unknown as {
+    __visibilityHandler?: (() => void) | null;
+    __visibilityDebounceTimer?: number | null;
+    __onlineHandler?: (() => void) | null;
+    client: GatewayBrowserClient | null;
+  };
+  if (anyHost.__visibilityHandler) {
+    document.removeEventListener("visibilitychange", anyHost.__visibilityHandler);
+  }
+  if (anyHost.__onlineHandler) {
+    window.removeEventListener("online", anyHost.__onlineHandler);
+    window.removeEventListener("offline", anyHost.__onlineHandler);
+  }
+  anyHost.__visibilityHandler = () => {
+    console.info("[control-ui] visibility_change", {
+      state: document.hidden ? "hidden" : "visible",
+    });
+    if (document.hidden) {
+      return;
+    }
+    if (anyHost.__visibilityDebounceTimer != null) {
+      window.clearTimeout(anyHost.__visibilityDebounceTimer);
+    }
+    anyHost.__visibilityDebounceTimer = window.setTimeout(() => {
+      anyHost.__visibilityDebounceTimer = null;
+      anyHost.client?.reconnectNow();
+    }, 350);
+  };
+  document.addEventListener("visibilitychange", anyHost.__visibilityHandler);
+
+  const onlineHandler = () => {
+    console.info("[control-ui] network_change", { online: navigator.onLine });
+    if (!document.hidden) {
+      anyHost.client?.reconnectNow();
+    }
+  };
+  // Best-effort: online/offline events exist on iOS Safari.
+  window.addEventListener("online", onlineHandler);
+  window.addEventListener("offline", onlineHandler);
+
+  anyHost.__onlineHandler = onlineHandler;
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {

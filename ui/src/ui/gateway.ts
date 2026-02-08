@@ -57,6 +57,12 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+
+  /**
+   * Called whenever a reconnect is scheduled after a close.
+   * Safe for UI telemetry (does not include the close reason).
+   */
+  onReconnectScheduled?: (info: { attempt: number; delayMs: number; hidden: boolean }) => void;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
@@ -70,20 +76,55 @@ export class GatewayBrowserClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: number | null = null;
-  private backoffMs = 800;
+
+  private reconnectEnabled = true;
+  private reconnectTimer: number | null = null;
+  private reconnectAttempt = 0;
+
+  private backoffMs = 1000;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
   start() {
     this.closed = false;
+    this.reconnectEnabled = true;
+    this.clearReconnectTimer();
     this.connect();
   }
 
   stop() {
     this.closed = true;
+    this.clearReconnectTimer();
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("gateway client stopped"));
+  }
+
+  setReconnectEnabled(enabled: boolean) {
+    this.reconnectEnabled = enabled;
+    if (!enabled) {
+      this.clearReconnectTimer();
+    }
+  }
+
+  reconnectNow(opts?: { resetBackoff?: boolean }) {
+    if (this.closed) {
+      return;
+    }
+    if (opts?.resetBackoff) {
+      this.backoffMs = 1000;
+      this.reconnectAttempt = 0;
+    }
+    this.clearReconnectTimer();
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // ignore
+      }
+      this.ws = null;
+    }
+    this.connect();
   }
 
   get connected() {
@@ -92,6 +133,12 @@ export class GatewayBrowserClient {
 
   private connect() {
     if (this.closed) {
+      return;
+    }
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
     this.ws = new WebSocket(this.opts.url);
@@ -109,13 +156,41 @@ export class GatewayBrowserClient {
     });
   }
 
+  private clearReconnectTimer() {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private scheduleReconnect() {
-    if (this.closed) {
+    if (this.closed || !this.reconnectEnabled) {
       return;
     }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+
+    this.clearReconnectTimer();
+
+    const hidden = typeof document !== "undefined" ? Boolean(document.hidden) : false;
+
+    // Candidate A retry policy: 1s → 2s → 4s → 8s → 15s (cap), with ±20% jitter.
+    // iOS lifecycle: when hidden, throttle to avoid battery abuse.
+    const baseDelay = this.backoffMs;
+    const jitter = 1 + (Math.random() * 0.4 - 0.2);
+    let delay = Math.round(baseDelay * jitter);
+    if (hidden) {
+      delay = Math.max(delay, 30_000);
+    }
+
+    this.reconnectAttempt += 1;
+    this.opts.onReconnectScheduled?.({ attempt: this.reconnectAttempt, delayMs: delay, hidden });
+
+    // Next backoff step.
+    this.backoffMs = Math.min(this.backoffMs * 2, 15_000);
+
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private flushPending(err: Error) {
@@ -224,7 +299,8 @@ export class GatewayBrowserClient {
             scopes: hello.auth.scopes ?? [],
           });
         }
-        this.backoffMs = 800;
+        this.backoffMs = 1000;
+        this.reconnectAttempt = 0;
         this.opts.onHello?.(hello);
       })
       .catch(() => {

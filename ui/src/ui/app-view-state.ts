@@ -35,6 +35,26 @@ import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
+export type ConnectionGateState =
+  | {
+      kind: "pairing_required";
+      retry: { attempt: number; stopped: boolean } | null;
+      diagnostics: {
+        lastCloseCode: number | null;
+        reasonCategory: string | null;
+        lastCloseAtMs: number | null;
+      };
+    }
+  | {
+      kind: "disconnected";
+      retry: { attempt: number; stopped: boolean } | null;
+      diagnostics: {
+        lastCloseCode: number | null;
+        reasonCategory: string | null;
+        lastCloseAtMs: number | null;
+      };
+    };
+
 export type AppViewState = {
   settings: UiSettings;
   password: string;
@@ -42,6 +62,21 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+
+  /**
+   * Full-screen blocking overlay shown when the gateway connection is blocked.
+   */
+  connectionGate: ConnectionGateState | null;
+  connectionShowQr: boolean;
+  connectionQrDataUrl: string | null;
+
+  handleConnectionRetryNow: () => void;
+  handleConnectionStopRetrying: () => void;
+  handleConnectionReload: () => void;
+  handleConnectionOpenTailscale: () => void;
+  handleConnectionCopyLink: () => void;
+  handleConnectionToggleQr: () => void;
+
   theme: ThemeMode;
   themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
