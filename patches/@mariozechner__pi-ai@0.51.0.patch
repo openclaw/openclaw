@@ -1,0 +1,31 @@
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index 0000000..1111111 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -361,2 +361,15 @@
+ function convertMessages(model, context) {
+     const messages = [];
++    const normalizeOpenAIItemId = (id) => {
++        if (!id)
++            return id;
++        const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, "_");
++        let normalized = sanitized.startsWith("fc") ? sanitized : `fc_${sanitized}`;
++        if (normalized.length > 64) {
++            normalized = `fc_${shortHash(normalized)}`;
++        }
++        if (normalized.length > 64) {
++            normalized = normalized.slice(0, 64);
++        }
++        return normalized;
++    };
+     const normalizeToolCallId = (id) => {
+@@ -458,6 +471,9 @@
+                 else if (block.type === "toolCall") {
+                     const toolCall = block;
+                     const callId = toolCall.id.split("|")[0];
+                     let itemId = toolCall.id.split("|")[1];
++                    if (itemId) {
++                        itemId = normalizeOpenAIItemId(itemId);
++                    }
+                     // For different-model messages, set id to undefined to avoid pairing validation.
+                     // OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
