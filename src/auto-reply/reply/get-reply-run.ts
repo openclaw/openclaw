@@ -364,6 +364,9 @@ export async function runPreparedReply(
     originatingAccountId: ctx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
+    // Store opts in FollowupRun to avoid closure reuse across messages in the same queue.
+    // Each message gets its own deliver callback and dispatcher options.
+    opts,
     run: {
       agentId,
       agentDir,
