@@ -94,6 +94,18 @@ describe("sendMessageTelegram", () => {
     botCtorSpy.mockReset();
   });
 
+  it("returns skipped result for empty text instead of throwing", async () => {
+    const res = await sendMessageTelegram("123", "", { token: "tok" });
+    expect(res).toEqual({ messageId: "skipped", chatId: "123" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns skipped result for whitespace-only text instead of throwing", async () => {
+    const res = await sendMessageTelegram("123", "   ", { token: "tok" });
+    expect(res).toEqual({ messageId: "skipped", chatId: "123" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("passes timeoutSeconds to grammY client when configured", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { timeoutSeconds: 60 } },

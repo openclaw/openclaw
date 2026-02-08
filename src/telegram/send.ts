@@ -436,7 +436,8 @@ export async function sendMessageTelegram(
   }
 
   if (!text || !text.trim()) {
-    throw new Error("Message must be non-empty for Telegram sends");
+    diagLogger.warn(`[telegram] skipping empty message to ${chatId}`);
+    return { messageId: "skipped", chatId };
   }
   const textParams =
     hasThreadParams || replyMarkup
