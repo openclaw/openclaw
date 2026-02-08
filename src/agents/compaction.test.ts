@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  chunkMessagesByMaxTokens,
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
@@ -12,6 +13,27 @@ function makeMessage(id: number, size: number): AgentMessage {
     content: "x".repeat(size),
     timestamp: id,
   };
+}
+
+function makeToolUseMessage(id: number, toolCallId: string, size: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text: "x".repeat(size) },
+      { type: "toolUse", id: toolCallId, name: "test_tool", input: {} },
+    ],
+    timestamp: id,
+  };
+}
+
+function makeToolResultMessage(id: number, toolCallId: string): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "test_tool",
+    content: [{ type: "text", text: "result" }],
+    timestamp: id,
+  } as AgentMessage;
 }
 
 describe("splitMessagesByTokenShare", () => {
@@ -42,6 +64,89 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 3);
     expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
+  });
+
+  it("keeps tool_use and tool_result in the same chunk", () => {
+    // Critical: splitting between tool_use and tool_result causes
+    // "unexpected tool_use_id" errors from Anthropic's API
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeToolUseMessage(2, "call_123", 4000),
+      makeToolResultMessage(3, "call_123"),
+      makeMessage(4, 4000),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    // Find which chunk contains the tool_use message
+    const toolUseChunkIdx = parts.findIndex((chunk) =>
+      chunk.some((m) => m.role === "assistant"),
+    );
+    expect(toolUseChunkIdx).toBeGreaterThanOrEqual(0);
+
+    // The tool_result must be in the same chunk
+    const toolResultChunkIdx = parts.findIndex((chunk) =>
+      chunk.some((m) => m.role === "toolResult"),
+    );
+    expect(toolResultChunkIdx).toBe(toolUseChunkIdx);
+  });
+
+  it("never starts a chunk with a tool_result message", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeToolUseMessage(2, "call_a", 2000),
+      makeToolResultMessage(3, "call_a"),
+      makeMessage(4, 4000),
+      makeToolUseMessage(5, "call_b", 2000),
+      makeToolResultMessage(6, "call_b"),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 3);
+
+    for (const chunk of parts) {
+      expect(chunk[0]?.role).not.toBe("toolResult");
+    }
+  });
+});
+
+describe("chunkMessagesByMaxTokens", () => {
+  it("keeps tool_use and tool_result in the same chunk", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 2000),
+      makeToolUseMessage(2, "call_123", 2000),
+      makeToolResultMessage(3, "call_123"),
+      makeMessage(4, 2000),
+    ];
+
+    // Use a small maxTokens to force chunking
+    const chunks = chunkMessagesByMaxTokens(messages, 3000);
+
+    // Find which chunk contains the tool_use message
+    const toolUseChunkIdx = chunks.findIndex((chunk) =>
+      chunk.some((m) => m.role === "assistant"),
+    );
+    expect(toolUseChunkIdx).toBeGreaterThanOrEqual(0);
+
+    // The tool_result must be in the same chunk
+    const toolResultChunkIdx = chunks.findIndex((chunk) =>
+      chunk.some((m) => m.role === "toolResult"),
+    );
+    expect(toolResultChunkIdx).toBe(toolUseChunkIdx);
+  });
+
+  it("never starts a chunk with a tool_result message", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 2000),
+      makeToolUseMessage(2, "call_a", 2000),
+      makeToolResultMessage(3, "call_a"),
+      makeMessage(4, 2000),
+    ];
+
+    const chunks = chunkMessagesByMaxTokens(messages, 2500);
+
+    for (const chunk of chunks) {
+      expect(chunk[0]?.role).not.toBe("toolResult");
+    }
   });
 });
 

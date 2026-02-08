@@ -13,6 +13,42 @@ const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
 
+/**
+ * Check if an assistant message has pending tool calls that require tool_result responses.
+ * Splitting after such a message would separate tool_use from tool_result.
+ */
+function hasPendingToolCalls(message: AgentMessage): boolean {
+  const msg = message as { role?: string; content?: unknown[] };
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const rec = block as { type?: string };
+    const blockType = rec.type;
+    return (
+      blockType === "toolCall" ||
+      blockType === "toolUse" ||
+      blockType === "tool_use" ||
+      blockType === "functionCall"
+    );
+  });
+}
+
+/**
+ * Check if a message is a tool result that must follow its corresponding tool_use.
+ */
+function isToolResultMessage(message: AgentMessage): boolean {
+  const msg = message as { role?: string };
+  return msg.role === "toolResult" || msg.role === "tool_result";
+}
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
@@ -42,16 +78,26 @@ export function splitMessagesByTokenShare(
   let current: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
     const messageTokens = estimateTokens(message);
-    if (
+
+    // Check if we should split before this message
+    const wantToSplit =
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
-      currentTokens + messageTokens > targetTokens
-    ) {
-      chunks.push(current);
-      current = [];
-      currentTokens = 0;
+      currentTokens + messageTokens > targetTokens;
+
+    if (wantToSplit) {
+      // Don't split if previous message has pending tool calls (would orphan tool_results)
+      // Don't split if current message is a tool_result (would orphan it)
+      const lastMessage = current[current.length - 1];
+      const canSplit = !hasPendingToolCalls(lastMessage) && !isToolResultMessage(message);
+      if (canSplit) {
+        chunks.push(current);
+        current = [];
+        currentTokens = 0;
+      }
     }
 
     current.push(message);
@@ -77,22 +123,37 @@ export function chunkMessagesByMaxTokens(
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
     const messageTokens = estimateTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > maxTokens) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
+
+    // Check if we should split before this message
+    const wantToSplit = currentChunk.length > 0 && currentTokens + messageTokens > maxTokens;
+
+    if (wantToSplit) {
+      // Don't split if previous message has pending tool calls (would orphan tool_results)
+      // Don't split if current message is a tool_result (would orphan it)
+      const lastMessage = currentChunk[currentChunk.length - 1];
+      const canSplit = !hasPendingToolCalls(lastMessage) && !isToolResultMessage(message);
+      if (canSplit) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        currentTokens = 0;
+      }
     }
 
     currentChunk.push(message);
     currentTokens += messageTokens;
 
+    // Handle oversized messages, but don't split tool_use/tool_result pairs
     if (messageTokens > maxTokens) {
-      // Split oversized messages to avoid unbounded chunk growth.
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
+      const nextMessage = messages[i + 1];
+      const hasFollowingToolResult = nextMessage && isToolResultMessage(nextMessage);
+      if (!hasPendingToolCalls(message) && !hasFollowingToolResult) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        currentTokens = 0;
+      }
     }
   }
 
