@@ -618,7 +618,8 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
+    const heartbeatModel = heartbeat?.model?.trim();
+    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true, heartbeatModel }, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
