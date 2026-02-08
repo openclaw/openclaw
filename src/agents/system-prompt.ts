@@ -490,7 +490,7 @@ export function buildAgentSystemPrompt(params: {
             ? "You may also send /elevated on|off|ask|full when needed."
             : "",
           params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (on/ask run exec on host with approvals; full auto-approves).`
             : "",
         ]
           .filter(Boolean)
