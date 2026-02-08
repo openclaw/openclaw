@@ -326,14 +326,6 @@ export async function loadCostUsageSummary(params?: {
         .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
-          const stats = await fs.promises.stat(filePath).catch(() => null);
-          if (!stats) {
-            return null;
-          }
-          // Include file if it was modified after our start time
-          if (stats.mtimeMs < sinceTime) {
-            return null;
-          }
           return filePath;
         }),
     )

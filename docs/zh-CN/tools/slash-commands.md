@@ -80,6 +80,7 @@ x-i18n:
 - `/config show|get|set|unset`（将配置持久化到磁盘，仅所有者；需要 `commands.config: true`）
 - `/debug show|set|unset|reset`（运行时覆盖，仅所有者；需要 `commands.debug: true`）
 - `/usage off|tokens|full|cost`（每响应使用量页脚或本地成本摘要）
+- `/total_usage [范围]`（显示所有会话的 Token 使用统计和费用）
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio`（控制 TTS；参见 [/tts](/tts)）
   - Discord：原生命令是 `/voice`（Discord 保留了 `/tts`）；文本 `/tts` 仍然有效。
 - `/stop`
