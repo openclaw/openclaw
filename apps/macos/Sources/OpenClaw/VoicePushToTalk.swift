@@ -122,7 +122,7 @@ actor VoicePushToTalk {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
 
-    // Session token used to drop stale callbacks when a new capture starts.
+    /// Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
 
     private var committed: String = ""

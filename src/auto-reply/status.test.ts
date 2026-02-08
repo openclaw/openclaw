@@ -207,7 +207,9 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
-  it("prefers model overrides over last-run model", () => {
+  it("shows runtime model (after fallback) over configured override", () => {
+    // When the system falls back to a different model (e.g., due to rate limits),
+    // /status should show the actual runtime model, not the user's configured preference.
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -220,6 +222,31 @@ describe("buildStatusMessage", () => {
         modelOverride: "gpt-4.1-mini",
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    // Runtime model (modelProvider/model) takes precedence over override
+    expect(normalizeTestText(text)).toContain("Model: anthropic/claude-haiku-4-5");
+  });
+
+  it("falls back to override when no runtime model is recorded", () => {
+    // When no API call has been made yet, show the user's configured override
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "no-runtime",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        // No modelProvider/model set (no API call yet)
         contextTokens: 32_000,
       },
       sessionKey: "agent:main:main",
