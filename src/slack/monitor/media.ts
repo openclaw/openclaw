@@ -115,25 +115,29 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
-export async function resolveSlackMedia(params: {
-  files?: SlackFile[];
-  token: string;
-  maxBytes: number;
-}): Promise<{
+export type SlackMediaItem = {
   path: string;
   contentType?: string;
   placeholder: string;
-} | null> {
+};
+
+/**
+ * Download all Slack file attachments, returning every successfully fetched file.
+ * Files that fail to download or exceed maxBytes are silently skipped.
+ */
+export async function resolveSlackMediaList(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaItem[]> {
   const files = params.files ?? [];
+  const results: SlackMediaItem[] = [];
   for (const file of files) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) {
       continue;
     }
     try {
-      // Note: fetchRemoteMedia calls fetchImpl(url) with the URL string today and
-      // handles size limits internally. Provide a fetcher that uses auth once, then lets
-      // the redirect chain continue without credentials.
       const fetchImpl = createSlackMediaFetch(params.token);
       const fetched = await fetchRemoteMedia({
         url,
@@ -151,16 +155,54 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      results.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
-      // Ignore download failures and fall through to the next file.
+      // Ignore download failures and continue to the next file.
     }
   }
-  return null;
+  return results;
+}
+
+/**
+ * Backward-compatible wrapper: returns the first successfully downloaded file.
+ */
+export async function resolveSlackMedia(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaItem | null> {
+  const list = await resolveSlackMediaList(params);
+  return list[0] ?? null;
+}
+
+/**
+ * Build singular + plural media context fields from a list of downloaded files.
+ * Mirrors Discord's `buildDiscordMediaPayload` pattern: first item populates
+ * the singular fields, all items populate the array fields.
+ */
+export function buildSlackMediaPayload(mediaList: SlackMediaItem[]): {
+  MediaPath?: string;
+  MediaType?: string;
+  MediaUrl?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
+} {
+  const first = mediaList[0];
+  const mediaPaths = mediaList.map((m) => m.path);
+  const mediaTypes = mediaList.map((m) => m.contentType ?? "");
+  return {
+    MediaPath: first?.path,
+    MediaType: first?.contentType,
+    MediaUrl: first?.path,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+  };
 }
 
 export type SlackThreadStarter = {

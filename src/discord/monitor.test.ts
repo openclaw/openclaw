@@ -730,4 +730,15 @@ describe("discord media payload", () => {
     expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
     expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
   });
+
+  it("keeps MediaTypes aligned with MediaPaths when some items lack contentType", () => {
+    const payload = buildDiscordMediaPayload([
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { path: "/tmp/b.bin" }, // no contentType
+      { path: "/tmp/c.jpg", contentType: "image/jpeg" },
+    ]);
+    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.bin", "/tmp/c.jpg"]);
+    expect(payload.MediaTypes).toEqual(["image/png", "", "image/jpeg"]);
+    expect(payload.MediaTypes).toHaveLength(payload.MediaPaths!.length);
+  });
 });
