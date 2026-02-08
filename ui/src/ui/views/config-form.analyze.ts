@@ -92,14 +92,34 @@ function normalizeSchemaNode(
       }
     }
   } else if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    if (!itemsSchema) {
-      unsupported.add(pathLabel);
-    } else {
-      const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
-      normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) {
+    if (Array.isArray(schema.items)) {
+      const normalizedItems: JsonSchema[] = [];
+      for (let i = 0; i < schema.items.length; i += 1) {
+        const item = schema.items[i];
+        if (!item) {
+          unsupported.add(pathLabel);
+          continue;
+        }
+        const res = normalizeSchemaNode(item, [...path, i]);
+        normalizedItems[i] = res.schema ?? item;
+        for (const entry of res.unsupportedPaths) {
+          unsupported.add(entry);
+        }
+      }
+      if (normalizedItems.length === 0) {
         unsupported.add(pathLabel);
+      }
+      normalized.items = normalizedItems;
+    } else {
+      const itemsSchema = schema.items;
+      if (!itemsSchema) {
+        unsupported.add(pathLabel);
+      } else {
+        const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
+        normalized.items = res.schema ?? itemsSchema;
+        if (res.unsupportedPaths.length > 0) {
+          unsupported.add(pathLabel);
+        }
       }
     }
   } else if (

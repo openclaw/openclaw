@@ -53,15 +53,6 @@ import {
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-
-// Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
-let usageDateDebounceTimeout: number | null = null;
-const debouncedLoadUsage = (state: UsageState) => {
-  if (usageDateDebounceTimeout) {
-    clearTimeout(usageDateDebounceTimeout);
-  }
-  usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
-};
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -1163,7 +1154,7 @@ export function renderApp(state: AppViewState) {
                   state.configActiveSubsection = null;
                 },
                 onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
+                onReload: () => loadConfig(state, { resetDirty: true }),
                 onSave: () => saveConfig(state),
                 onApply: () => applyConfig(state),
                 onUpdate: () => runUpdate(state),

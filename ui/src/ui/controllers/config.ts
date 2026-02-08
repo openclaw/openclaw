@@ -34,7 +34,7 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export async function loadConfig(state: ConfigState, opts: { resetDirty?: boolean } = {}) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -42,6 +42,9 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
+    if (opts.resetDirty) {
+      state.configFormDirty = false;
+    }
     applyConfigSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);

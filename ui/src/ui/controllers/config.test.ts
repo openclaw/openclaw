@@ -4,6 +4,7 @@ import {
   applyConfig,
   runUpdate,
   updateConfigFormValue,
+  loadConfig,
   type ConfigState,
 } from "./config.ts";
 
@@ -133,6 +134,29 @@ describe("updateConfigFormValue", () => {
     expect(state.configRaw).toBe(
       '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n',
     );
+  });
+});
+
+describe("loadConfig", () => {
+  it("keeps dirty edits when resetDirty is true but reload fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("offline"));
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local" } };
+    state.configRaw = '{ "gateway": { "mode": "local" } }';
+    state.configFormOriginal = { gateway: { mode: "remote" } };
+    state.configRawOriginal = '{ "gateway": { "mode": "remote" } }';
+
+    await loadConfig(state, { resetDirty: true });
+
+    expect(request).toHaveBeenCalledWith("config.get", {});
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({ gateway: { mode: "local" } });
+    expect(state.configRaw).toBe('{ "gateway": { "mode": "local" } }');
+    expect(state.lastError).toBe("Error: offline");
   });
 });
 

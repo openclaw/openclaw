@@ -31,7 +31,7 @@ export async function handleChannelConfigSave(host: OpenClawApp) {
 }
 
 export async function handleChannelConfigReload(host: OpenClawApp) {
-  await loadConfig(host);
+  await loadConfig(host, { resetDirty: true });
   await loadChannels(host, true);
 }
 
