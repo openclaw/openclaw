@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 
 describe("resolveMatrixRoomConfig", () => {
+  it("matches room IDs without colon-server suffix", () => {
+    // Conduit and some other homeservers use room IDs without :server
+    const rooms = {
+      "!AbCdEfGhIjKlMnOpQrStUvWxYz": { allow: true },
+    };
+
+    const result = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!AbCdEfGhIjKlMnOpQrStUvWxYz",
+      aliases: [],
+      name: null,
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.matchKey).toBe("!AbCdEfGhIjKlMnOpQrStUvWxYz");
+  });
+
   it("matches room IDs and aliases, not names", () => {
     const rooms = {
       "!room:example.org": { allow: true },
