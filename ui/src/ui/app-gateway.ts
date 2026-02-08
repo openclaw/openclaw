@@ -206,7 +206,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         }
       }
     }
-    if (state === "final") {
+    if (state === "final" || state === "error" || state === "aborted") {
       void loadChatHistory(host as unknown as OpenClawApp);
     }
     return;
