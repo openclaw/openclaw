@@ -170,8 +170,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    // Use ctx.model if available, otherwise fall back to runtime.model
+    // (needed when ExtensionRunner is not initialized during direct compaction)
+    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const model = ctx.model ?? runtime?.model;
     if (!model) {
+      console.warn(
+        "Compaction safeguard: no model available (ctx.model and runtime.model both undefined). " +
+          "Returning fallback summary.",
+      );
       return {
         compaction: {
           summary: fallbackSummary,
