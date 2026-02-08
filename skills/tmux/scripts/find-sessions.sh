@@ -52,9 +52,11 @@ list_sessions() {
   local label="$1"; shift
   local tmux_cmd=(tmux "$@")
 
+  # Try to list sessions - if tmux server isn't running, this will fail
+  # We treat "no server" as "no sessions" (exit 0), not an error
   if ! sessions="$("${tmux_cmd[@]}" list-sessions -F '#{session_name}\t#{session_attached}\t#{session_created_string}' 2>/dev/null)"; then
-    echo "No tmux server found on $label" >&2
-    return 1
+    echo "No sessions on $label"
+    return 0
   fi
 
   if [[ -n "$query" ]]; then
@@ -62,7 +64,7 @@ list_sessions() {
   fi
 
   if [[ -z "$sessions" ]]; then
-    echo "No sessions found on $label"
+    echo "No sessions on $label"
     return 0
   fi
 
@@ -75,8 +77,8 @@ list_sessions() {
 
 if [[ "$scan_all" == true ]]; then
   if [[ ! -d "$socket_dir" ]]; then
-    echo "Socket directory not found: $socket_dir" >&2
-    exit 1
+    echo "No sockets found (directory does not exist: $socket_dir)"
+    exit 0
   fi
 
   shopt -s nullglob
@@ -84,18 +86,17 @@ if [[ "$scan_all" == true ]]; then
   shopt -u nullglob
 
   if [[ "${#sockets[@]}" -eq 0 ]]; then
-    echo "No sockets found under $socket_dir" >&2
-    exit 1
+    echo "No sockets found under $socket_dir"
+    exit 0
   fi
 
-  exit_code=0
   for sock in "${sockets[@]}"; do
     if [[ ! -S "$sock" ]]; then
       continue
     fi
-    list_sessions "socket path '$sock'" -S "$sock" || exit_code=$?
+    list_sessions "socket path '$sock'" -S "$sock"
   done
-  exit "$exit_code"
+  exit 0
 fi
 
 tmux_cmd=(tmux)
