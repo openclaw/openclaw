@@ -1,11 +1,14 @@
 import { existsSync } from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
-import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import { danger, info, shouldLogVerbose } from "../globals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
+
+const log = createSubsystemLogger("infra/tailscale");
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -190,7 +193,7 @@ export async function ensureGoInstalled(
     runtime.error("Go is required to build tailscaled from source. Aborting.");
     runtime.exit(1);
   }
-  logVerbose("Installing Go via Homebrew…");
+  log.debug("Installing Go via Homebrew…");
   await exec("brew", ["install", "go"]);
 }
 
@@ -216,7 +219,7 @@ export async function ensureTailscaledInstalled(
     runtime.error("tailscaled is required for user-space funnel. Aborting.");
     runtime.exit(1);
   }
-  logVerbose("Installing tailscaled via Homebrew…");
+  log.debug("Installing tailscaled via Homebrew…");
   await exec("brew", ["install", "tailscale"]);
 }
 
@@ -280,14 +283,14 @@ async function execWithSudoFallback(
     if (!isPermissionDeniedError(err)) {
       throw err;
     }
-    logVerbose(`Command failed, retrying with sudo: ${bin} ${args.join(" ")}`);
+    log.debug(`Command failed, retrying with sudo: ${bin} ${args.join(" ")}`);
     try {
       return await exec("sudo", ["-n", bin, ...args], opts);
     } catch (sudoErr) {
       const { stderr, message } = extractExecErrorText(sudoErr);
       const detail = (stderr || message).trim();
       if (detail) {
-        logVerbose(`Sudo retry failed: ${detail}`);
+        log.debug(`Sudo retry failed: ${detail}`);
       }
       throw err;
     }
@@ -326,7 +329,7 @@ export async function ensureFunnel(
       await ensureTailscaledInstalled(exec, prompt, runtime);
     }
 
-    logVerbose(`Enabling funnel on port ${port}…`);
+    log.debug(`Enabling funnel on port ${port}…`);
     // Attempt with fallback
     const { stdout } = await execWithSudoFallback(
       exec,
@@ -338,30 +341,26 @@ export async function ensureFunnel(
       },
     );
     if (stdout.trim()) {
-      console.log(stdout.trim());
+      log.info(stdout.trim());
     }
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
     const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
     const stderr = typeof errOutput.stderr === "string" ? errOutput.stderr : "";
     if (stdout.includes("Funnel is not enabled")) {
-      console.error(danger("Funnel is not enabled on this tailnet/device."));
+      log.error("Funnel is not enabled on this tailnet/device.");
       const linkMatch = stdout.match(/https?:\/\/\S+/);
       if (linkMatch) {
-        console.error(info(`Enable it here: ${linkMatch[0]}`));
+        log.info(`Enable it here: ${linkMatch[0]}`);
       } else {
-        console.error(
-          info(
-            "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
-          ),
+        log.info(
+          "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
         );
       }
     }
     if (stderr.includes("client version") || stdout.includes("client version")) {
-      console.error(
-        warn(
-          "Tailscale client/server version mismatch detected; try updating tailscale/tailscaled.",
-        ),
+      log.warn(
+        "Tailscale client/server version mismatch detected; try updating tailscale/tailscaled.",
       );
     }
     runtime.error("Failed to enable Tailscale Funnel. Is it allowed on your tailnet?");
@@ -378,7 +377,7 @@ export async function ensureFunnel(
       if (stderr.trim()) {
         runtime.error(colorize(rich, theme.muted, `stderr: ${stderr.trim()}`));
       }
-      runtime.error(err as Error);
+      log.error("Tailscale funnel failed", { error: err });
     }
     runtime.exit(1);
   }
