@@ -72,6 +72,10 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
+    // When false, the connection omits the signed device identity payload.
+    // This is useful for secondary "operator" connections where the shared gateway token
+    // should authorize without triggering device pairing flows.
+    public var includeDeviceIdentity: Bool
 
     public init(
         role: String,
@@ -81,7 +85,8 @@ public struct GatewayConnectOptions: Sendable {
         permissions: [String: Bool],
         clientId: String,
         clientMode: String,
-        clientDisplayName: String?)
+        clientDisplayName: String?,
+        includeDeviceIdentity: Bool = true)
     {
         self.role = role
         self.scopes = scopes
@@ -91,6 +96,7 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
+        self.includeDeviceIdentity = includeDeviceIdentity
     }
 }
 
@@ -128,7 +134,7 @@ public actor GatewayChannelActor {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private let connectTimeoutSeconds: Double = 6
-    private let connectChallengeTimeoutSeconds: Double = 0.75
+    private let connectChallengeTimeoutSeconds: Double = 3.0
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
@@ -307,9 +313,15 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedToken = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
-        let authToken = storedToken ?? self.token
+        let includeDeviceIdentity = options.includeDeviceIdentity
+        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
+        let storedToken =
+            (includeDeviceIdentity && identity != nil)
+                ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
+                : nil
+        // If we're not sending a device identity, a device token can't be validated server-side.
+        // In that mode we always use the shared gateway token/password.
+        let authToken = includeDeviceIdentity ? (storedToken ?? self.token) : self.token
         let authSource: GatewayAuthSource
         if storedToken != nil {
             authSource = .deviceToken
@@ -322,7 +334,7 @@ public actor GatewayChannelActor {
         }
         self.lastAuthSource = authSource
         self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
-        let canFallbackToShared = storedToken != nil && self.token != nil
+        let canFallbackToShared = includeDeviceIdentity && storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
         } else if let password = self.password {
@@ -333,7 +345,7 @@ public actor GatewayChannelActor {
         let scopesValue = scopes.joined(separator: ",")
         var payloadParts = [
             connectNonce == nil ? "v1" : "v2",
-            identity.deviceId,
+            identity?.deviceId ?? "",
             clientId,
             clientMode,
             role,
@@ -345,18 +357,20 @@ public actor GatewayChannelActor {
             payloadParts.append(connectNonce)
         }
         let payload = payloadParts.joined(separator: "|")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-            var device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
-            ]
-            if let connectNonce {
-                device["nonce"] = ProtoAnyCodable(connectNonce)
+        if includeDeviceIdentity, let identity {
+            if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
+               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
+                var device: [String: ProtoAnyCodable] = [
+                    "id": ProtoAnyCodable(identity.deviceId),
+                    "publicKey": ProtoAnyCodable(publicKey),
+                    "signature": ProtoAnyCodable(signature),
+                    "signedAt": ProtoAnyCodable(signedAtMs),
+                ]
+                if let connectNonce {
+                    device["nonce"] = ProtoAnyCodable(connectNonce)
+                }
+                params["device"] = ProtoAnyCodable(device)
             }
-            params["device"] = ProtoAnyCodable(device)
         }
 
         let frame = RequestFrame(
@@ -371,7 +385,9 @@ public actor GatewayChannelActor {
             try await self.handleConnectResponse(response, identity: identity, role: role)
         } catch {
             if canFallbackToShared {
-                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                if let identity {
+                    DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                }
             }
             throw error
         }
@@ -379,7 +395,7 @@ public actor GatewayChannelActor {
 
     private func handleConnectResponse(
         _ res: ResponseFrame,
-        identity: DeviceIdentity,
+        identity: DeviceIdentity?,
         role: String
     ) async throws {
         if res.ok == false {
@@ -404,11 +420,13 @@ public actor GatewayChannelActor {
             let authRole = auth["role"]?.value as? String ?? role
             let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
                 .compactMap { $0.value as? String } ?? []
-            _ = DeviceAuthStore.storeToken(
-                deviceId: identity.deviceId,
-                role: authRole,
-                token: deviceToken,
-                scopes: scopes)
+            if let identity {
+                _ = DeviceAuthStore.storeToken(
+                    deviceId: identity.deviceId,
+                    role: authRole,
+                    token: deviceToken,
+                    scopes: scopes)
+            }
         }
         self.lastTick = Date()
         self.tickTask?.cancel()
@@ -498,7 +516,10 @@ public actor GatewayChannelActor {
                     }
                 })
         } catch {
-            if error is ConnectChallengeError { return nil }
+            if error is ConnectChallengeError {
+                self.logger.warning("gateway connect challenge timed out")
+                return nil
+            }
             throw error
         }
     }
