@@ -157,6 +157,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
     "@grammyjs/types": "^3.23.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -168,6 +170,8 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260205.1",
     "@vitest/coverage-v8": "^4.0.18",
+    "git-cliff": "^2.12.0",
+    "lefthook": "^2.1.0",
     "lit": "^3.3.2",
     "ollama": "^0.6.3",
     "oxfmt": "0.28.0",

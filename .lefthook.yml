@@ -1,0 +1,19 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      run: pnpm tsgo && pnpm lint
+      stage_fixed: true
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx commitlint --edit "{1}"
+
+pre-push:
+  parallel: true
+  commands:
+    test:
+      run: pnpm test
+    build:
+      run: pnpm build
