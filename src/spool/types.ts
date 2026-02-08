@@ -4,54 +4,27 @@
  * Spool is an event-based trigger mechanism that complements cron (time-based).
  * Events are JSON files placed in ~/.openclaw/spool/events/ and processed automatically
  * by the gateway's file watcher.
+ *
+ * Core types (SpoolPriority, SpoolAgentTurnPayload, SpoolPayload, SpoolEvent, SpoolEventCreate)
+ * are derived from Zod schemas in schema.ts to maintain a single source of truth.
  */
 
-export type SpoolPriority = "low" | "normal" | "high" | "critical";
+import type { z } from "zod";
+import type {
+  spoolPrioritySchema,
+  spoolPayloadSchema,
+  spoolEventSchema,
+  spoolEventCreateSchema,
+} from "./schema.js";
 
-export type SpoolAgentTurnPayload = {
-  kind: "agentTurn";
-  /** The message to send to the agent. */
-  message: string;
-  /** Optional: specific agent ID. */
-  agentId?: string;
-  /** Optional: session key override. */
-  sessionKey?: string;
-  /** Optional: model override (provider/model or alias). */
-  model?: string;
-  /** Optional: thinking level (off|minimal|low|medium|high|xhigh). */
-  thinking?: string;
-  /** Optional: delivery settings for sending the agent's response. */
-  delivery?: {
-    enabled?: boolean;
-    channel?: string;
-    to?: string;
-  };
-};
+// Derived from Zod schemas - single source of truth
+export type SpoolPriority = z.infer<typeof spoolPrioritySchema>;
+export type SpoolPayload = z.infer<typeof spoolPayloadSchema>;
+export type SpoolAgentTurnPayload = SpoolPayload; // Alias for clarity
+export type SpoolEvent = z.infer<typeof spoolEventSchema>;
+export type SpoolEventCreate = z.infer<typeof spoolEventCreateSchema>;
 
-export type SpoolPayload = SpoolAgentTurnPayload;
-
-export type SpoolEvent = {
-  version: 1;
-  /** Unique event ID (UUID). */
-  id: string;
-  /** ISO 8601 timestamp of when the event was created. */
-  createdAt: string;
-  /** Unix timestamp in milliseconds of when the event was created. */
-  createdAtMs: number;
-  /** Event priority (affects processing order). */
-  priority?: SpoolPriority;
-  /** Maximum number of retry attempts (default: 3). */
-  maxRetries?: number;
-  /** Current retry count (incremented on each failure). */
-  retryCount?: number;
-  /** ISO 8601 timestamp after which the event should be discarded. */
-  expiresAt?: string;
-  /** The event payload. */
-  payload: SpoolPayload;
-};
-
-export type SpoolEventCreate = Omit<SpoolEvent, "id" | "createdAt" | "createdAtMs" | "retryCount">;
-
+// These types are NOT in Zod - keep as manual definitions
 export type SpoolDispatchResult = {
   status: "ok" | "error" | "skipped" | "expired";
   eventId: string;
