@@ -1,10 +1,11 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { initSessionState } from "./session.js";
 
 /**
  * Test for issue #10404: Runtime metadata shows stale model after /new or /reset
@@ -33,12 +34,12 @@ describe("session model reset on /new", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("clears stale model/modelProvider/systemPromptReport fields when session is reset", async () => {
-    // Setup: Create a session with model A
+  it("clears stale model/modelProvider/systemPromptReport fields when session is reset via /new", async () => {
+    // Setup: Create a session with model metadata from a previous turn
     const sessionKey = "agent:main:test-session";
     const initialEntry: SessionEntry = {
       sessionId: "session-1",
-      updatedAt: Date.now() - 60000, // 1 minute ago
+      updatedAt: Date.now(),
       systemSent: true,
       // These are the "persisted" values from a previous turn
       model: "claude-sonnet-4-5",
@@ -49,86 +50,91 @@ describe("session model reset on /new", () => {
         provider: "anthropic",
         model: "claude-sonnet-4-5",
       } as SessionEntry["systemPromptReport"],
+      // Token metrics
+      totalTokens: 5000,
+      inputTokens: 3000,
+      outputTokens: 2000,
     };
 
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = initialEntry;
+    await saveSessionStore(storePath, { [sessionKey]: initialEntry });
+
+    // Trigger /new via initSessionState
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
     });
 
-    // Simulate /new: Create a new session entry with model fields explicitly cleared
-    // This matches the behavior in session.ts when isNewSession is true
-    const newSessionId = crypto.randomUUID();
-    const newEntry: Partial<SessionEntry> = {
-      sessionId: newSessionId,
-      updatedAt: Date.now(),
-      systemSent: false,
-      compactionCount: 0,
-      // FIX for #10404: Explicitly clear stale model fields
-      model: undefined,
-      modelProvider: undefined,
-      systemPromptReport: undefined,
-    };
+    // Verify the result
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
 
-    // Merge with existing entry (mimics session.ts behavior at line 349)
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = { ...store[sessionKey], ...newEntry };
-    });
-
-    // Verify: Stale fields are cleared
+    // Verify stale model fields are cleared
     const store = loadSessionStore(storePath);
     const entry = store[sessionKey];
 
-    expect(entry?.sessionId).toBe(newSessionId); // New session ID
-    expect(entry?.model).toBeUndefined(); // Cleared
-    expect(entry?.modelProvider).toBeUndefined(); // Cleared
-    expect(entry?.systemPromptReport).toBeUndefined(); // Cleared
+    expect(entry?.sessionId).not.toBe("session-1"); // New session ID
+    expect(entry?.model).toBeUndefined(); // Cleared - fix for #10404
+    expect(entry?.modelProvider).toBeUndefined(); // Cleared - fix for #10404
+    expect(entry?.systemPromptReport).toBeUndefined(); // Cleared - fix for #10404
+
+    // Token metrics should also be cleared
+    expect(entry?.totalTokens).toBeUndefined();
+    expect(entry?.inputTokens).toBeUndefined();
+    expect(entry?.outputTokens).toBeUndefined();
   });
 
-  it("preserves modelOverride/providerOverride when session is reset", async () => {
-    // modelOverride and providerOverride are sticky user preferences set via /model command.
-    // They should NOT be cleared on /new because the user explicitly chose them.
+  it("clears stale model fields when session is reset via /reset", async () => {
+    // Same test with /reset instead of /new
     const sessionKey = "agent:main:test-session";
     const initialEntry: SessionEntry = {
       sessionId: "session-1",
-      updatedAt: Date.now() - 60000,
-      systemSent: true,
-      // Sticky user preference (set via /model command)
-      modelOverride: "gpt-5.3-codex",
-      providerOverride: "openai-codex",
-      // Stale turn metadata (should be cleared)
-      model: "claude-sonnet-4-5",
-      modelProvider: "anthropic",
-    };
-
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = initialEntry;
-    });
-
-    // Simulate /new with model fields cleared but overrides preserved
-    const newSessionId = crypto.randomUUID();
-    const newEntry: Partial<SessionEntry> = {
-      sessionId: newSessionId,
       updatedAt: Date.now(),
-      systemSent: false,
-      compactionCount: 0,
-      model: undefined,
-      modelProvider: undefined,
-      systemPromptReport: undefined,
-      // Note: NOT touching modelOverride/providerOverride - they should persist
+      systemSent: true,
+      model: "gpt-4o",
+      modelProvider: "openai",
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now() - 60000,
+        provider: "openai",
+        model: "gpt-4o",
+      } as SessionEntry["systemPromptReport"],
     };
 
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = { ...store[sessionKey], ...newEntry };
+    await saveSessionStore(storePath, { [sessionKey]: initialEntry });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999, resetTriggers: ["/reset", "/new"] },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
     });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
 
     const store = loadSessionStore(storePath);
     const entry = store[sessionKey];
 
-    // Sticky overrides are preserved
-    expect(entry?.modelOverride).toBe("gpt-5.3-codex");
-    expect(entry?.providerOverride).toBe("openai-codex");
-    // Stale turn metadata is cleared
     expect(entry?.model).toBeUndefined();
     expect(entry?.modelProvider).toBeUndefined();
+    expect(entry?.systemPromptReport).toBeUndefined();
   });
 });
