@@ -7,10 +7,10 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
-  buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
   isReplySkip,
+  resolveAgentIdFromSessionKey,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -21,6 +21,7 @@ export async function runSessionsSendA2AFlow(params: {
   message: string;
   announceTimeoutMs: number;
   maxPingPongTurns: number;
+  announceEnabled: boolean;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
@@ -51,11 +52,51 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
+    // Resolve the announce target initially based on the request context
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
+      requesterSessionKey: params.requesterSessionKey,
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
+
+    // Helper to announce messages to the correct target channel with correct identity
+    const tryAnnounce = async (message: string, sessionKey: string) => {
+      if (!params.announceEnabled || !message || !message.trim()) {
+        return;
+      }
+      if (isAnnounceSkip(message) || isReplySkip(message)) {
+        return;
+      }
+
+      try {
+        // Determine WHO is speaking
+        const agentId = resolveAgentIdFromSessionKey(sessionKey);
+
+        // We use the same announceTarget (the group chat) but specify the agentId
+        // so the gateway sends it as the correct bot.
+        if (announceTarget) {
+          log.info(
+            `[a2a] announcing for ${agentId} (${sessionKey}): target=${announceTarget.channel}/${announceTarget.to}`,
+          );
+          await callGateway({
+            method: "send",
+            params: {
+              to: announceTarget.to,
+              message: message.trim(),
+              channel: announceTarget.channel,
+              // Let the gateway resolve the connection based on agentId + channel
+              accountId: announceTarget.accountId,
+              agentId: agentId, // Crucial: Send as the correct agent
+              idempotencyKey: crypto.randomUUID(),
+            },
+            timeoutMs: 10_000,
+          });
+        }
+      } catch (err) {
+        log.warn(`[a2a] announce failed for ${sessionKey}`, { error: formatErrorMessage(err) });
+      }
+    };
 
     if (
       params.maxPingPongTurns > 0 &&
@@ -65,6 +106,13 @@ export async function runSessionsSendA2AFlow(params: {
       let currentSessionKey = params.requesterSessionKey;
       let nextSessionKey = params.targetSessionKey;
       let incomingMessage = latestReply;
+
+      // Announce the initial reply (Round 1) if it exists
+      // This is usually from the target agent (e.g., Sena) responding to the request
+      if (latestReply) {
+        await tryAnnounce(latestReply, params.targetSessionKey);
+      }
+
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
@@ -87,51 +135,19 @@ export async function runSessionsSendA2AFlow(params: {
         if (!replyText || isReplySkip(replyText)) {
           break;
         }
+
+        // Announce immediately after generation
+        await tryAnnounce(replyText, currentSessionKey);
+
         latestReply = replyText;
         incomingMessage = replyText;
         const swap = currentSessionKey;
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
       }
-    }
-
-    const announcePrompt = buildAgentToAgentAnnounceContext({
-      requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
-      targetSessionKey: params.displayKey,
-      targetChannel,
-      originalMessage: params.message,
-      roundOneReply: primaryReply,
-      latestReply,
-    });
-    const announceReply = await runAgentStep({
-      sessionKey: params.targetSessionKey,
-      message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
-      timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
-    });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
-      try {
-        await callGateway({
-          method: "send",
-          params: {
-            to: announceTarget.to,
-            message: announceReply.trim(),
-            channel: announceTarget.channel,
-            accountId: announceTarget.accountId,
-            idempotencyKey: crypto.randomUUID(),
-          },
-          timeoutMs: 10_000,
-        });
-      } catch (err) {
-        log.warn("sessions_send announce delivery failed", {
-          runId: runContextId,
-          channel: announceTarget.channel,
-          to: announceTarget.to,
-          error: formatErrorMessage(err),
-        });
-      }
+    } else {
+      // No ping-pong, just announce the single reply
+      await tryAnnounce(latestReply, params.targetSessionKey);
     }
   } catch (err) {
     log.warn("sessions_send announce flow failed", {

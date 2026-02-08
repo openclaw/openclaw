@@ -94,8 +94,10 @@ export type SessionConfig = {
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0–5). Default: 5. */
+    /** Max ping-pong turns between requester/target (0–5). Default: 0. */
     maxPingPongTurns?: number;
+    /** Whether to announce A2A responses to the group channel. Default: true. */
+    announceEnabled?: boolean;
   };
 };
 

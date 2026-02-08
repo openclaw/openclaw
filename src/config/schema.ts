@@ -316,6 +316,7 @@ const FIELD_LABELS: Record<string, string> = {
   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
   "session.dmScope": "DM Session Scope",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
+  "session.agentToAgent.announceEnabled": "Agent-to-Agent Announce",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
@@ -706,6 +707,8 @@ const FIELD_HELP: Record<string, string> = {
     'Override native skill commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
+  "session.agentToAgent.announceEnabled":
+    "Whether A2A responses are announced to the group channel (default: true).",
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
