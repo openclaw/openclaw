@@ -173,6 +173,52 @@ describe("legacy config detection", () => {
     });
     expect((res.config as { agent?: unknown }).agent).toBeUndefined();
   });
+  it("migrates top-level memorySearch to agents.defaults.memorySearch", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        query: { maxResults: 7 },
+      },
+    });
+    expect(res.changes).toContain("Moved memorySearch → agents.defaults.memorySearch.");
+    expect(res.config?.agents?.defaults?.memorySearch).toMatchObject({
+      provider: "local",
+      fallback: "none",
+      query: { maxResults: 7 },
+    });
+    expect((res.config as { memorySearch?: unknown }).memorySearch).toBeUndefined();
+  });
+  it("merges top-level memorySearch into agents.defaults.memorySearch", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        query: { maxResults: 7 },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+      },
+    });
+    expect(res.changes).toContain(
+      "Merged memorySearch → agents.defaults.memorySearch (preserved explicit agents.defaults overrides).",
+    );
+    expect(res.config?.agents?.defaults?.memorySearch).toMatchObject({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "none",
+      query: { maxResults: 7 },
+    });
+  });
   it("migrates tools.bash to tools.exec", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
