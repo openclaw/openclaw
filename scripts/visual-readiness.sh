@@ -95,6 +95,9 @@ echo "== Capturing snapshot bundle =="
 # Peekaboo’s menubar command is `peekaboo menubar list` (not `peekaboo list menubar`).
 peekaboo menubar list --json > "$out/menubar.json" || true
 
+# Capture all windows too (OpenClaw may not be the active/frontmost app).
+peekaboo list windows --include-details bounds,ids --json > "$out/windows-all.json" || true
+
 # Best-effort: list windows for the active app (if we can detect it).
 active_bundle_id="$(
   (peekaboo app list --json 2>/dev/null || true) | python3 -c '
