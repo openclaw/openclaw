@@ -92,6 +92,11 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   private reconnectAttempts = 0;
   private pendingTranscript = "";
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
+  private transcriptWaiters: Array<{
+    resolve: (transcript: string) => void;
+    reject: (err: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }> = [];
   private onPartialCallback: ((partial: string) => void) | null = null;
   private onSpeechStartCallback: (() => void) | null = null;
 
@@ -236,6 +241,11 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
           console.log(`[RealtimeSTT] Transcript: ${event.transcript}`);
+          const waiter = this.transcriptWaiters.shift();
+          if (waiter) {
+            clearTimeout(waiter.timeout);
+            waiter.resolve(event.transcript);
+          }
           this.onTranscriptCallback?.(event.transcript);
         }
         this.pendingTranscript = "";
@@ -283,21 +293,30 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
   async waitForTranscript(timeoutMs = 30000): Promise<string> {
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.onTranscriptCallback = null;
-        reject(new Error("Transcript timeout"));
-      }, timeoutMs);
-
-      this.onTranscriptCallback = (transcript) => {
-        clearTimeout(timeout);
-        this.onTranscriptCallback = null;
-        resolve(transcript);
+      const waiter = {
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          const index = this.transcriptWaiters.indexOf(waiter);
+          if (index >= 0) {
+            this.transcriptWaiters.splice(index, 1);
+          }
+          reject(new Error("Transcript timeout"));
+        }, timeoutMs),
       };
+      this.transcriptWaiters.push(waiter);
     });
   }
 
   close(): void {
     this.closed = true;
+    if (this.transcriptWaiters.length > 0) {
+      const waiters = this.transcriptWaiters.splice(0);
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timeout);
+        waiter.reject(new Error("Transcript session closed"));
+      }
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
