@@ -256,6 +256,14 @@ export function registerConfigCli(program: Command) {
     });
 
   cmd
+    .command("doctor")
+    .description("Analyze and repair configuration issues")
+    .action(async () => {
+      const { runConfigDoctor } = await import("./config-doctor.js");
+      await runConfigDoctor();
+    });
+
+  cmd
     .command("get")
     .description("Get a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
