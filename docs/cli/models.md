@@ -22,6 +22,7 @@ openclaw models status
 openclaw models list
 openclaw models set <model-or-alias>
 openclaw models scan
+openclaw models sync openrouter
 ```
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
@@ -53,6 +54,18 @@ Options:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 - `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+
+### `models sync openrouter`
+
+Fetches the OpenRouter `/models` catalog and writes it to the agent `models.json`
+file (under `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`, or the default agent path).
+Restart the gateway after syncing so `/model` and the picker reload the catalog.
+
+Options:
+
+- `--free-only` (only include free models)
+- `--provider <name>` (filter by provider prefix)
+- `--json` (machine-readable output)
 
 ## Aliases + fallbacks
 

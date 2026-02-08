@@ -24,6 +24,7 @@ import {
   modelsSetCommand,
   modelsSetImageCommand,
   modelsStatusCommand,
+  modelsSyncOpenRouterCommand,
 } from "../commands/models.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -272,6 +273,30 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsScanCommand(opts, defaultRuntime);
+      });
+    });
+
+  const sync = models.command("sync").description("Sync remote model catalogs");
+  sync.action(() => {
+    sync.help();
+  });
+
+  sync
+    .command("openrouter")
+    .description("Sync OpenRouter model catalog into models.json")
+    .option("--provider <name>", "Filter by provider prefix")
+    .option("--free-only", "Only include free OpenRouter models", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsSyncOpenRouterCommand(
+          {
+            provider: opts.provider as string | undefined,
+            freeOnly: Boolean(opts.freeOnly),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
     });
 
