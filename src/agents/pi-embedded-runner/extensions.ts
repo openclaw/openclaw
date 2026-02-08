@@ -71,6 +71,14 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
+/**
+ * Maximum safe context window for compaction summarization.
+ * Models like openrouter/auto report 2M tokens but the actual routed model
+ * may have a much smaller context. Using oversized chunks causes generateSummary()
+ * to fail, producing fallback summaries. Cap at 256k for safety.
+ */
+const MAX_SAFE_COMPACTION_CONTEXT_TOKENS = 256_000;
+
 export function buildEmbeddedExtensionPaths(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -88,9 +96,15 @@ export function buildEmbeddedExtensionPaths(params: {
       modelContextWindow: params.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
+    // Cap context window to prevent oversized chunks with models like openrouter/auto
+    // that report huge context windows (2M) but route to smaller models.
+    const cappedContextTokens = Math.min(
+      contextWindowInfo.tokens,
+      MAX_SAFE_COMPACTION_CONTEXT_TOKENS,
+    );
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens: cappedContextTokens,
     });
     paths.push(resolvePiExtensionPath("compaction-safeguard"));
   }
