@@ -140,6 +140,27 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
+function shouldExitOnUnhandledRejection(): boolean {
+  // Default: keep the gateway alive. Opt back into fail-fast with an env var.
+  // Keep backward-compat alias for older deployments/tools.
+  return (
+    process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION === "1" ||
+    process.env.CLAWDBOT_EXIT_ON_UNHANDLED_REJECTION === "1"
+  );
+}
+
+function logUnhandledRejectionCause(reason: unknown): void {
+  const cause = getErrorCause(reason);
+  if (!cause) {
+    return;
+  }
+  try {
+    console.error("[openclaw] Unhandled rejection cause:", formatUncaughtError(cause));
+  } catch {
+    // ignore
+  }
+}
+
 export function installUnhandledRejectionHandler(): void {
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
@@ -155,12 +176,14 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isFatalError(reason)) {
       console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      logUnhandledRejectionCause(reason);
       process.exit(1);
       return;
     }
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      logUnhandledRejectionCause(reason);
       process.exit(1);
       return;
     }
@@ -170,10 +193,16 @@ export function installUnhandledRejectionHandler(): void {
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
+      logUnhandledRejectionCause(reason);
       return;
     }
 
+    // Unknown unhandled rejection: log loudly, but keep the gateway alive by default.
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+    logUnhandledRejectionCause(reason);
+
+    if (shouldExitOnUnhandledRejection()) {
+      process.exit(1);
+    }
   });
 }

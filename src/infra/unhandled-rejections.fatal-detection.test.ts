@@ -124,16 +124,28 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalled();
     });
 
-    it("exits on generic errors without code", () => {
+    it("does NOT exit on generic errors without code by default", () => {
       const genericErr = new Error("Something went wrong");
 
       process.emit("unhandledRejection", genericErr, Promise.resolve());
 
-      expect(exitCalls).toEqual([1]);
+      expect(exitCalls).toEqual([]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
       );
+    });
+
+    it("exits on generic errors without code when OPENCLAW_EXIT_ON_UNHANDLED_REJECTION=1", () => {
+      process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION = "1";
+      try {
+        const genericErr = new Error("Something went wrong");
+        process.emit("unhandledRejection", genericErr, Promise.resolve());
+
+        expect(exitCalls).toEqual([1]);
+      } finally {
+        delete process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION;
+      }
     });
 
     it("does NOT exit on connection reset errors", () => {
