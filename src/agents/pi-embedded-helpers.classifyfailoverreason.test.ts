@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyFailoverReason } from "./pi-embedded-helpers.js";
-import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
-  name: DEFAULT_AGENTS_FILENAME,
-  path: "/tmp/AGENTS.md",
-  content: "",
-  missing: false,
-  ...overrides,
-});
 describe("classifyFailoverReason", () => {
   it("returns a stable reason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
@@ -37,5 +29,9 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies unknown model errors as auth", () => {
+    expect(classifyFailoverReason("Unknown model: anthropic/claude-opus-4-6")).toBe("auth");
+    expect(classifyFailoverReason("Model not found: groq/llama-4")).toBe("auth");
   });
 });

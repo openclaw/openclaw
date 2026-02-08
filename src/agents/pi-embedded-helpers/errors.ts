@@ -628,6 +628,14 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+export function isUnknownModelErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return lower.includes("unknown model") || lower.includes("model not found");
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -651,6 +659,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isAuthErrorMessage(raw)) {
+    return "auth";
+  }
+  if (isUnknownModelErrorMessage(raw)) {
     return "auth";
   }
   return null;
