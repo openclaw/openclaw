@@ -76,7 +76,7 @@ async function expectWsRejected(url: string, headers: Record<string, string>): P
 }
 
 describe("gateway canvas host auth", () => {
-  test("authorizes canvas/a2ui HTTP and canvas WS by matching an authenticated gateway ws client ip", async () => {
+  test("rejects canvas/a2ui HTTP and canvas WS without bearer token even when a gateway ws client shares the same ip", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -171,11 +171,15 @@ describe("gateway canvas host auth", () => {
             clientIp: ipA,
           });
 
-          const authCanvas = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-            headers: { "x-forwarded-for": ipA },
-          });
-          expect(authCanvas.status).toBe(200);
-          expect(await authCanvas.text()).toBe("ok");
+          // After adding a WS client with ipA, HTTP canvas requests from
+          // the same IP should still be rejected (IP match is not sufficient).
+          const sameIpStillBlocked = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: { "x-forwarded-for": ipA },
+            },
+          );
+          expect(sameIpStillBlocked.status).toBe(401);
 
           const otherIpStillBlocked = await fetch(
             `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
@@ -185,22 +189,23 @@ describe("gateway canvas host auth", () => {
           );
           expect(otherIpStillBlocked.status).toBe(401);
 
-          await new Promise<void>((resolve, reject) => {
-            const ws = new WebSocket(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {
-              headers: { "x-forwarded-for": ipA },
-            });
-            const timer = setTimeout(() => reject(new Error("timeout")), 10_000);
-            ws.once("open", () => {
-              clearTimeout(timer);
-              ws.terminate();
-              resolve();
-            });
-            ws.once("unexpected-response", (_req, res) => {
-              clearTimeout(timer);
-              reject(new Error(`unexpected response ${res.statusCode}`));
-            });
-            ws.once("error", reject);
+          // WS canvas upgrade from the same IP should also be rejected.
+          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {
+            "x-forwarded-for": ipA,
           });
+
+          // Bearer token auth should still grant access.
+          const bearerCanvas = await fetch(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: {
+                "x-forwarded-for": ipA,
+                authorization: "Bearer test-token",
+              },
+            },
+          );
+          expect(bearerCanvas.status).toBe(200);
+          expect(await bearerCanvas.text()).toBe("ok");
         } finally {
           await listener.close();
           canvasWss.close();
