@@ -222,6 +222,12 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  // Resolve relative paths (e.g., ./avatars/default.jpg) to absolute paths
+  // This fixes #8759 where relative paths fail with ENOENT
+  if (mediaUrl.startsWith("./") || mediaUrl.startsWith("../")) {
+    mediaUrl = path.resolve(process.cwd(), mediaUrl);
+  }
+
   // Local path
   const data = await fs.readFile(mediaUrl);
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });

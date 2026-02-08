@@ -291,4 +291,59 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
   });
+
+  it("resolves relative paths starting with ./ (#8759)", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+
+    // Create a temp file in a subdirectory relative to cwd
+    const tempDir = path.join(process.cwd(), ".test-media-8759");
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempFile = path.join(tempDir, "test-image.png");
+    await fs.writeFile(tempFile, pngBuffer);
+    tmpFiles.push(tempFile);
+
+    try {
+      // Use relative path starting with ./
+      const relativePath = `./.test-media-8759/test-image.png`;
+      const result = await loadWebMedia(relativePath, 1024 * 1024);
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves relative paths starting with ../ (#8759)", async () => {
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
+    })
+      .png()
+      .toBuffer();
+
+    // Create a temp file in parent directory structure
+    const tempDir = path.join(process.cwd(), ".test-media-8759-parent", "subdir");
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempFile = path.join(tempDir, "test-image.png");
+    await fs.writeFile(tempFile, pngBuffer);
+    tmpFiles.push(tempFile);
+
+    try {
+      // Use relative path with ../
+      const relativePath = `./.test-media-8759-parent/subdir/../subdir/test-image.png`;
+      const result = await loadWebMedia(relativePath, 1024 * 1024);
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(path.join(process.cwd(), ".test-media-8759-parent"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
 });
