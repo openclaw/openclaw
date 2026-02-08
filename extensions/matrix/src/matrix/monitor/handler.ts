@@ -367,11 +367,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      // Resolve route early to get agent ID for mention patterns (fixes #1)
+      const route = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        peer: {
+          kind: isDirectMessage ? "dm" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+      });
+
+      // Build agent-specific mention regexes (fixes #1: respect agent-level patterns)
+      const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
         text: bodyText,
-        mentionRegexes,
+        mentionRegexes: agentMentionRegexes,
       });
       const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
         cfg,
@@ -433,7 +446,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !hasExplicitMention &&
         commandAuthorized &&
         hasControlCommandInMessage;
-      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
+      const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info({ roomId, reason: "no-mention" }, "skipping room message");
         return;
@@ -449,14 +462,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
 
-      const route = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        peer: {
-          kind: isDirectMessage ? "dm" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
-      });
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
       const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
