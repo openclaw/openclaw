@@ -359,22 +359,23 @@ describe("doctor command", () => {
   }, 30_000);
 
   it("warns about opencode provider overrides", async () => {
+    const opencodeConfig = {
+      models: {
+        providers: {
+          opencode: {
+            api: "openai-completions",
+            baseUrl: "https://opencode.ai/zen/v1",
+          },
+        },
+      },
+    };
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/openclaw.json",
       exists: true,
       raw: "{}",
-      parsed: {},
+      parsed: opencodeConfig,
       valid: true,
-      config: {
-        models: {
-          providers: {
-            opencode: {
-              api: "openai-completions",
-              baseUrl: "https://opencode.ai/zen/v1",
-            },
-          },
-        },
-      },
+      config: opencodeConfig,
       issues: [],
       legacyIssues: [],
     });

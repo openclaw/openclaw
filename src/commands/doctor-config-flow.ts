@@ -212,7 +212,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   let snapshot = await readConfigFileSnapshot();
-  const baseCfg = snapshot.config ?? {};
+  // Use snapshot.parsed to preserve ${...} env var references when writing back
+  const baseCfg = (snapshot.parsed ?? {}) as OpenClawConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
