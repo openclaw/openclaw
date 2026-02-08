@@ -32,6 +32,7 @@ import {
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
+import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
@@ -1423,6 +1424,23 @@ export async function textToSpeechTelephony(params: {
   };
 }
 
+/**
+ * Clean text for TTS: strip fenced code blocks, markdown links, and
+ * standard markdown formatting so engines don't vocalize symbols.
+ */
+function stripMarkdownForTts(text: string): string {
+  let result = text;
+  // Remove fenced code blocks entirely (not useful as speech)
+  result = result.replace(/```[\s\S]*?```/g, "");
+  // Convert markdown links [text](url) → text
+  result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  // Delegate remaining markdown (bold, italic, headers, etc.)
+  result = stripMarkdown(result);
+  // Collapse excessive whitespace left behind
+  result = result.replace(/\n{3,}/g, "\n\n").trim();
+  return result;
+}
+
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -1487,7 +1505,11 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = ttsText.trim();
+  // Strip markdown formatting so TTS engines don't vocalize symbols like ** or `
+  let textForAudio = stripMarkdownForTts(ttsText.trim());
+  if (textForAudio.length < 10) {
+    return nextPayload;
+  }
   let wasSummarized = false;
 
   if (textForAudio.length > maxLength) {
