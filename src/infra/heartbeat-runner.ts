@@ -853,6 +853,8 @@ export function startHeartbeatRunner(opts: {
     runtime,
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
+    watchdogTimer: null as NodeJS.Timeout | null,
+    lastScheduledDueMs: null as number | null,
     stopped: false,
   };
   let initialized = false;
@@ -867,6 +869,41 @@ export function startHeartbeatRunner(opts: {
     return now + intervalMs;
   };
 
+  // Drift detection watchdog: Checks every 60s if the main timer is stale.
+  // This handles sleep/wake cycles where setTimeout may not fire reliably.
+  const startWatchdog = () => {
+    if (state.watchdogTimer) {
+      clearTimeout(state.watchdogTimer);
+    }
+    if (state.stopped || state.agents.size === 0) {
+      state.watchdogTimer = null;
+      return;
+    }
+
+    const checkDrift = () => {
+      if (state.stopped) {
+        return;
+      }
+      const now = Date.now();
+      // If we scheduled a heartbeat that should have fired by now, trigger it.
+      // Add a grace period of 5 seconds to avoid false positives from scheduling jitter.
+      if (state.lastScheduledDueMs !== null && now > state.lastScheduledDueMs + 5000) {
+        log.info("heartbeat: drift detected, triggering overdue heartbeat", {
+          drift: now - state.lastScheduledDueMs,
+        });
+        requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+      }
+      // Continue watchdog
+      if (!state.stopped && state.agents.size > 0) {
+        state.watchdogTimer = setTimeout(checkDrift, 60_000);
+        state.watchdogTimer?.unref?.();
+      }
+    };
+
+    state.watchdogTimer = setTimeout(checkDrift, 60_000);
+    state.watchdogTimer?.unref?.();
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -876,6 +913,7 @@ export function startHeartbeatRunner(opts: {
       state.timer = null;
     }
     if (state.agents.size === 0) {
+      state.lastScheduledDueMs = null;
       return;
     }
     const now = Date.now();
@@ -886,10 +924,13 @@ export function startHeartbeatRunner(opts: {
       }
     }
     if (!Number.isFinite(nextDue)) {
+      state.lastScheduledDueMs = null;
       return;
     }
     const delay = Math.max(0, nextDue - now);
+    state.lastScheduledDueMs = nextDue;
     state.timer = setTimeout(() => {
+      state.lastScheduledDueMs = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
     state.timer.unref?.();
@@ -937,6 +978,8 @@ export function startHeartbeatRunner(opts: {
       } else {
         log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
       }
+      // Restart watchdog when heartbeat config changes between enabled/disabled
+      startWatchdog();
     }
 
     scheduleNext();
@@ -995,6 +1038,7 @@ export function startHeartbeatRunner(opts: {
 
   setHeartbeatWakeHandler(async (params) => run({ reason: params.reason }));
   updateConfig(state.cfg);
+  startWatchdog();
 
   const cleanup = () => {
     state.stopped = true;
@@ -1003,6 +1047,10 @@ export function startHeartbeatRunner(opts: {
       clearTimeout(state.timer);
     }
     state.timer = null;
+    if (state.watchdogTimer) {
+      clearTimeout(state.watchdogTimer);
+    }
+    state.watchdogTimer = null;
   };
 
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
