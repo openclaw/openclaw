@@ -27,6 +27,7 @@ import {
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
@@ -600,6 +601,40 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+export function applyAliyunBailianProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers["aliyun-bailian"];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModel = {
+    id: "qwen-max",
+    name: "Qwen Max",
+    reasoning: false,
+    input: ["text", "image"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  };
+
+  const hasDefaultModel = existingModels.some((m) => m.id === "qwen-max");
+  const mergedModels = hasDefaultModel ? existingModels : [defaultModel, ...existingModels];
+
+  providers["aliyun-bailian"] = {
+    ...existingProvider,
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api: "openai-completions",
+    models: mergedModels,
+  };
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XAI_DEFAULT_MODEL_REF] = {
@@ -637,8 +672,31 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
     models: {
+      ...cfg.models,
       mode: cfg.models?.mode ?? "merge",
       providers,
+    },
+  };
+}
+
+export function applyAliyunBailianConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyAliyunBailianProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }
@@ -664,7 +722,6 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
     },
   };
 }
-
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {

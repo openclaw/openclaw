@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyAliyunBailianConfig,
+  applyAliyunBailianProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyQianfanConfig,
@@ -45,6 +47,7 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -57,6 +60,7 @@ import {
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
+  setAliyunBailianApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
@@ -108,6 +112,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "venice-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "aliyun-bailian") {
+      authChoice = "aliyun-bailian-api-key";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
     }
@@ -794,6 +800,63 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpencodeZenConfig,
         applyProviderConfig: applyOpencodeZenProviderConfig,
         noteDefault: OPENCODE_ZEN_DEFAULT_MODEL,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "aliyun-bailian-api-key") {
+    let hasCredential = false;
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "aliyun-bailian") {
+      await setAliyunBailianApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Aliyun Bailian (DashScope) provides access to Qwen series models.",
+          "Get your API key at: https://bailian.console.aliyun.com/",
+          "Ensure you have enabled the 'OpenAI Compatible' mode in the console.",
+        ].join("\n"),
+        "Aliyun Bailian",
+      );
+    }
+    const envKey = resolveEnvApiKey("aliyun-bailian");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing ALIYUN_BAILIAN_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setAliyunBailianApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Aliyun Bailian API key",
+        validate: validateApiKeyInput,
+      });
+      await setAliyunBailianApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "aliyun-bailian:default",
+      provider: "aliyun-bailian",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyAliyunBailianConfig,
+        applyProviderConfig: applyAliyunBailianProviderConfig,
+        noteDefault: ALIYUN_BAILIAN_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

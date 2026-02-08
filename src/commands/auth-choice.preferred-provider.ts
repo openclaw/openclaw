@@ -32,6 +32,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "opencode-zen": "opencode",
   "xai-api-key": "xai",
   "qwen-portal": "qwen-portal",
+  "aliyun-bailian-api-key": "aliyun-bailian",
   "minimax-portal": "minimax-portal",
   "qianfan-api-key": "qianfan",
 };

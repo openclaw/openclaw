@@ -1,0 +1,40 @@
+name: Auto Sync PR Branch
+
+on:
+  schedule:
+    # 每 30 分钟执行一次
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Set Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream
+
+      - name: Merge upstream/main into PR branch
+        run: |
+          git merge upstream/main --no-edit || true
+
+      - name: Push changes back to your fork
+        run: |
+          git push origin HEAD:${{ github.ref_name }}
