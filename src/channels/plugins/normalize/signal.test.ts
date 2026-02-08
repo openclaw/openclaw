@@ -14,6 +14,24 @@ describe("signal target normalization", () => {
     );
   });
 
+  it("preserves case for base64 group IDs", () => {
+    expect(normalizeSignalMessagingTarget("group:AbCdEfGh123456789xYz+/aBcDeF==")).toBe(
+      "group:AbCdEfGh123456789xYz+/aBcDeF==",
+    );
+  });
+
+  it("preserves case for signal:group: prefixed IDs", () => {
+    expect(normalizeSignalMessagingTarget("signal:group:AbCdEfGh123456789xYz+/aBcDeF==")).toBe(
+      "group:AbCdEfGh123456789xYz+/aBcDeF==",
+    );
+  });
+
+  it("preserves case for GROUP: prefix (case-insensitive prefix match)", () => {
+    expect(normalizeSignalMessagingTarget("GROUP:AbCdEfGh123456789xYz+/aBcDeF==")).toBe(
+      "group:AbCdEfGh123456789xYz+/aBcDeF==",
+    );
+  });
+
   it("accepts uuid prefixes for target detection", () => {
     expect(looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
     expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
