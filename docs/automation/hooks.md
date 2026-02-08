@@ -240,6 +240,15 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Message Events
+
+Triggered when messages are sent or received:
+
+- **`message:received`**: When a message is received (before agent processing)
+  - Fires for all non-command messages
+  - Context includes: `body`, `rawBody`, `senderId`, `channel`, `chatType`, `messageId`, `replyToId`, `wasMentioned`, `workspaceDir`
+  - Runs asynchronously (doesn't block message processing)
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -254,7 +263,6 @@ Planned event types:
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 - **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
 
 ## Creating Custom Hooks
 

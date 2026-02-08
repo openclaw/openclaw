@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions } from "./types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -22,6 +23,28 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+
+  // Trigger message:received hook before processing
+  const messageBody = finalized.Body ?? finalized.RawBody ?? "";
+  // Use same command detection field as command pipeline (BodyForCommands preferred)
+  const commandBody =
+    finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body ?? "";
+  if (messageBody && !commandBody.startsWith("/")) {
+    // Don't trigger for commands (they have their own hooks)
+    const hookEvent = createInternalHookEvent("message", "received", finalized.SessionKey ?? "", {
+      body: messageBody,
+      rawBody: finalized.RawBody,
+      senderId: finalized.From,
+      channel: finalized.Surface ?? finalized.Provider,
+      chatType: finalized.ChatType,
+      messageId: finalized.MessageSid,
+      replyToId: finalized.ReplyToId,
+      wasMentioned: finalized.WasMentioned,
+    });
+    // Fire and forget - don't block message processing
+    void triggerInternalHook(hookEvent);
+  }
+
   return await dispatchReplyFromConfig({
     ctx: finalized,
     cfg: params.cfg,

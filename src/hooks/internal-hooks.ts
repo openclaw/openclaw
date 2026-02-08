@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -24,6 +24,46 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   action: "bootstrap";
   context: AgentBootstrapHookContext;
 };
+
+export type MessageReceivedHookContext = {
+  /** The message body text */
+  body: string;
+  /** Raw message body without structural context */
+  rawBody?: string;
+  /** Sender identifier */
+  senderId?: string;
+  /** Originating channel (telegram, whatsapp, etc.) */
+  channel?: string;
+  /** Chat type (direct, group, etc.) */
+  chatType?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Reply-to message ID if this is a reply */
+  replyToId?: string;
+  /** Whether the bot was mentioned */
+  wasMentioned?: boolean;
+  /** Workspace directory for the agent */
+  workspaceDir?: string;
+};
+
+export type MessageReceivedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "received";
+  context: MessageReceivedHookContext;
+};
+
+export function isMessageReceivedEvent(
+  event: InternalHookEvent,
+): event is MessageReceivedHookEvent {
+  if (event.type !== "message" || event.action !== "received") {
+    return false;
+  }
+  const context = event.context as Partial<MessageReceivedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.body === "string";
+}
 
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
