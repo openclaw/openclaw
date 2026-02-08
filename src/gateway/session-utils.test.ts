@@ -7,6 +7,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  listAgentsForGateway,
   listSessionsFromStore,
   parseGroupKey,
   resolveGatewaySessionStoreTarget,
@@ -91,6 +92,31 @@ describe("gateway session utils", () => {
     expect(target.canonicalKey).toBe("agent:ops:main");
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
+  });
+
+  test("listAgentsForGateway returns Control UI avatar URL for local avatar paths (no base64)", () => {
+    const cfg = {
+      gateway: { controlUi: { basePath: "/openclaw" } },
+      session: { mainKey: "main" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { avatar: "avatars/main.png" },
+          },
+          {
+            id: "work",
+            identity: { avatar: "avatars/work.png" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const res = listAgentsForGateway(cfg);
+    const work = res.agents.find((a) => a.id === "work");
+    expect(work?.identity?.avatarUrl).toBe("/openclaw/avatar/work");
+    expect(work?.identity?.avatarUrl?.startsWith("data:")).toBe(false);
   });
 });
 

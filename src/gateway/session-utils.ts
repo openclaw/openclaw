@@ -6,7 +6,7 @@ import type {
   GatewaySessionsDefaults,
   SessionsListResult,
 } from "./session-utils.types.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -30,6 +30,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { resolveAssistantAvatarUrl } from "./control-ui-shared.js";
 import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
@@ -55,79 +56,17 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
-
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
-const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
-
-const AVATAR_MIME_BY_EXT: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".tif": "image/tiff",
-  ".tiff": "image/tiff",
-};
-
-function resolveAvatarMime(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  return AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
-}
-
-function isWorkspaceRelativePath(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  if (AVATAR_SCHEME_RE.test(value) && !WINDOWS_ABS_RE.test(value)) {
-    return false;
-  }
-  return true;
-}
 
 function resolveIdentityAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
   avatar: string | undefined,
 ): string | undefined {
-  if (!avatar) {
-    return undefined;
-  }
-  const trimmed = avatar.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (AVATAR_DATA_RE.test(trimmed) || AVATAR_HTTP_RE.test(trimmed)) {
-    return trimmed;
-  }
-  if (!isWorkspaceRelativePath(trimmed)) {
-    return undefined;
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = path.resolve(workspaceDir);
-  const resolved = path.resolve(workspaceRoot, trimmed);
-  const relative = path.relative(workspaceRoot, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  try {
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile() || stat.size > AVATAR_MAX_BYTES) {
-      return undefined;
-    }
-    const buffer = fs.readFileSync(resolved);
-    const mime = resolveAvatarMime(resolved);
-    return `data:${mime};base64,${buffer.toString("base64")}`;
-  } catch {
-    return undefined;
-  }
+  return resolveAssistantAvatarUrl({
+    avatar,
+    agentId,
+    basePath: cfg.gateway?.controlUi?.basePath,
+  });
 }
 
 function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
