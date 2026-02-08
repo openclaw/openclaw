@@ -109,10 +109,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", (buf) => {
+      child.stdout?.on("data", (buf) => {
         stdout += buf.toString("utf8");
       });
-      child.stderr.on("data", (buf) => {
+      child.stderr?.on("data", (buf) => {
         stderr += buf.toString("utf8");
       });
 

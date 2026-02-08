@@ -696,8 +696,8 @@ async function runExecProcess(opts: {
       handleStdout(cleaned);
     });
   } else if (child) {
-    child.stdout.on("data", handleStdout);
-    child.stderr.on("data", handleStderr);
+    child.stdout?.on("data", handleStdout);
+    child.stderr?.on("data", handleStderr);
   }
 
   const promise = new Promise<ExecProcessOutcome>((resolve) => {
