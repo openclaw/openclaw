@@ -4,6 +4,39 @@ import os from "node:os";
 import path from "node:path";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { applyTemplate } from "../auto-reply/templating.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runExec } from "../process/exec.js";
+
+/**
+ * Legacy placeholder aliases for CLI args.
+ * Maps intuitive single-brace placeholders to standard double-brace format.
+ */
+const LEGACY_PLACEHOLDER_MAP: Record<string, string> = {
+  "{file}": "{{MediaPath}}",
+  "{input}": "{{MediaPath}}",
+  "{media}": "{{MediaPath}}",
+  "{output}": "{{OutputDir}}",
+  "{output_dir}": "{{OutputDir}}",
+  "{output_base}": "{{OutputBase}}",
+  "{prompt}": "{{Prompt}}",
+  "{media_dir}": "{{MediaDir}}",
+};
+
+/**
+ * Normalize legacy single-brace placeholders to standard double-brace format.
+ * Supports case-insensitive matching for convenience.
+ */
+function normalizePlaceholders(value: string): string {
+  let result = value;
+  for (const [legacy, standard] of Object.entries(LEGACY_PLACEHOLDER_MAP)) {
+    // Case-insensitive replacement
+    const pattern = new RegExp(legacy.replace(/[{}]/g, "\\$&"), "gi");
+    result = result.replace(pattern, standard);
+  }
+  return result;
+}
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -16,15 +49,11 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
-import { applyTemplate } from "../auto-reply/templating.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache, normalizeAttachments, selectAttachments } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -1036,7 +1065,7 @@ async function runCliEntry(params: {
     MaxChars: maxChars,
   };
   const argv = [command, ...args].map((part, index) =>
-    index === 0 ? part : applyTemplate(part, templCtx),
+    index === 0 ? part : applyTemplate(normalizePlaceholders(part), templCtx),
   );
   try {
     if (shouldLogVerbose()) {
