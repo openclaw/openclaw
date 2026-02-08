@@ -1,3 +1,5 @@
+import { BARE_SESSION_RESET_PROMPT } from "@openclaw/shared-constants";
+import { BARE_SESSION_RESET_PROMPT } from "@openclaw/shared-constants";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -11,8 +13,8 @@ import {
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
-import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
+import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 
 export type CompactionIndicatorStatus = {
   active: boolean;
@@ -503,6 +505,18 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Filter out bare reset/new session prompts that leak from gateway
+    const messageText =
+      typeof normalized.content === "string"
+        ? normalized.content
+        : normalized.content.map((c) => c.text ?? "").join("");
+    if (
+      normalized.role === "system" &&
+      messageText.trim() === BARE_SESSION_RESET_PROMPT
+    ) {
       continue;
     }
 
