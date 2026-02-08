@@ -209,6 +209,43 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
+describe("sanitizeToolUseResultPairing whitespace handling", () => {
+  it("trims leading and trailing whitespace from tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "  read  ", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out).toHaveLength(2);
+    expect(out[0]?.role).toBe("assistant");
+    expect(out[1]?.role).toBe("toolResult");
+  });
+
+  it("synthesizes missing result with trimmed tool name", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "\tspaced_tool\n", arguments: {} }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out).toHaveLength(2);
+    const synthetic = out[1] as { toolName?: string };
+    expect(synthetic.toolName).toBe("spaced_tool");
+  });
+});
+
 describe("sanitizeToolCallInputs", () => {
   it("drops tool calls missing input or arguments", () => {
     const input: AgentMessage[] = [

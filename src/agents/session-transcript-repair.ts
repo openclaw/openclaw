@@ -36,7 +36,7 @@ function extractToolCallsFromAssistant(
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
         id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
+        name: typeof rec.name === "string" ? rec.name.trim() : undefined,
       });
     }
   }

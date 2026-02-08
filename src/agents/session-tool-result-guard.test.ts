@@ -162,6 +162,28 @@ describe("installSessionToolResultGuard", () => {
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
 
+  it("trims whitespace from tool names when tracking pending calls", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "  spaced_tool  ", arguments: {} }],
+      }),
+    );
+    guard.flushPendingToolResults();
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(2);
+    const synthetic = messages[1] as { toolName?: string };
+    expect(synthetic.toolName).toBe("spaced_tool");
+  });
+
   it("drops malformed tool calls missing input before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
