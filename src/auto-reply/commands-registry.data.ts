@@ -7,6 +7,7 @@ import { listChannelDocks } from "../channels/dock.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
+import { listModelPickerChoices } from "./reply/commands-model-set.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -512,6 +513,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "model",
           description: "Model id (provider/model or id)",
           type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "model-set",
+      nativeName: "model-set",
+      description: "Search and set the model.",
+      category: "options",
+      args: [
+        {
+          name: "model",
+          description: "Model id (provider/model)",
+          type: "string",
+          choices: listModelPickerChoices,
         },
       ],
     }),

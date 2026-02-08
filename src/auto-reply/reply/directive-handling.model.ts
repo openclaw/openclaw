@@ -24,7 +24,7 @@ import {
 } from "./directive-handling.model-picker.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
-function buildModelPickerCatalog(params: {
+export function buildModelPickerCatalog(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
@@ -224,6 +224,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           `Current: ${current}`,
           "",
           "Tap below to browse models, or use:",
+          "/model-set to search and switch",
           "/model <provider/model> to switch",
           "/model status for details",
         ].join("\n"),
@@ -236,6 +237,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         `Current: ${current}`,
         "",
         "Switch: /model <provider/model>",
+        "Switch: /model-set <provider/model>",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ].join("\n"),
@@ -341,8 +343,9 @@ export function resolveModelSelectionFromDirective(params: {
       errorText: [
         "Numeric model selection is not supported in chat.",
         "",
-        "Browse: /models or /models <provider>",
+        "Switch: /model-set <provider/model>",
         "Switch: /model <provider/model>",
+        "Browse: /models or /models <provider>",
       ].join("\n"),
     };
   }
