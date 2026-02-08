@@ -15,6 +15,42 @@ export type SlackMessageHandler = (
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
 ) => Promise<void>;
 
+type SlackInboundEntry = {
+  message: SlackMessageEvent;
+  opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+};
+
+export function dedupeSlackInboundEntries(entries: SlackInboundEntry[]): SlackInboundEntry[] {
+  if (entries.length <= 1) {
+    return entries;
+  }
+
+  const deduped: SlackInboundEntry[] = [];
+  const indexByTs = new Map<string, number>();
+
+  for (const entry of entries) {
+    const ts = entry.message.ts ?? entry.message.event_ts;
+    if (!ts) {
+      deduped.push(entry);
+      continue;
+    }
+    const existingIndex = indexByTs.get(ts);
+    if (existingIndex === undefined) {
+      indexByTs.set(ts, deduped.length);
+      deduped.push(entry);
+      continue;
+    }
+    const existing = deduped[existingIndex];
+    const existingMentioned = Boolean(existing.opts.wasMentioned);
+    const currentMentioned = Boolean(entry.opts.wasMentioned);
+    if (!existingMentioned && currentMentioned) {
+      deduped[existingIndex] = entry;
+    }
+  }
+
+  return deduped;
+}
+
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -23,10 +59,7 @@ export function createSlackMessageHandler(params: {
   const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
 
-  const debouncer = createInboundDebouncer<{
-    message: SlackMessageEvent;
-    opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
-  }>({
+  const debouncer = createInboundDebouncer<SlackInboundEntry>({
     debounceMs,
     buildKey: (entry) => {
       const senderId = entry.message.user ?? entry.message.bot_id;
@@ -53,18 +86,19 @@ export function createSlackMessageHandler(params: {
       return !hasControlCommand(text, ctx.cfg);
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
+      const deduped = dedupeSlackInboundEntries(entries);
+      const last = deduped.at(-1);
       if (!last) {
         return;
       }
       const combinedText =
-        entries.length === 1
+        deduped.length === 1
           ? (last.message.text ?? "")
-          : entries
+          : deduped
               .map((entry) => entry.message.text ?? "")
               .filter(Boolean)
               .join("\n");
-      const combinedMentioned = entries.some((entry) => Boolean(entry.opts.wasMentioned));
+      const combinedMentioned = deduped.some((entry) => Boolean(entry.opts.wasMentioned));
       const syntheticMessage: SlackMessageEvent = {
         ...last.message,
         text: combinedText,
@@ -81,8 +115,8 @@ export function createSlackMessageHandler(params: {
       if (!prepared) {
         return;
       }
-      if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
+      if (deduped.length > 1) {
+        const ids = deduped.map((entry) => entry.message.ts).filter(Boolean) as string[];
         if (ids.length > 0) {
           prepared.ctxPayload.MessageSids = ids;
           prepared.ctxPayload.MessageSidFirst = ids[0];
@@ -106,9 +140,6 @@ export function createSlackMessageHandler(params: {
       message.subtype !== "file_share" &&
       message.subtype !== "bot_message"
     ) {
-      return;
-    }
-    if (ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });

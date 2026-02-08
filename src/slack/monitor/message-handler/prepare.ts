@@ -341,6 +341,11 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  if (ctx.markMessageSeen(message.channel, message.ts)) {
+    logVerbose(`slack: drop duplicate message ${message.channel}:${message.ts ?? "unknown"}`);
+    return null;
+  }
+
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
 
