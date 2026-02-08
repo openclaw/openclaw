@@ -23,6 +23,7 @@ export type DiscordMessagePreflightContext = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  isSiblingBot?: boolean;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;

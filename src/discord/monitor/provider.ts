@@ -40,6 +40,7 @@ import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import { registerSiblingBot, unregisterSiblingBot } from "./sibling-bots.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -529,6 +530,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   try {
     const botUser = await client.fetchUser("@me");
     botUserId = botUser?.id;
+    if (botUserId) {
+      registerSiblingBot(account.accountId, botUserId);
+    }
   } catch (err) {
     runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
   }
@@ -662,6 +666,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
   } finally {
     unregisterGateway(account.accountId);
+    unregisterSiblingBot(account.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
