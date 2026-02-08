@@ -26,6 +26,30 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 
 const fsp = fs.promises;
+
+/**
+ * Patterns excluded when copying skill directories to a sandbox workspace.
+ * Prevents copying heavy artifact trees (venv, node_modules, etc.).
+ */
+export const SKILLS_COPY_EXCLUDED: RegExp[] = [
+  /(^|[\\/])node_modules([\\/]|$)/,
+  /(^|[\\/])dist([\\/]|$)/,
+  /(^|[\\/])\.next([\\/]|$)/,
+  /(^|[\\/])venv([\\/]|$)/,
+  /(^|[\\/])\.venv([\\/]|$)/,
+  /(^|[\\/])__pycache__([\\/]|$)/,
+  /(^|[\\/])site-packages([\\/]|$)/,
+  /(^|[\\/])\.tox([\\/]|$)/,
+  /(^|[\\/])\.mypy_cache([\\/]|$)/,
+  /(^|[\\/])\.pytest_cache([\\/]|$)/,
+  /(^|[\\/])\.ruff_cache([\\/]|$)/,
+  /(^|[\\/])__pypackages__([\\/]|$)/,
+  /\.egg-info([\\/]|$)/,
+  /(^|[\\/])build([\\/]|$)/,
+  /(^|[\\/])target([\\/]|$)/,
+  /(^|[\\/])\.gradle([\\/]|$)/,
+  /\.disabled([\\/]|$)/,
+];
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
@@ -170,7 +194,12 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
 
-  const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
+  // Filter out skills from .disabled directories
+  const activeSkills = Array.from(merged.values()).filter(
+    (skill) => !skill.baseDir.endsWith(".disabled"),
+  );
+
+  const skillEntries: SkillEntry[] = activeSkills.map((skill) => {
     let frontmatter: ParsedSkillFrontmatter = {};
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
@@ -315,6 +344,7 @@ export async function syncSkillsToWorkspace(params: {
         await fsp.cp(entry.skill.baseDir, dest, {
           recursive: true,
           force: true,
+          filter: (src) => !SKILLS_COPY_EXCLUDED.some((re) => re.test(src)),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
