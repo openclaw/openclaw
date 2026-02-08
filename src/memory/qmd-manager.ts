@@ -261,7 +261,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     const qmdSearchCommand = this.qmd.searchMode;
-    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit, collectionFilterArgs);
+    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+    if (qmdSearchCommand === "query") {
+      args.push(...collectionFilterArgs);
+    }
     let stdout: string;
     let stderr: string;
     try {
@@ -274,10 +277,11 @@ export class QmdMemoryManager implements MemorySearchManager {
           `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
         );
         try {
-          const fallback = await this.runQmd(
-            this.buildSearchArgs("query", trimmed, limit, collectionFilterArgs),
-            { timeoutMs: this.qmd.limits.timeoutMs },
-          );
+          const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+          fallbackArgs.push(...collectionFilterArgs);
+          const fallback = await this.runQmd(fallbackArgs, {
+            timeoutMs: this.qmd.limits.timeoutMs,
+          });
           stdout = fallback.stdout;
           stderr = fallback.stderr;
         } catch (fallbackErr) {
@@ -1011,10 +1015,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     command: "query" | "search" | "vsearch",
     query: string,
     limit: number,
-    collectionFilterArgs: string[],
   ): string[] {
     if (command === "query") {
-      return ["query", query, "--json", "-n", String(limit), ...collectionFilterArgs];
+      return ["query", query, "--json", "-n", String(limit)];
     }
     return [command, query, "--json"];
   }
