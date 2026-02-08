@@ -23,4 +23,37 @@ describe("extractLinksFromMessage", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);
   });
+
+  it("blocks localhost", () => {
+    const links = extractLinksFromMessage("http://localhost/admin https://ok.test");
+    expect(links).toEqual(["https://ok.test"]);
+  });
+
+  it("blocks cloud metadata endpoint", () => {
+    const links = extractLinksFromMessage(
+      "http://169.254.169.254/latest/meta-data/ https://ok.test",
+    );
+    expect(links).toEqual(["https://ok.test"]);
+  });
+
+  it("blocks private IP ranges", () => {
+    const links = extractLinksFromMessage(
+      "http://10.0.0.1/internal http://172.16.0.1/internal http://192.168.1.1/router https://ok.test",
+    );
+    expect(links).toEqual(["https://ok.test"]);
+  });
+
+  it("blocks .local and .internal domains", () => {
+    const links = extractLinksFromMessage(
+      "http://server.local/api http://db.internal/data https://ok.test",
+    );
+    expect(links).toEqual(["https://ok.test"]);
+  });
+
+  it("blocks metadata.google.internal", () => {
+    const links = extractLinksFromMessage(
+      "http://metadata.google.internal/computeMetadata/v1/ https://ok.test",
+    );
+    expect(links).toEqual(["https://ok.test"]);
+  });
 });
