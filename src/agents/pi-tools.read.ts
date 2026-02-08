@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
+import { assertNotRestrictedPath } from "./restricted-paths.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -268,6 +269,29 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   };
 }
 
+/**
+ * Wraps a tool to check that file paths don't target restricted directories.
+ * This prevents LLM from writing to security-sensitive directories like hooks.
+ *
+ * @see VULN-201: Workspace Hook Code Injection via LLM File Write
+ */
+function wrapRestrictedPathGuard(tool: AnyAgentTool, cwd: string): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = record?.path;
+      if (typeof filePath === "string" && filePath.trim()) {
+        assertNotRestrictedPath(filePath, cwd);
+      }
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
+}
+
 export function createSandboxedReadTool(root: string) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
   return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
@@ -281,6 +305,28 @@ export function createSandboxedWriteTool(root: string) {
 export function createSandboxedEditTool(root: string) {
   const base = createEditTool(root) as unknown as AnyAgentTool;
   return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
+}
+
+/**
+ * Creates a write tool with restricted path validation.
+ * Prevents writes to security-sensitive directories like hooks.
+ *
+ * @see VULN-201: Workspace Hook Code Injection via LLM File Write
+ */
+export function createRestrictedWriteTool(root: string) {
+  const base = createWriteTool(root) as unknown as AnyAgentTool;
+  return wrapRestrictedPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+}
+
+/**
+ * Creates an edit tool with restricted path validation.
+ * Prevents edits to files in security-sensitive directories like hooks.
+ *
+ * @see VULN-201: Workspace Hook Code Injection via LLM File Write
+ */
+export function createRestrictedEditTool(root: string) {
+  const base = createEditTool(root) as unknown as AnyAgentTool;
+  return wrapRestrictedPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
 }
 
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
