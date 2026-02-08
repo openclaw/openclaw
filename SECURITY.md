@@ -7,6 +7,10 @@ If you believe you've found a security issue in OpenClaw, please report it priva
 - Email: `steipete@gmail.com`
 - What to include: reproduction steps, impact assessment, and (if possible) a minimal PoC.
 
+### Please redact secrets
+
+If you include logs, screenshots, configs, or command output, redact any secrets (tokens, API keys, pairing codes, phone numbers, cookies, etc.). If you are unsure whether something is sensitive, assume it is and redact it.
+
 ## Bug Bounties
 
 OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
@@ -22,7 +26,15 @@ The best way to help the project right now is by sending PRs.
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
-- `https://docs.openclaw.ai/gateway/security`
+- `docs/gateway/security/index.md` (published in the docs site at `/gateway/security`)
+
+### Quick hardening checklist
+
+- Keep the web UI bound to localhost only (or behind a trusted VPN).
+- Use least-privilege credentials (separate bot accounts; minimal channel permissions).
+- Store secrets in a proper secret manager or OS keychain (avoid plaintext `.env` files when possible).
+- Treat chat inputs as untrusted: review/confirm before running destructive commands or enabling powerful tools.
+- Rotate tokens if you suspect exposure (especially after pasting logs/config into public issues).
 
 ### Web Interface Safety
 
