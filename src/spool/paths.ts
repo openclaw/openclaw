@@ -1,11 +1,12 @@
 /**
- * Spool directory path resolution.
+ * Spool directory path resolution and file utilities.
  *
  * Spool uses a directory structure under ~/.openclaw/spool/:
  * - events/     : pending events waiting to be processed
  * - dead-letter/: failed events that exceeded retry limits
  */
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 
@@ -57,4 +58,22 @@ export function resolveSpoolDeadLetterPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return path.join(resolveSpoolDeadLetterDir(env), `${eventId}.json`);
+}
+
+/**
+ * List JSON file IDs in a directory.
+ * Filters to .json files, excludes temp files (.json.tmp.*), and extracts IDs.
+ */
+export async function listJsonFileIds(dir: string): Promise<string[]> {
+  try {
+    const files = await fs.readdir(dir);
+    return files
+      .filter((f) => f.endsWith(".json") && !f.includes(".json.tmp."))
+      .map((f) => path.basename(f, ".json"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
 }

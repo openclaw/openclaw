@@ -9,6 +9,7 @@ import {
   resolveSpoolDeadLetterDir,
   resolveSpoolDeadLetterPath,
   resolveSpoolEventPath,
+  listJsonFileIds,
 } from "./paths.js";
 
 /**
@@ -76,15 +77,7 @@ export async function listDeadLetterIds(
   env: Record<string, string | undefined> = process.env,
 ): Promise<string[]> {
   const dir = resolveSpoolDeadLetterDir(env);
-  try {
-    const files = await fs.readdir(dir);
-    return files.filter((f) => f.endsWith(".json")).map((f) => path.basename(f, ".json"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
+  return listJsonFileIds(dir);
 }
 
 /**
