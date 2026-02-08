@@ -19,7 +19,8 @@ test("exec falls back when PTY spawn fails", async () => {
   const { createExecTool } = await import("./bash-tools.exec");
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
-    command: "printf ok",
+    // cross-platform: use Node to write to stdout (works on Windows PowerShell)
+    command: "node -e \"process.stdout.write('ok')\"",
     pty: true,
   });
 
