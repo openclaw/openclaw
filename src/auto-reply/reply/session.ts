@@ -84,7 +84,10 @@ function forkSessionFromParent(params: {
       cwd: manager.getCwd(),
       parentSession: parentSessionFile,
     };
-    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     return { sessionId, sessionFile };
   } catch {
     return null;
