@@ -60,6 +60,44 @@ describe("directive behavior", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows think level in status after /think in same message (e.g. /think high /status)", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      vi.mocked(loadModelCatalog).mockResolvedValue([
+        { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", provider: "google", reasoning: true },
+      ]);
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/think high\n/status",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "google/gemini-2.5-flash",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Thinking level set to high.");
+      expect(text).toContain("Think: high");
+      const store = loadSessionStore(storePath);
+      expect(store[MAIN_SESSION_KEY]?.thinkingLevel).toBe("high");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("returns status alongside directive-only acks", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -100,7 +138,7 @@ describe("directive behavior", () => {
       expect(optionsLine).not.toContain("elevated");
 
       const store = loadSessionStore(storePath);
-      expect(store["agent:main:main"]?.elevatedLevel).toBe("off");
+      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("off");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
