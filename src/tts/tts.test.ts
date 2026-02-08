@@ -177,6 +177,15 @@ describe("tts", () => {
   });
 
   describe("parseTtsDirectives", () => {
+    it("recognizes bare [[tts]] tag without parameters", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleanedText).toBe("Hello  world");
+    });
+
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input =

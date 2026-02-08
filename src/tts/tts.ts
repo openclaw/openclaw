@@ -612,6 +612,13 @@ function parseTtsDirectives(
     return "";
   });
 
+  // Handle bare [[tts]] tag (no parameters) - just signals TTS should be used
+  const bareTtsRegex = /\[\[tts\]\]/gi;
+  cleanedText = cleanedText.replace(bareTtsRegex, () => {
+    hasDirective = true;
+    return "";
+  });
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
