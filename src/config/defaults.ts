@@ -169,6 +169,9 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+// Default baseUrl for Ollama provider when not explicitly set
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+
 export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   let mutated = false;
   let nextCfg = cfg;
@@ -177,6 +180,12 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   if (providerConfig) {
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
+      // Apply default baseUrl for Ollama if not set
+      if (providerId === "ollama" && !provider.baseUrl) {
+        nextProviders[providerId] = { ...provider, baseUrl: DEFAULT_OLLAMA_BASE_URL };
+        mutated = true;
+      }
+
       const models = provider.models;
       if (!Array.isArray(models) || models.length === 0) {
         continue;
