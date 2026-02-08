@@ -101,6 +101,10 @@ describe("tool_result_persist hook", () => {
         plugins: {
           load: { paths: [pluginA, pluginB] },
           allow: ["persist-a", "persist-b"],
+          entries: {
+            "persist-a": { enabled: true },
+            "persist-b": { enabled: true },
+          },
         },
       },
     });

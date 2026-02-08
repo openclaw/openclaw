@@ -71,6 +71,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,
@@ -87,6 +90,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,
@@ -104,6 +110,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,
@@ -118,6 +127,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,
@@ -135,6 +147,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,
@@ -176,6 +191,9 @@ export default { register(api) {
           plugins: {
             load: { paths: [plugin.file] },
             allow: [plugin.id],
+            entries: {
+              [plugin.id]: { enabled: true },
+            },
           },
         },
         workspaceDir: plugin.dir,

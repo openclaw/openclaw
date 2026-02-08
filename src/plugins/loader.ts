@@ -291,6 +291,29 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    // Defense-in-depth: never load workspace plugins that were not explicitly
+    // enabled by the user, even if config-state resolution changes in the future.
+    if (candidate.origin === "workspace") {
+      const entry = normalized.entries[pluginId];
+      if (entry?.enabled !== true) {
+        logger.warn(
+          `[plugins] ${pluginId} skipped: workspace plugin at ${candidate.source} requires explicit opt-in via config (plugins.entries.${pluginId}.enabled: true)`,
+        );
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = "workspace plugin not explicitly enabled";
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: "workspace plugin requires explicit opt-in for security",
+        });
+        continue;
+      }
+    }
+
     let mod: OpenClawPluginModule | null = null;
     try {
       mod = jiti(candidate.source) as OpenClawPluginModule;

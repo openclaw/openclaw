@@ -329,6 +329,7 @@ export function discoverOpenClawPlugins(params: {
     const workspaceRoot = resolveUserPath(workspaceDir);
     const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
     for (const dir of workspaceExtDirs) {
+      const prevCount = candidates.length;
       discoverInDirectory({
         dir,
         origin: "workspace",
@@ -337,6 +338,13 @@ export function discoverOpenClawPlugins(params: {
         diagnostics,
         seen,
       });
+      if (candidates.length > prevCount) {
+        diagnostics.push({
+          level: "warn",
+          message: `Workspace plugins discovered at ${dir} — workspace plugins are not auto-enabled for security. Use 'openclaw plugins enable <id>' to enable.`,
+          source: dir,
+        });
+      }
     }
   }
 

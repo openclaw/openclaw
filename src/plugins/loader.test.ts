@@ -223,6 +223,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["allowed"],
+          entries: {
+            allowed: { enabled: true },
+          },
         },
       },
     });
@@ -270,6 +273,7 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
           entries: {
             configurable: {
+              enabled: true,
               config: "nope" as unknown as Record<string, unknown>,
             },
           },
@@ -315,6 +319,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["channel-demo"],
+          entries: {
+            "channel-demo": { enabled: true },
+          },
         },
       },
     });
@@ -339,6 +346,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["http-demo"],
+          entries: {
+            "http-demo": { enabled: true },
+          },
         },
       },
     });
@@ -365,6 +375,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["http-route-demo"],
+          entries: {
+            "http-route-demo": { enabled: true },
+          },
         },
       },
     });
