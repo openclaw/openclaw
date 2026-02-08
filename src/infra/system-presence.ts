@@ -42,8 +42,17 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
   return trimmed.toLowerCase();
 }
 
+function safeNetworkInterfaces(): NodeJS.Dict<os.NetworkInterfaceInfo[]> {
+  try {
+    return os.networkInterfaces();
+  } catch {
+    // Android/Termux restricts uv_interface_addresses; degrade gracefully.
+    return {};
+  }
+}
+
 function resolvePrimaryIPv4(): string | undefined {
-  const nets = os.networkInterfaces();
+  const nets = safeNetworkInterfaces();
   const prefer = ["en0", "eth0"];
   const pick = (names: string[]) => {
     for (const name of names) {

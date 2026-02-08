@@ -32,7 +32,13 @@ export function listTailnetAddresses(): TailnetAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 
-  const ifaces = os.networkInterfaces();
+  let ifaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  try {
+    ifaces = os.networkInterfaces();
+  } catch {
+    // Android/Termux restricts uv_interface_addresses; degrade gracefully.
+    return { ipv4: [], ipv6: [] };
+  }
   for (const entries of Object.values(ifaces)) {
     if (!entries) {
       continue;
