@@ -72,6 +72,7 @@ import type {
   CronJob,
   CronRunLogEntry,
   CronStatus,
+  HealthSnapshot,
   HealthSummary,
   LogEntry,
   LogLevel,
@@ -407,8 +408,10 @@ export class OpenClawApp extends LitElement {
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
-  @state() debugHealth: HealthSummary | null = null;
-  @state() debugModels: ModelCatalogEntry[] = [];
+  @state() debugHealth: HealthSnapshot | null = null;
+  @state() chatModelCatalog: Array<{ id: string; name: string; provider: string }> = [];
+  @state() chatModelCatalogLoading = false;
+  @state() debugModels: unknown[] = [];
   @state() debugHeartbeat: unknown = null;
   @state() debugCallMethod = "";
   @state() debugCallParams = "{}";
