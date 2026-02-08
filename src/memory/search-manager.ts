@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -15,6 +16,58 @@ export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
 };
+
+/**
+ * Attempt to create a builtin MemoryIndexManager, returning null with a
+ * descriptive error instead of propagating confusing "No API key" messages.
+ *
+ * When `memory.backend = "qmd"` and the user has NOT explicitly configured
+ * `agents.defaults.memorySearch.provider`, the builtin index defaults to
+ * `provider = "auto"`.  The auto strategy iterates openai → gemini → voyage,
+ * each failing with "No API key found …" — none of which is relevant to the
+ * user's intended QMD setup.
+ *
+ * This wrapper catches those cascading auth errors and returns a single
+ * actionable message instead.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/8131
+ */
+async function tryBuiltinIndex(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<MemorySearchManagerResult> {
+  const searchCfg = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!searchCfg) {
+    return { manager: null, error: "Memory search is disabled in configuration." };
+  }
+
+  try {
+    const { MemoryIndexManager } = await import("./manager.js");
+    const manager = await MemoryIndexManager.get(params);
+    return { manager };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    // When the error is about missing API keys and the user hasn't explicitly
+    // chosen a remote provider, replace the confusing cascade of per-provider
+    // auth errors with one clear message.
+    const isApiKeyError = message.includes("No API key found for provider");
+    const isAutoProvider = searchCfg.provider === "auto";
+
+    if (isApiKeyError && isAutoProvider) {
+      return {
+        manager: null,
+        error:
+          "Memory search requires an embedding provider but none is configured. " +
+          "Set agents.defaults.memorySearch.provider to \"local\" (requires node-llama-cpp), " +
+          "\"openai\", \"gemini\", or \"voyage\" with the corresponding API key. " +
+          "If you use memory.backend = \"qmd\", also ensure the qmd command is available.",
+      };
+    }
+
+    return { manager: null, error: message };
+  }
+}
 
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
@@ -39,8 +92,8 @@ export async function getMemorySearchManager(params: {
           {
             primary,
             fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
+              const result = await tryBuiltinIndex(params);
+              return result.manager;
             },
           },
           () => QMD_MANAGER_CACHE.delete(cacheKey),
@@ -54,14 +107,7 @@ export async function getMemorySearchManager(params: {
     }
   }
 
-  try {
-    const { MemoryIndexManager } = await import("./manager.js");
-    const manager = await MemoryIndexManager.get(params);
-    return { manager };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { manager: null, error: message };
-  }
+  return await tryBuiltinIndex(params);
 }
 
 class FallbackMemoryManager implements MemorySearchManager {
