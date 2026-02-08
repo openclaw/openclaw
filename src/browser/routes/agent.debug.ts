@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { wrapWebContent } from "../../security/external-content.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -54,7 +55,14 @@ export function registerBrowserAgentDebugRoutes(
         targetId: tab.targetId,
         clear,
       });
-      res.json({ ok: true, targetId: tab.targetId, ...result });
+      // Wrap error messages and stack traces with security boundaries
+      const errors = Array.isArray(result.errors) ? result.errors : [];
+      const wrappedErrors = errors.map((err) => ({
+        ...err,
+        message: wrapWebContent(err.message, "web_fetch"),
+        stack: err.stack ? wrapWebContent(err.stack, "web_fetch") : err.stack,
+      }));
+      res.json({ ok: true, targetId: tab.targetId, errors: wrappedErrors });
     } catch (err) {
       handleRouteError(ctx, res, err);
     }
