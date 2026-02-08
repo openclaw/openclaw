@@ -281,7 +281,7 @@ async function probeTool(
     const message = await withTimeout(timeoutMs, (signal) =>
       complete(model, context, {
         apiKey,
-        maxTokens: 32,
+        maxTokens: 256,
         temperature: 0,
         toolChoice: "required",
         signal,
