@@ -98,6 +98,48 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
+/**
+ * Validates that the sessions.json file is valid JSON.
+ * Returns { valid: true } or { valid: false, error: string }.
+ */
+function validateSessionsJson(storePath: string): { valid: boolean; error?: string } {
+  if (!existsFile(storePath)) {
+    return { valid: true }; // Missing file is not corruption
+  }
+  try {
+    const raw = fs.readFileSync(storePath, "utf-8");
+    JSON.parse(raw);
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: String(err) };
+  }
+}
+
+/**
+ * Validates that a JSONL session file has valid JSON on each line.
+ * Returns the number of corrupt lines found.
+ */
+function countCorruptJsonlLines(filePath: string): { total: number; corrupt: number } {
+  if (!existsFile(filePath)) {
+    return { total: 0, corrupt: 0 };
+  }
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    let corrupt = 0;
+    for (const line of lines) {
+      try {
+        JSON.parse(line);
+      } catch {
+        corrupt += 1;
+      }
+    }
+    return { total: lines.length, corrupt };
+  } catch {
+    return { total: 0, corrupt: 0 };
+  }
+}
+
 function findOtherStateDirs(stateDir: string): string[] {
   const resolvedState = path.resolve(stateDir);
   const roots =
@@ -322,6 +364,27 @@ export async function noteStateIntegrity(
     );
   }
 
+  // Validate sessions.json is valid JSON before loading
+  const storeValidation = validateSessionsJson(storePath);
+  if (!storeValidation.valid) {
+    warnings.push(
+      `- CRITICAL: Session store is corrupt (${displayStoreDir}/sessions.json). This can cause API failures and cascading cooldowns.`,
+    );
+    warnings.push(`  Error: ${storeValidation.error}`);
+    const repair = await prompter.confirmSkipInNonInteractive({
+      message: `Reset session store? (Session history will be lost, but gateway will recover)`,
+      initialValue: false,
+    });
+    if (repair) {
+      try {
+        fs.writeFileSync(storePath, "{}", "utf-8");
+        changes.push(`- Reset corrupt session store to empty object`);
+      } catch (err) {
+        warnings.push(`- Failed to reset session store: ${String(err)}`);
+      }
+    }
+  }
+
   const store = loadSessionStore(storePath);
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
@@ -362,6 +425,13 @@ export async function noteStateIntegrity(
         if (lineCount <= 1) {
           warnings.push(
             `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
+          );
+        }
+        // Check for corrupt JSON lines in the main session
+        const corruptCheck = countCorruptJsonlLines(transcriptPath);
+        if (corruptCheck.corrupt > 0) {
+          warnings.push(
+            `- Main session transcript has ${corruptCheck.corrupt}/${corruptCheck.total} corrupt JSON lines. This may cause API errors.`,
           );
         }
       }
