@@ -979,6 +979,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.log(theme.heading("Updating plugins..."));
     }
 
+    // Extract npm plugin IDs before sync to ensure external plugins are updated
+    // (syncPluginsForUpdateChannel only processes bundled plugins)
+    const originalInstalls = activeConfig.plugins?.installs ?? {};
+    const npmPluginIds = Object.keys(originalInstalls).filter(
+      (id) => originalInstalls[id]?.source === "npm",
+    );
+
     const syncResult = await syncPluginsForUpdateChannel({
       config: activeConfig,
       channel,
@@ -989,6 +996,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     const npmResult = await updateNpmInstalledPlugins({
       config: pluginConfig,
+      pluginIds: npmPluginIds,
       skipIds: new Set(syncResult.summary.switchedToNpm),
       logger: pluginLogger,
     });
