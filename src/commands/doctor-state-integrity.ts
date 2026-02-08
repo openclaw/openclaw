@@ -98,8 +98,17 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
+function safeRealpath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 function findOtherStateDirs(stateDir: string): string[] {
-  const resolvedState = path.resolve(stateDir);
+  // Use realpath to resolve symlinks (e.g., /home -> /var/home on Silverblue)
+  const resolvedState = safeRealpath(stateDir);
   const roots =
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
@@ -119,7 +128,8 @@ function findOtherStateDirs(stateDir: string): string[] {
       }
       const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
       for (const candidate of candidates) {
-        if (candidate === resolvedState) {
+        // Resolve symlinks before comparing to avoid false positives
+        if (safeRealpath(candidate) === resolvedState) {
           continue;
         }
         if (existsDir(candidate)) {
