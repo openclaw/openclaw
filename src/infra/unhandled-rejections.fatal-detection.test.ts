@@ -30,6 +30,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     vi.clearAllMocks();
     consoleErrorSpy.mockRestore();
     consoleWarnSpy.mockRestore();
+    delete process.env.OPENCLAW_FAIL_FAST_UNHANDLED_REJECTIONS;
   });
 
   afterAll(() => {
@@ -124,7 +125,20 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalled();
     });
 
-    it("exits on generic errors without code", () => {
+    it("does NOT exit on generic errors without code", () => {
+      const genericErr = new Error("Something went wrong");
+
+      process.emit("unhandledRejection", genericErr, Promise.resolve());
+
+      expect(exitCalls).toEqual([]);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[openclaw] Unhandled promise rejection:",
+        expect.stringContaining("Something went wrong"),
+      );
+    });
+
+    it("exits on generic errors without code when fail-fast is enabled", () => {
+      process.env.OPENCLAW_FAIL_FAST_UNHANDLED_REJECTIONS = "1";
       const genericErr = new Error("Something went wrong");
 
       process.emit("unhandledRejection", genericErr, Promise.resolve());

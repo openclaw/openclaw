@@ -174,6 +174,12 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+    if (
+      process.env.OPENCLAW_FAIL_FAST_UNHANDLED_REJECTIONS &&
+      process.env.OPENCLAW_FAIL_FAST_UNHANDLED_REJECTIONS !== "0" &&
+      process.env.OPENCLAW_FAIL_FAST_UNHANDLED_REJECTIONS.toLowerCase() !== "false"
+    ) {
+      process.exit(1);
+    }
   });
 }
