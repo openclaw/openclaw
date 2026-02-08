@@ -115,11 +115,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
     const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const resolvedAgentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg })
+      : undefined;
     const results = await deliverOutboundPayloads({
       cfg,
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
+      agentId: resolvedAgentId,
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
@@ -128,7 +132,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              agentId: resolvedAgentId,
               text,
               mediaUrls,
             }

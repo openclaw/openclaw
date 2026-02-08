@@ -429,6 +429,14 @@ export const AgentModelSchema = z.union([
     })
     .strict(),
 ]);
+
+export const AgentDiscordSchema = z
+  .object({
+    responseWebhook: z.string().url().optional(),
+    responseWebhookAvatar: z.string().url().optional(),
+  })
+  .strict()
+  .optional();
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -443,6 +451,7 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    discord: AgentDiscordSchema,
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

@@ -86,6 +86,7 @@ async function createChannelHandler(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  agentId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
@@ -101,6 +102,7 @@ async function createChannelHandler(params: {
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
+    agentId: params.agentId,
     replyToId: params.replyToId,
     threadId: params.threadId,
     deps: params.deps,
@@ -118,6 +120,7 @@ function createPluginHandler(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  agentId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
@@ -143,6 +146,7 @@ function createPluginHandler(params: {
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             accountId: params.accountId,
+            agentId: params.agentId,
             replyToId: params.replyToId,
             threadId: params.threadId,
             gifPlayback: params.gifPlayback,
@@ -156,6 +160,7 @@ function createPluginHandler(params: {
         to: params.to,
         text,
         accountId: params.accountId,
+        agentId: params.agentId,
         replyToId: params.replyToId,
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
@@ -168,6 +173,7 @@ function createPluginHandler(params: {
         text: caption,
         mediaUrl,
         accountId: params.accountId,
+        agentId: params.agentId,
         replyToId: params.replyToId,
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
@@ -181,6 +187,8 @@ export async function deliverOutboundPayloads(params: {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** Agent ID for per-agent routing (e.g., Discord webhooks). */
+  agentId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -199,6 +207,7 @@ export async function deliverOutboundPayloads(params: {
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
+  const agentId = params.agentId ?? params.mirror?.agentId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
@@ -209,6 +218,7 @@ export async function deliverOutboundPayloads(params: {
     to,
     deps,
     accountId,
+    agentId,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
