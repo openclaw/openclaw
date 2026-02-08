@@ -76,8 +76,8 @@ export type MessagesConfig = {
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
   inbound?: InboundDebounceConfig;
-  /** Emoji reaction used to acknowledge inbound messages (empty disables). */
-  ackReaction?: string;
+  /** Emoji reaction(s) used to acknowledge inbound messages (empty disables; lists pick randomly). */
+  ackReaction?: string | string[];
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */

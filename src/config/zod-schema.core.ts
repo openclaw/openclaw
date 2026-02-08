@@ -88,6 +88,8 @@ export const GroupChatSchema = z
   .strict()
   .optional();
 
+export const AckReactionEmojiSchema = z.union([z.string(), z.array(z.string())]);
+
 export const DmConfigSchema = z
   .object({
     historyLimit: z.number().int().min(0).optional(),
