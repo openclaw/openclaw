@@ -19,6 +19,47 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
+
+/**
+ * Resolves the first owner ID from ownerAllowFrom config for DM delivery.
+ * Returns the owner ID and channel if applicable, or undefined if not configured.
+ *
+ * Owner entries can be:
+ * - Plain ID: "405055366" (uses current channel)
+ * - Channel-prefixed: "telegram:405055366" (uses specified channel)
+ */
+function resolveOwnerDmTarget(
+  cfg: OpenClawConfig,
+  currentChannel?: string,
+): { channel: string; to: string } | undefined {
+  const ownerList = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(ownerList) || ownerList.length === 0) {
+    return undefined;
+  }
+
+  // Find the first valid owner entry (skip wildcards)
+  for (const entry of ownerList) {
+    const trimmed = String(entry ?? "").trim();
+    if (!trimmed || trimmed === "*") {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      // Channel-prefixed entry like "telegram:405055366"
+      const channel = trimmed.slice(0, separatorIndex).toLowerCase();
+      const ownerId = trimmed.slice(separatorIndex + 1).trim();
+      if (ownerId) {
+        return { channel, to: ownerId };
+      }
+    } else if (currentChannel) {
+      // Plain ID, use current channel
+      return { channel: currentChannel, to: trimmed };
+    }
+  }
+
+  return undefined;
+}
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
@@ -350,9 +391,44 @@ export async function dispatchReplyFromConfig(params: {
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
+    // Check if we should route group error messages to owner DM.
+    // Only applies when: (1) in a group/channel chat, (2) groupErrorDelivery is "owner-dm", (3) owner is configured.
+    const isGroupChat = ctx.ChatType === "group" || ctx.ChatType === "channel";
+    const groupErrorDelivery = cfg.agents?.defaults?.groupErrorDelivery ?? "source";
+    const shouldRouteErrorsToOwner = isGroupChat && groupErrorDelivery === "owner-dm";
+    const ownerDmTarget = shouldRouteErrorsToOwner
+      ? resolveOwnerDmTarget(cfg, currentSurface)
+      : undefined;
+
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      // Route error messages to owner DM when configured.
+      // This keeps group chats clean by sending agent errors privately to the owner.
+      // Use isError flag if set, otherwise fallback to detecting ⚠️ prefix in text.
+      const isErrorReply = reply.isError ?? (typeof reply.text === "string" && reply.text.startsWith("⚠️"));
+      if (isErrorReply && ownerDmTarget) {
+        const errorResult = await routeReply({
+          payload: reply,
+          channel: ownerDmTarget.channel,
+          to: ownerDmTarget.to,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          cfg,
+          mirror: false, // Don't mirror error DMs to session transcript
+        });
+        if (!errorResult.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (error-to-owner) failed: ${errorResult.error ?? "unknown error"}`,
+          );
+          // Fall through to normal delivery if owner DM fails
+        } else {
+          queuedFinal = true;
+          routedFinalCount += 1;
+          continue; // Skip normal delivery for this error
+        }
+      }
+
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
         cfg,

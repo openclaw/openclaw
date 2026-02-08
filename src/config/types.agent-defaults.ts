@@ -163,6 +163,12 @@ export type AgentDefaultsConfig = {
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
+  /**
+   * Where to deliver agent error messages in group chats:
+   * - "source": send to the originating group (default, backward-compatible)
+   * - "owner-dm": send to the first owner in commands.ownerAllowFrom via DM
+   */
+  groupErrorDelivery?: "source" | "owner-dm";
   /** Periodic background heartbeat runs. */
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
