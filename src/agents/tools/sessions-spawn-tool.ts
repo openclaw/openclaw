@@ -109,10 +109,11 @@ export function createSessionsSpawnTool(opts?: {
           typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
             ? Math.max(0, Math.floor(params.timeoutSeconds))
             : undefined;
-        // Return undefined (not 0) when neither param is provided so that the
-        // gateway/agentCommand applies its default timeout.  An explicit 0 from
-        // the caller means "no timeout" and must be preserved.
-        return legacy;
+        // Default to 0 (no timeout) when neither param is provided.
+        // Subagent spawns are long-running by design and should not inherit
+        // the 600 s agent-command default.  An explicit 0 from the caller
+        // has the same effect.
+        return legacy ?? 0;
       })();
       let modelWarning: string | undefined;
       let modelApplied = false;
