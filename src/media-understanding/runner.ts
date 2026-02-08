@@ -645,6 +645,24 @@ function resolveWhisperCppOutputPath(args: string[]): string | null {
   return `${outputBase}.txt`;
 }
 
+/**
+ * Resolve output path for parakeet-mlx CLI.
+ * Parakeet writes transcripts to {{outputDir}}/{{mediaBasename}}.txt
+ */
+function resolveParakeetOutputPath(args: string[], mediaPath: string): string | null {
+  const outputDir = findArgValue(args, ["--output-dir"]);
+  const outputFormat = findArgValue(args, ["--output-format"]);
+  if (!outputDir) {
+    return null;
+  }
+  // Default format is txt, but check if explicitly set to something else
+  if (outputFormat && outputFormat !== "txt") {
+    return null;
+  }
+  const base = path.parse(mediaPath).name;
+  return path.join(outputDir, `${base}.txt`);
+}
+
 async function resolveCliOutput(params: {
   command: string;
   args: string[];
@@ -657,7 +675,9 @@ async function resolveCliOutput(params: {
       ? resolveWhisperCppOutputPath(params.args)
       : commandId === "whisper"
         ? resolveWhisperOutputPath(params.args, params.mediaPath)
-        : null;
+        : commandId === "parakeet-mlx"
+          ? resolveParakeetOutputPath(params.args, params.mediaPath)
+          : null;
   if (fileOutput && (await fileExists(fileOutput))) {
     try {
       const content = await fs.readFile(fileOutput, "utf8");
