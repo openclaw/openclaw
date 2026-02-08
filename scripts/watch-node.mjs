@@ -17,7 +17,9 @@ if (initialBuild.status !== 0) {
   process.exit(initialBuild.status ?? 1);
 }
 
-const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch"], {
+// --no-clean prevents tsdown from wiping dist/ on watch startup, which would
+// race with the node process trying to import from dist/.
+const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch", "--no-clean"], {
   cwd,
   env,
   stdio: "inherit",
