@@ -216,10 +216,15 @@ export function buildWorkspaceSkillSnapshot(
   const prompt = [remoteNote, formatSkillsForPrompt(resolvedSkills)].filter(Boolean).join("\n");
   return {
     prompt,
-    skills: eligible.map((entry) => ({
-      name: entry.skill.name,
-      primaryEnv: entry.metadata?.primaryEnv,
-    })),
+    skills: eligible.map((entry) => {
+      const skillKey = entry.metadata?.skillKey;
+      return {
+        name: entry.skill.name,
+        // Store skillKey only when it differs from name (for config lookup).
+        skillKey: skillKey && skillKey !== entry.skill.name ? skillKey : undefined,
+        primaryEnv: entry.metadata?.primaryEnv,
+      };
+    }),
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
