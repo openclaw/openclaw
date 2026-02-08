@@ -143,16 +143,10 @@ function acquireWatchdogLock(port, repoRoot, log) {
     }
   };
 
-  // Auto-release on exit
+  // Auto-release on exit. Only use the synchronous "exit" event here;
+  // SIGINT/SIGTERM handlers in the caller (cli.mjs) handle graceful
+  // shutdown via monitor.stop() before calling process.exit().
   process.on("exit", release);
-  process.on("SIGINT", () => {
-    release();
-    process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    release();
-    process.exit(0);
-  });
 
   return release;
 }
@@ -176,6 +170,10 @@ export class ProcessMonitor {
     this.currentCommitHash = null;
 
     fs.mkdirSync(this.stateDir, { recursive: true });
+
+    // Synchronous exit handler ensures PID file is always cleaned up,
+    // even if the async stop() flow is interrupted.
+    process.on("exit", () => this.removePidFile());
   }
 
   /**
