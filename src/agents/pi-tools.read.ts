@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
+import { assertNotRestrictedPath } from "./restricted-paths.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -262,6 +263,27 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         await assertSandboxPath({ filePath, cwd: root, root });
+      }
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+    },
+  };
+}
+
+/**
+ * Wraps a tool to prevent writes to restricted paths (hooks, credentials).
+ * This is a security guard against VULN-201 (Workspace Hook Code Injection).
+ */
+export function wrapRestrictedPathGuard(tool: AnyAgentTool, workspaceDir: string): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      const filePath = record?.path;
+      if (typeof filePath === "string" && filePath.trim()) {
+        assertNotRestrictedPath({ filePath, workspaceDir });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
