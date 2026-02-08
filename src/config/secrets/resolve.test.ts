@@ -232,19 +232,21 @@ describe("resolveConfigSecrets", () => {
     expect(result.token).toBe("$secret{INNER}");
   });
 
-  it("throws coming-soon error for aws provider", async () => {
+  it("throws SecretsProviderError for aws provider with secret refs", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "aws" },
     };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
   });
 
-  it("throws coming-soon error for 1password provider", async () => {
+  it("throws SecretsProviderError for 1password provider with secret refs", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "1password" },
     };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
   });
 
@@ -271,28 +273,45 @@ describe("resolveConfigSecrets", () => {
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not found|keychain|keyring/i);
   });
 
-  it("throws coming-soon error for doppler provider", async () => {
+  it("throws SecretsProviderError for doppler provider with secret refs", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "doppler" },
     };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
   });
 
-  it("throws coming-soon error for bitwarden provider", async () => {
+  it("throws SecretsProviderError for bitwarden provider with secret refs", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "bitwarden" },
     };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
   });
 
-  it("throws coming-soon error for vault provider", async () => {
+  it("throws SecretsProviderError for vault provider with secret refs", async () => {
     const config = {
       token: "$secret{X}",
       secrets: { provider: "vault" },
     };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
     await expect(resolveConfigSecrets(config)).rejects.toThrow(/not yet implemented/);
+  });
+
+  it("warns but does not throw for stub provider with no secret refs", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const config = {
+      token: "plain-value",
+      secrets: { provider: "aws" },
+    };
+    // Should not throw — no $secret{} refs to resolve
+    const result = await resolveConfigSecrets(config);
+    expect(result).toEqual({ token: "plain-value", secrets: { provider: "aws" } });
+    // Should have warned about the unimplemented provider
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("not yet implemented"));
+    warnSpy.mockRestore();
   });
 });
 
