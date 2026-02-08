@@ -260,7 +260,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
-    const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
+    const qmdSearchCommand = this.qmd.searchMode;
+    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit, collectionFilterArgs);
     let stdout: string;
     let stderr: string;
     try {
@@ -268,8 +269,25 @@ export class QmdMemoryManager implements MemorySearchManager {
       stdout = result.stdout;
       stderr = result.stderr;
     } catch (err) {
-      log.warn(`qmd query failed: ${String(err)}`);
-      throw err instanceof Error ? err : new Error(String(err));
+      if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
+        log.warn(
+          `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
+        );
+        try {
+          const fallback = await this.runQmd(
+            this.buildSearchArgs("query", trimmed, limit, collectionFilterArgs),
+            { timeoutMs: this.qmd.limits.timeoutMs },
+          );
+          stdout = fallback.stdout;
+          stderr = fallback.stderr;
+        } catch (fallbackErr) {
+          log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
+          throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+        }
+      } else {
+        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
     }
     const parsed = parseQmdQueryJson(stdout, stderr);
     const results: MemorySearchResult[] = [];
@@ -953,6 +971,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
+  private isUnsupportedQmdOptionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("unknown flag") ||
+      normalized.includes("unknown option") ||
+      normalized.includes("unrecognized option") ||
+      normalized.includes("flag provided but not defined") ||
+      normalized.includes("unexpected argument")
+    );
+  }
+
   private createQmdBusyError(err: unknown): Error {
     const message = err instanceof Error ? err.message : String(err);
     return new Error(`qmd index busy while reading results: ${message}`);
@@ -975,5 +1005,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     return names.flatMap((name) => ["-c", name]);
+  }
+
+  private buildSearchArgs(
+    command: "query" | "search" | "vsearch",
+    query: string,
+    limit: number,
+    collectionFilterArgs: string[],
+  ): string[] {
+    if (command === "query") {
+      return ["query", query, "--json", "-n", String(limit), ...collectionFilterArgs];
+    }
+    return [command, query, "--json"];
   }
 }

@@ -285,6 +285,47 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses configured qmd search mode command", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit("data", "[]");
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "search")).toBe(true);
+    expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "query")).toBe(false);
+    await manager.close();
+  });
+
   it("queues a forced sync behind an in-flight update", async () => {
     cfg = {
       ...cfg,
