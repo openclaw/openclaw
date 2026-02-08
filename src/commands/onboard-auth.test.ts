@@ -306,8 +306,8 @@ describe("applySyntheticConfig", () => {
   it("adds synthetic provider with correct settings", () => {
     const cfg = applySyntheticConfig({});
     expect(cfg.models?.providers?.synthetic).toMatchObject({
-      baseUrl: "https://api.synthetic.new/anthropic",
-      api: "anthropic-messages",
+      baseUrl: "https://api.synthetic.new/openai/v1",
+      api: "openai-completions",
     });
   });
 
@@ -339,8 +339,8 @@ describe("applySyntheticConfig", () => {
         },
       },
     });
-    expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-    expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/openai/v1");
+    expect(cfg.models?.providers?.synthetic?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
     const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
     expect(ids).toContain("old-model");

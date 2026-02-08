@@ -1,5 +1,5 @@
 ---
-summary: "Use Synthetic's Anthropic-compatible API in OpenClaw"
+summary: "Use Synthetic's OpenAI-compatible API in OpenClaw"
 read_when:
   - You want to use Synthetic as a model provider
   - You need a Synthetic API key or base URL setup
@@ -8,8 +8,8 @@ title: "Synthetic"
 
 # Synthetic
 
-Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
-`synthetic` provider and uses the Anthropic Messages API.
+Synthetic exposes OpenAI-compatible endpoints. OpenClaw registers it as the
+`synthetic` provider and uses the OpenAI Completions API.
 
 ## Quick setup
 
@@ -23,7 +23,7 @@ openclaw onboard --auth-choice synthetic-api-key
 The default model is set to:
 
 ```
-synthetic/hf:MiniMaxAI/MiniMax-M2.1
+synthetic/hf:moonshotai/Kimi-K2.5
 ```
 
 ## Config example
@@ -41,17 +41,17 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
     mode: "merge",
     providers: {
       synthetic: {
-        baseUrl: "https://api.synthetic.new/anthropic",
+        baseUrl: "https://api.synthetic.new/openai/v1",
         apiKey: "${SYNTHETIC_API_KEY}",
-        api: "anthropic-messages",
+        api: "openai-completions",
         models: [
           {
-            id: "hf:MiniMaxAI/MiniMax-M2.1",
-            name: "MiniMax M2.1",
+            id: "hf:moonshotai/Kimi-K2.5",
+            name: "Kimi K2.5",
             reasoning: false,
-            input: ["text"],
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 192000,
+            contextWindow: 256000,
             maxTokens: 65536,
           },
         ],
@@ -61,9 +61,8 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
-`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
-its base URL, override `models.providers.synthetic.baseUrl`.
+Note: if Synthetic changes its base URL, override
+`models.providers.synthetic.baseUrl`.
 
 ## Model catalog
 

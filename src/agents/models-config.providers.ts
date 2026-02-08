@@ -373,7 +373,7 @@ function buildQwenPortalProvider(): ProviderConfig {
 function buildSyntheticProvider(): ProviderConfig {
   return {
     baseUrl: SYNTHETIC_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     models: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
   };
 }
