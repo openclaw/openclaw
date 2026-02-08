@@ -2,6 +2,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { evaluateToolCall, formatBlockMessage, loadAgentShieldConfig } from "../security/agentshield.js";
 
 type HookContext = {
   agentId?: string;
@@ -76,6 +77,19 @@ export function wrapToolWithBeforeToolCallHook(
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      // ── AgentShield enforcement (runs before plugin hooks) ──
+      const shieldCfg = loadAgentShieldConfig();
+      if (shieldCfg.enabled) {
+        const normalizedParams = isPlainObject(params) ? params : {};
+        const shieldResult = await evaluateToolCall(toolName, normalizedParams, {
+          ...shieldCfg,
+          agentId: ctx?.agentId || shieldCfg.agentId,
+        });
+        if (shieldResult && shieldResult.action !== "allow") {
+          throw new Error(formatBlockMessage(shieldResult));
+        }
+      }
+      // ── Plugin hooks ──
       const outcome = await runBeforeToolCallHook({
         toolName,
         params,
