@@ -22,6 +22,67 @@ const makeResponse = (): {
 };
 
 describe("handleControlUiHttpRequest", () => {
+  it("returns 404 for static asset paths that do not exist instead of SPA fallback", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
+      // favicon.svg does NOT exist under webchat/
+      const { res, end } = makeResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/webchat/favicon.svg", method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+        },
+      );
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("still serves SPA fallback for extensionless paths", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
+      const { res, end } = makeResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/webchat/chat", method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+        },
+      );
+      expect(handled).toBe(true);
+      // Should serve index.html (SPA fallback), not 404
+      expect(res.statusCode).not.toBe(404);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves existing static assets with correct content type", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
+      await fs.writeFile(path.join(tmp, "favicon.svg"), "<svg></svg>\n");
+      const { res, setHeader } = makeResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/favicon.svg", method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+        },
+      );
+      expect(handled).toBe(true);
+      expect(res.statusCode).not.toBe(404);
+      expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/svg+xml");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("sets anti-clickjacking headers for Control UI responses", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
     try {

@@ -352,6 +352,15 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  // Static asset requests should not fall through to the SPA catch-all.
+  // If the requested path has a file extension, it was meant to be served
+  // as-is — returning index.html would send HTML with the wrong content type.
+  const ext = path.extname(fileRel);
+  if (ext && ext !== ".html") {
+    respondNotFound(res);
+    return true;
+  }
+
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
