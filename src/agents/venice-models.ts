@@ -1,7 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const VENICE_DEFAULT_MODEL_ID = "llama-3.3-70b";
+export const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
 
 // Venice uses credit-based pricing, not per-token costs.
@@ -261,7 +261,16 @@ export const VENICE_MODEL_CATALOG = [
     privacy: "anonymized",
   },
 
-  // Other anonymized models
+  // Kimi models (Moonshot AI via Venice)
+  {
+    id: "kimi-k2-5",
+    name: "Kimi K2.5 (via Venice)",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
   {
     id: "kimi-k2-thinking",
     name: "Kimi K2 Thinking (via Venice)",
