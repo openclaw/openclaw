@@ -6,12 +6,12 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thin
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { getSubagentDepth } from "../../sessions/session-key-utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
+import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -129,7 +129,7 @@ export function createSessionsSpawnTool(opts?: {
         mainKey,
       });
 
-      const callerDepth = getSubagentDepth(requesterInternalKey);
+      const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
       const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
       if (callerDepth >= maxSpawnDepth) {
         return jsonResult({
@@ -175,6 +175,7 @@ export function createSessionsSpawnTool(opts?: {
         }
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+      const childDepth = callerDepth + 1;
       const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
       const resolvedModel =
@@ -200,6 +201,22 @@ export function createSessionsSpawnTool(opts?: {
         }
         thinkingOverride = normalized;
       }
+      try {
+        await callGateway({
+          method: "sessions.patch",
+          params: { key: childSessionKey, spawnDepth: childDepth },
+          timeoutMs: 10_000,
+        });
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        return jsonResult({
+          status: "error",
+          error: messageText,
+          childSessionKey,
+        });
+      }
+
       if (resolvedModel) {
         try {
           await callGateway({
@@ -243,7 +260,6 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
-      const childDepth = callerDepth + 1;
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
         requesterOrigin,

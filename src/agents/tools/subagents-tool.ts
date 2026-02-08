@@ -8,7 +8,6 @@ import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../co
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import {
-  getSubagentDepth,
   isSubagentSessionKey,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
@@ -17,6 +16,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { abortEmbeddedPiRun } from "../pi-embedded.js";
 import { optionalStringEnum } from "../schema/typebox.js";
+import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import { listSubagentRunsForRequester, type SubagentRunRecord } from "../subagent-registry.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -317,7 +317,7 @@ function resolveRequesterKey(params: {
 
   // Check if this sub-agent can spawn children (orchestrator).
   // If so, it should see its own children, not its parent's children.
-  const callerDepth = getSubagentDepth(callerSessionKey);
+  const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
   const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
   if (callerDepth < maxSpawnDepth) {
     // Orchestrator sub-agent: use its own session key as requester

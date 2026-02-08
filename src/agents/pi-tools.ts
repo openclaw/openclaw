@@ -11,7 +11,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { getSubagentDepth, isSubagentSessionKey } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -44,6 +44,7 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -236,7 +237,10 @@ export function createOpenClawCodingTools(options?: {
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicy(options.config, getSubagentDepth(options.sessionKey))
+      ? resolveSubagentToolPolicy(
+          options.config,
+          getSubagentDepthFromSessionStore(options.sessionKey, { cfg: options.config }),
+        )
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,

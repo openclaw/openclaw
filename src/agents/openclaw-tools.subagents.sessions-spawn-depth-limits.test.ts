@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
@@ -8,6 +11,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+let storeTemplatePath = "";
 let configOverride: Record<string, unknown> = {
   session: {
     mainKey: "main",
@@ -23,14 +27,25 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+function writeStore(agentId: string, store: Record<string, unknown>) {
+  const storePath = storeTemplatePath.replaceAll("{agentId}", agentId);
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+}
+
 describe("sessions_spawn depth + child limits", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
+    storeTemplatePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-depth-${Date.now()}-${Math.random().toString(16).slice(2)}-{agentId}.json`,
+    );
     configOverride = {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        store: storeTemplatePath,
       },
     };
 
@@ -61,6 +76,7 @@ describe("sessions_spawn depth + child limits", () => {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        store: storeTemplatePath,
       },
       agents: {
         defaults: {
@@ -80,17 +96,24 @@ describe("sessions_spawn depth + child limits", () => {
       runId: "run-depth",
     });
 
-    const agentCall = callGatewayMock.mock.calls
-      .map((call) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find((entry) => entry.method === "agent");
+    const calls = callGatewayMock.mock.calls.map(
+      (call) => call[0] as { method?: string; params?: Record<string, unknown> },
+    );
+    const agentCall = calls.find((entry) => entry.method === "agent");
     expect(agentCall?.params?.spawnedBy).toBe("agent:main:subagent:parent");
+
+    const spawnDepthPatch = calls.find(
+      (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
+    );
+    expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
   });
 
-  it("rejects depth-2 callers when maxSpawnDepth is 2", async () => {
+  it("rejects depth-2 callers when maxSpawnDepth is 2 (using stored spawnDepth on flat keys)", async () => {
     configOverride = {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        store: storeTemplatePath,
       },
       agents: {
         defaults: {
@@ -101,9 +124,16 @@ describe("sessions_spawn depth + child limits", () => {
       },
     };
 
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:subagent:parent:subagent:child",
+    const callerKey = "agent:main:subagent:flat-depth-2";
+    writeStore("main", {
+      [callerKey]: {
+        sessionId: "flat-depth-2",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+      },
     });
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: callerKey });
     const result = await tool.execute("call-depth-2-reject", { task: "hello" });
 
     expect(result.details).toMatchObject({
@@ -117,6 +147,7 @@ describe("sessions_spawn depth + child limits", () => {
       session: {
         mainKey: "main",
         scope: "per-sender",
+        store: storeTemplatePath,
       },
       agents: {
         defaults: {
@@ -145,6 +176,33 @@ describe("sessions_spawn depth + child limits", () => {
     expect(result.details).toMatchObject({
       status: "forbidden",
       error: "sessions_spawn has reached max active children for this session (1/1)",
+    });
+  });
+
+  it("does not use subagent maxConcurrent as a per-parent spawn gate", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        store: storeTemplatePath,
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+            maxChildrenPerAgent: 5,
+            maxConcurrent: 1,
+          },
+        },
+      },
+    };
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const result = await tool.execute("call-max-concurrent-independent", { task: "hello" });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-depth",
     });
   });
 });

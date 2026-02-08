@@ -236,6 +236,44 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.accountId).toBe("kev");
   });
 
+  it("queues announce delivery back into requester subagent session", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:orchestrator": {
+        sessionId: "session-orchestrator",
+        spawnDepth: 1,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-worker-queued",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct" },
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
+  });
+
   it("includes threadId when origin has an active topic/thread", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
@@ -392,6 +430,34 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.accountId).toBe("acct-123");
+  });
+
+  it("injects direct announce into requester subagent session instead of chat channel", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-worker",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.channel).toBeUndefined();
+    expect(call?.params?.to).toBeUndefined();
   });
 
   it("retries reading subagent output when early lifecycle completion had no text", async () => {

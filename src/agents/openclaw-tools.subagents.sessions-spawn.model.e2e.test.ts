@@ -113,7 +113,9 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(patchIndex).toBeGreaterThan(-1);
     expect(agentIndex).toBeGreaterThan(-1);
     expect(patchIndex).toBeLessThan(agentIndex);
-    const patchCall = calls[patchIndex];
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
     expect(patchCall?.params).toMatchObject({
       key: expect.stringContaining("subagent:"),
       model: "claude-haiku-4-5",
@@ -223,7 +225,9 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       modelApplied: true,
     });
 
-    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
     expect(patchCall?.params).toMatchObject({
       model: "minimax/MiniMax-M2.1",
     });
