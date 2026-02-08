@@ -1,3 +1,4 @@
+import type { SimplexControlAccountState, SimplexInviteMode } from "../app-channels.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
@@ -35,6 +36,7 @@ export type ChannelsProps = {
   configFormDirty: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
+  simplexControlByAccount: Record<string, SimplexControlAccountState>;
   onRefresh: (probe: boolean) => void;
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
@@ -48,6 +50,9 @@ export type ChannelsProps = {
   onNostrProfileSave: () => void;
   onNostrProfileImport: () => void;
   onNostrProfileToggleAdvanced: () => void;
+  onSimplexInviteCreate: (accountId: string, mode: SimplexInviteMode) => void;
+  onSimplexInviteList: (accountId: string) => void;
+  onSimplexInviteRevoke: (accountId: string) => void;
 };
 
 export type ChannelsChannelData = {

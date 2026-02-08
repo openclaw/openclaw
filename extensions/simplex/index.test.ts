@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type MockResponse = { [key: string]: unknown };
 
-let mockSendResponse: MockResponse = { resp: { type: "ok" } };
-let lastCommand: string | null = null;
+let mockSendResponses: MockResponse[] = [{ resp: { type: "ok" } }];
+let sentCommands: string[] = [];
 
 const qrMocks = vi.hoisted(() => ({
   renderQrPngBase64: vi.fn(async () => "mock-base64"),
@@ -13,18 +13,20 @@ vi.mock("./src/simplex-ws-client.js", () => ({
   SimplexWsClient: class {
     async connect() {}
     async sendCommand(cmd: string) {
-      lastCommand = cmd;
-      return mockSendResponse;
+      sentCommands.push(cmd);
+      const next = mockSendResponses.shift();
+      return next ?? { resp: { type: "ok" } };
     }
     async close() {}
   },
-  __setMockResponse: (next: MockResponse) => {
-    mockSendResponse = next;
+  __setMockResponse: (next: MockResponse | MockResponse[]) => {
+    mockSendResponses = Array.isArray(next) ? [...next] : [next];
   },
-  __getLastCommand: () => lastCommand,
+  __getLastCommand: () => sentCommands[sentCommands.length - 1] ?? null,
+  __getCommands: () => [...sentCommands],
   __resetMock: () => {
-    lastCommand = null;
-    mockSendResponse = { resp: { type: "ok" } };
+    sentCommands = [];
+    mockSendResponses = [{ resp: { type: "ok" } }];
   },
 }));
 
@@ -34,7 +36,12 @@ vi.mock("../../src/web/qr-image.js", () => ({
 
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 import plugin from "./index.js";
-import { __getLastCommand, __resetMock, __setMockResponse } from "./src/simplex-ws-client.js";
+import {
+  __getCommands,
+  __getLastCommand,
+  __resetMock,
+  __setMockResponse,
+} from "./src/simplex-ws-client.js";
 
 const noopLogger = {
   info: vi.fn(),
@@ -55,7 +62,7 @@ type Handler = (ctx: {
   };
 }) => Promise<void>;
 
-function setupHandler(config: Record<string, unknown> = {}): Handler {
+function setupHandlers(config: Record<string, unknown> = {}): Map<string, Handler> {
   const methods = new Map<string, Handler>();
   plugin.register({
     id: "simplex",
@@ -74,9 +81,14 @@ function setupHandler(config: Record<string, unknown> = {}): Handler {
     registerService: () => {},
     resolvePath: (value: string) => value,
   });
-  const handler = methods.get("simplex.invite.create");
+  return methods;
+}
+
+function setupHandler(method: string, config: Record<string, unknown> = {}): Handler {
+  const methods = setupHandlers(config);
+  const handler = methods.get(method);
   if (!handler) {
-    throw new Error("simplex.invite.create handler not registered");
+    throw new Error(`${method} handler not registered`);
   }
   return handler;
 }
@@ -88,7 +100,7 @@ describe("simplex invite gateway", () => {
   });
 
   it("rejects invalid mode", async () => {
-    const handler = setupHandler({ channels: { simplex: {} } });
+    const handler = setupHandler("simplex.invite.create", { channels: { simplex: {} } });
     const respond = vi.fn();
     await handler({
       params: { mode: "bad" },
@@ -111,7 +123,7 @@ describe("simplex invite gateway", () => {
       },
     });
 
-    const handler = setupHandler({ channels: { simplex: {} } });
+    const handler = setupHandler("simplex.invite.create", { channels: { simplex: {} } });
     const respond = vi.fn();
     await handler({
       params: { mode: "connect" },
@@ -144,7 +156,7 @@ describe("simplex invite gateway", () => {
       },
     });
 
-    const handler = setupHandler({ channels: { simplex: {} } });
+    const handler = setupHandler("simplex.invite.create", { channels: { simplex: {} } });
     const respond = vi.fn();
     await handler({
       params: { mode: "address" },
@@ -165,5 +177,77 @@ describe("simplex invite gateway", () => {
       mode: "address",
     });
     expect(__getLastCommand()).toBe("/ad");
+  });
+
+  it("lists address links and pending hints", async () => {
+    __setMockResponse([
+      {
+        resp: {
+          type: "ok",
+          output: "Address: simplex://address789",
+        },
+      },
+      {
+        resp: {
+          type: "ok",
+          output: "Pending contact request from Bob",
+        },
+      },
+    ]);
+
+    const handler = setupHandler("simplex.invite.list", { channels: { simplex: {} } });
+    const respond = vi.fn();
+    await handler({
+      params: {},
+      respond,
+      context: {
+        startChannel: async () => {},
+        getRuntimeSnapshot: () => ({
+          channels: { simplex: { running: true } },
+          channelAccounts: {},
+        }),
+      },
+    });
+
+    const [ok, payload] = respond.mock.calls[0];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({
+      accountId: "default",
+      addressLink: "simplex://address789",
+      links: ["simplex://address789"],
+    });
+    expect((payload as { pendingHints?: string[] }).pendingHints?.length).toBeGreaterThan(0);
+    expect(__getCommands()).toEqual(["/show_address", "/contacts"]);
+  });
+
+  it("revokes address link for selected account", async () => {
+    const handler = setupHandler("simplex.invite.revoke", {
+      channels: {
+        simplex: {
+          accounts: {
+            ops: {
+              connection: { wsUrl: "ws://127.0.0.1:7777", mode: "external" },
+            },
+          },
+        },
+      },
+    });
+    const respond = vi.fn();
+    await handler({
+      params: { accountId: "ops" },
+      respond,
+      context: {
+        startChannel: async () => {},
+        getRuntimeSnapshot: () => ({
+          channels: { simplex: { running: true } },
+          channelAccounts: { simplex: { ops: { running: true } } },
+        }),
+      },
+    });
+
+    const [ok, payload] = respond.mock.calls[0];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ accountId: "ops" });
+    expect(__getLastCommand()).toBe("/delete_address");
   });
 });

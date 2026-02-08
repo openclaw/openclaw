@@ -1,3 +1,4 @@
+import type { SimplexControlAccountState, SimplexInviteMode } from "./app-channels.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus } from "./app-tool-stream.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -118,6 +119,7 @@ export type AppViewState = {
   whatsappBusy: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
+  simplexControlByAccount: Record<string, SimplexControlAccountState>;
   configFormDirty: boolean;
   presenceLoading: boolean;
   presenceEntries: PresenceEntry[];
@@ -241,6 +243,9 @@ export type AppViewState = {
   handleNostrProfileSave: () => Promise<void>;
   handleNostrProfileImport: () => Promise<void>;
   handleNostrProfileToggleAdvanced: () => void;
+  handleSimplexInviteCreate: (accountId: string, mode: SimplexInviteMode) => Promise<void>;
+  handleSimplexInviteList: (accountId: string) => Promise<void>;
+  handleSimplexInviteRevoke: (accountId: string) => Promise<void>;
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
   handleGatewayUrlConfirm: () => void;
   handleGatewayUrlCancel: () => void;

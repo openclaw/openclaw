@@ -52,6 +52,39 @@ function extractSimplexLink(resp: SimplexWsResponse): string | null {
   return preferred ?? matches[0] ?? null;
 }
 
+function extractSimplexLinks(resp: SimplexWsResponse): string[] {
+  const strings: string[] = [];
+  collectStrings(resp, strings);
+  const matches = new Set<string>();
+  for (const str of strings) {
+    for (const match of str.matchAll(LINK_REGEX)) {
+      const raw = match[0];
+      const cleaned = raw.replace(/[),.\]]+$/g, "");
+      if (cleaned) {
+        matches.add(cleaned);
+      }
+    }
+  }
+  return [...matches];
+}
+
+function extractSimplexPendingHints(resp: SimplexWsResponse): string[] {
+  const strings: string[] = [];
+  collectStrings(resp, strings);
+  const hints = new Set<string>();
+  for (const value of strings) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const lowered = trimmed.toLowerCase();
+    if (lowered.includes("request") || lowered.includes("pending")) {
+      hints.add(trimmed);
+    }
+  }
+  return [...hints];
+}
+
 async function sendSimplexCommand(params: {
   account: ReturnType<typeof resolveSimplexAccount>;
   command: string;
@@ -173,6 +206,134 @@ const plugin = {
           errorShape(
             ErrorCodes.UNAVAILABLE,
             `SimpleX invite failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      }
+    });
+    api.registerGatewayMethod("simplex.invite.list", async ({ params, respond, context }) => {
+      const cfg = api.config;
+      const rawAccountId = typeof params?.accountId === "string" ? params.accountId.trim() : "";
+      const accountId = rawAccountId || resolveDefaultSimplexAccountId(cfg);
+      const account = resolveSimplexAccount({ cfg, accountId });
+
+      if (!account.enabled) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `SimpleX account "${accountId}" is disabled`),
+        );
+        return;
+      }
+      if (!account.configured) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `SimpleX account "${accountId}" is not configured`,
+          ),
+        );
+        return;
+      }
+
+      try {
+        const [addressResponse, contactsResponse] = await Promise.all([
+          sendSimplexCommandWithRetry({
+            account,
+            command: "/show_address",
+            logger: api.logger,
+            startChannel: () => context.startChannel("simplex", accountId),
+            isRunning: () => {
+              const runtime = context.getRuntimeSnapshot();
+              const accountRuntime = runtime.channelAccounts?.simplex?.[accountId];
+              return Boolean(accountRuntime?.running ?? runtime.channels?.simplex?.running);
+            },
+          }),
+          sendSimplexCommandWithRetry({
+            account,
+            command: "/contacts",
+            logger: api.logger,
+            startChannel: () => context.startChannel("simplex", accountId),
+            isRunning: () => {
+              const runtime = context.getRuntimeSnapshot();
+              const accountRuntime = runtime.channelAccounts?.simplex?.[accountId];
+              return Boolean(accountRuntime?.running ?? runtime.channels?.simplex?.running);
+            },
+          }),
+        ]);
+        const addressLink = extractSimplexLink(addressResponse);
+        const links = [
+          ...new Set([
+            ...extractSimplexLinks(addressResponse),
+            ...extractSimplexLinks(contactsResponse),
+          ]),
+        ];
+        const pendingHints = extractSimplexPendingHints(contactsResponse);
+        respond(true, {
+          accountId,
+          addressLink,
+          links,
+          pendingHints,
+          addressResponse,
+          contactsResponse,
+        });
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `SimpleX invite list failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      }
+    });
+    api.registerGatewayMethod("simplex.invite.revoke", async ({ params, respond, context }) => {
+      const cfg = api.config;
+      const rawAccountId = typeof params?.accountId === "string" ? params.accountId.trim() : "";
+      const accountId = rawAccountId || resolveDefaultSimplexAccountId(cfg);
+      const account = resolveSimplexAccount({ cfg, accountId });
+
+      if (!account.enabled) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `SimpleX account "${accountId}" is disabled`),
+        );
+        return;
+      }
+      if (!account.configured) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `SimpleX account "${accountId}" is not configured`,
+          ),
+        );
+        return;
+      }
+
+      try {
+        const response = await sendSimplexCommandWithRetry({
+          account,
+          command: "/delete_address",
+          logger: api.logger,
+          startChannel: () => context.startChannel("simplex", accountId),
+          isRunning: () => {
+            const runtime = context.getRuntimeSnapshot();
+            const accountRuntime = runtime.channelAccounts?.simplex?.[accountId];
+            return Boolean(accountRuntime?.running ?? runtime.channels?.simplex?.running);
+          },
+        });
+        respond(true, { accountId, response });
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `SimpleX invite revoke failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
       }

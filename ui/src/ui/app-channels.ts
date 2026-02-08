@@ -9,6 +9,53 @@ import { loadConfig, saveConfig } from "./controllers/config.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
+export type SimplexInviteMode = "connect" | "address";
+
+export type SimplexControlAccountState = {
+  busyCreate: boolean;
+  busyPending: boolean;
+  busyRevoke: boolean;
+  message: string | null;
+  error: string | null;
+  link: string | null;
+  qrDataUrl: string | null;
+  pendingHints: string[];
+};
+
+const EMPTY_SIMPLEX_CONTROL_STATE: SimplexControlAccountState = {
+  busyCreate: false,
+  busyPending: false,
+  busyRevoke: false,
+  message: null,
+  error: null,
+  link: null,
+  qrDataUrl: null,
+  pendingHints: [],
+};
+
+function readSimplexControlState(host: OpenClawApp, accountId: string): SimplexControlAccountState {
+  const existing = host.simplexControlByAccount[accountId];
+  if (existing) {
+    return existing;
+  }
+  return { ...EMPTY_SIMPLEX_CONTROL_STATE };
+}
+
+function writeSimplexControlState(
+  host: OpenClawApp,
+  accountId: string,
+  patch: Partial<SimplexControlAccountState>,
+) {
+  const current = readSimplexControlState(host, accountId);
+  host.simplexControlByAccount = {
+    ...host.simplexControlByAccount,
+    [accountId]: {
+      ...current,
+      ...patch,
+    },
+  };
+}
+
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
   await loadChannels(host, true);
@@ -275,5 +322,119 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       error: `Profile import failed: ${String(err)}`,
       success: null,
     };
+  }
+}
+
+export async function handleSimplexInviteCreate(
+  host: OpenClawApp,
+  accountId: string,
+  mode: SimplexInviteMode,
+) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const current = readSimplexControlState(host, accountId);
+  if (current.busyCreate) {
+    return;
+  }
+  writeSimplexControlState(host, accountId, {
+    busyCreate: true,
+    error: null,
+    message: null,
+  });
+  try {
+    const result = await host.client.request<{
+      accountId?: string;
+      mode?: SimplexInviteMode;
+      link?: string | null;
+      qrDataUrl?: string | null;
+    }>("simplex.invite.create", {
+      accountId,
+      mode,
+    });
+    const resolvedId = result.accountId ?? accountId;
+    writeSimplexControlState(host, resolvedId, {
+      busyCreate: false,
+      error: null,
+      message: result.link ? `${mode === "address" ? "Address" : "Invite"} link generated.` : null,
+      link: result.link ?? null,
+      qrDataUrl: result.qrDataUrl ?? null,
+    });
+  } catch (err) {
+    writeSimplexControlState(host, accountId, {
+      busyCreate: false,
+      error: String(err),
+    });
+  }
+}
+
+export async function handleSimplexInviteList(host: OpenClawApp, accountId: string) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const current = readSimplexControlState(host, accountId);
+  if (current.busyPending) {
+    return;
+  }
+  writeSimplexControlState(host, accountId, {
+    busyPending: true,
+    error: null,
+    message: null,
+  });
+  try {
+    const result = await host.client.request<{
+      accountId?: string;
+      addressLink?: string | null;
+      pendingHints?: string[] | null;
+    }>("simplex.invite.list", {
+      accountId,
+    });
+    const resolvedId = result.accountId ?? accountId;
+    writeSimplexControlState(host, resolvedId, {
+      busyPending: false,
+      error: null,
+      message: "Pending status refreshed.",
+      link: result.addressLink ?? current.link,
+      pendingHints: result.pendingHints ?? [],
+    });
+  } catch (err) {
+    writeSimplexControlState(host, accountId, {
+      busyPending: false,
+      error: String(err),
+    });
+  }
+}
+
+export async function handleSimplexInviteRevoke(host: OpenClawApp, accountId: string) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const current = readSimplexControlState(host, accountId);
+  if (current.busyRevoke) {
+    return;
+  }
+  writeSimplexControlState(host, accountId, {
+    busyRevoke: true,
+    error: null,
+    message: null,
+  });
+  try {
+    const result = await host.client.request<{ accountId?: string }>("simplex.invite.revoke", {
+      accountId,
+    });
+    const resolvedId = result.accountId ?? accountId;
+    writeSimplexControlState(host, resolvedId, {
+      busyRevoke: false,
+      error: null,
+      message: "Address revoked.",
+      link: null,
+      qrDataUrl: null,
+      pendingHints: [],
+    });
+  } catch (err) {
+    writeSimplexControlState(host, accountId, {
+      busyRevoke: false,
+      error: String(err),
+    });
   }
 }
