@@ -38,6 +38,14 @@ export const handlePluginCommand: CommandHandler = async (
     isAuthorizedSender: command.isAuthorizedSender,
     commandBody: command.commandBodyNormalized,
     config: cfg,
+    // Only derive chatId/messageId for channels where the ID format is known.
+    // Other channels leave these undefined so plugins can safely feature-detect.
+    ...(command.channel === "telegram"
+      ? {
+          chatId: command.to?.replace(/^telegram:/, "") ?? command.from?.replace(/^telegram:/, ""),
+          messageId: params.ctx.MessageSid,
+        }
+      : {}),
   });
 
   return {

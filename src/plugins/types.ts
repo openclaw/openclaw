@@ -148,6 +148,10 @@ export type PluginCommandContext = {
   commandBody: string;
   /** Current OpenClaw configuration */
   config: OpenClawConfig;
+  /** Chat/channel ID (e.g., Telegram chat ID) — for message management */
+  chatId?: string;
+  /** Original message ID — for message deletion (e.g., passphrase scrubbing) */
+  messageId?: string;
 };
 
 /**
