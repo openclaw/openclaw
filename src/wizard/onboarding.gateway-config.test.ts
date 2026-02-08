@@ -64,5 +64,13 @@ describe("configureGatewayForOnboarding", () => {
     });
 
     expect(result.settings.gatewayToken).toBe("generated-token");
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual([
+      "camera.snap",
+      "camera.clip",
+      "screen.record",
+      "calendar.add",
+      "contacts.add",
+      "reminders.add",
+    ]);
   });
 });
