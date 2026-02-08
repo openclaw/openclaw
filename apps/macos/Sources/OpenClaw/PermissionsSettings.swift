@@ -9,24 +9,26 @@ struct PermissionsSettings: View {
     let showOnboarding: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SystemRunSettingsView()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                SystemRunSettingsView()
 
-            Text("Allow these so OpenClaw can notify and capture when needed.")
-                .padding(.top, 4)
+                Text("Allow these so OpenClaw can notify and capture when needed.")
+                    .padding(.top, 4)
 
-            PermissionStatusList(status: self.status, refresh: self.refresh)
-                .padding(.horizontal, 2)
-                .padding(.vertical, 6)
+                PermissionStatusList(status: self.status, refresh: self.refresh)
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 6)
 
-            LocationAccessSettings()
+                LocationAccessSettings()
 
-            Button("Restart onboarding") { self.showOnboarding() }
-                .buttonStyle(.bordered)
-            Spacer()
+                Button("Restart onboarding") { self.showOnboarding() }
+                    .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
     }
 }
 

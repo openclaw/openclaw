@@ -83,7 +83,8 @@ struct OpenClawApp: App {
                 .environment(self.tailscaleService)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-        .windowResizability(.contentSize)
+        // Allow vertical resizing to accommodate different content heights
+        .windowResizability(.contentMinSize)
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
             self.updateHoverHUDSuppression()
