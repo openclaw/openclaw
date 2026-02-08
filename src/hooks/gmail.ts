@@ -262,6 +262,31 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
 }
 
+/**
+ * Redact a token value for safe logging, showing only a truncated form.
+ * Returns "[REDACTED]" for short tokens, or "abc...wxyz" (first 3 + last 4 chars) otherwise.
+ */
+export function redactToken(token: string): string {
+  if (!token || token.length <= 8) {
+    return "[REDACTED]";
+  }
+  return `${token.slice(0, 3)}...${token.slice(-4)}`;
+}
+
+/**
+ * Redact sensitive values (--token, --hook-token) from a command argument list
+ * for safe logging. Returns the joined string with token values replaced.
+ */
+export function redactArgs(args: string[]): string {
+  const redacted = [...args];
+  for (let i = 0; i < redacted.length; i++) {
+    if ((redacted[i] === "--token" || redacted[i] === "--hook-token") && i + 1 < redacted.length) {
+      redacted[i + 1] = redactToken(redacted[i + 1]);
+    }
+  }
+  return redacted.join(" ");
+}
+
 function joinUrl(base: string, path: string): string {
   const url = new URL(base);
   const basePath = url.pathname.replace(/\/+$/, "");

@@ -229,6 +229,7 @@ export async function ensureSubscription(
   subscription: string,
   topicName: string,
   pushEndpoint: string,
+  pushToken?: string,
 ) {
   const describe = await runGcloudCommand(
     ["pubsub", "subscriptions", "describe", subscription, "--project", projectId],
@@ -245,20 +246,71 @@ export async function ensureSubscription(
       "--push-endpoint",
       pushEndpoint,
     ]);
+  } else {
+    await runGcloud([
+      "pubsub",
+      "subscriptions",
+      "create",
+      subscription,
+      "--project",
+      projectId,
+      "--topic",
+      topicName,
+      "--push-endpoint",
+      pushEndpoint,
+    ]);
+  }
+
+  // Set the push token as a push config attribute (sent as an HTTP header)
+  // instead of embedding it in the URL query string, to prevent exposure in
+  // access logs, reverse-proxy logs, and telemetry surfaces.
+  if (pushToken) {
+    await setPushConfigTokenAttribute(projectId, subscription, pushEndpoint, pushToken);
+  }
+}
+
+/**
+ * Set the push authentication token as a Pub/Sub push config attribute.
+ *
+ * Push config attributes are delivered as HTTP headers with each push request,
+ * keeping the token out of the endpoint URL. The gcloud CLI does not expose
+ * push config attributes directly, so we PATCH the subscription via the
+ * Pub/Sub REST API.
+ *
+ * Non-fatal: if this fails the subscription still works, but without
+ * header-based token delivery.
+ */
+async function setPushConfigTokenAttribute(
+  projectId: string,
+  subscription: string,
+  pushEndpoint: string,
+  pushToken: string,
+): Promise<void> {
+  const tokenResult = await runGcloudCommand(["auth", "print-access-token"], 30_000);
+  if (tokenResult.code !== 0) {
     return;
   }
-  await runGcloud([
-    "pubsub",
-    "subscriptions",
-    "create",
-    subscription,
-    "--project",
-    projectId,
-    "--topic",
-    topicName,
-    "--push-endpoint",
-    pushEndpoint,
-  ]);
+  const accessToken = tokenResult.stdout.trim();
+  const subPath = `projects/${projectId}/subscriptions/${subscription}`;
+  const url = `https://pubsub.googleapis.com/v1/${subPath}?updateMask=pushConfig`;
+  try {
+    await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        pushConfig: {
+          pushEndpoint,
+          attributes: { "x-push-token": pushToken },
+        },
+      }),
+    });
+  } catch {
+    // Non-fatal: subscription was created/updated via gcloud,
+    // but the push config token attribute could not be set.
+  }
 }
 
 export async function ensureTailscaleEndpoint(params: {
@@ -266,7 +318,6 @@ export async function ensureTailscaleEndpoint(params: {
   path: string;
   port?: number;
   target?: string;
-  token?: string;
 }): Promise<string> {
   if (params.mode === "off") {
     return "";
@@ -312,7 +363,10 @@ export async function ensureTailscaleEndpoint(params: {
 
   const baseUrl = `https://${dnsName}${pathArg}`;
   // Funnel/serve strips pathArg before proxying; keep it only in the public URL.
-  return params.token ? `${baseUrl}?token=${params.token}` : baseUrl;
+  // Token is intentionally NOT embedded in the URL query string to prevent
+  // exposure in access logs, reverse-proxy logs, and telemetry surfaces.
+  // Instead, the token is set as a Pub/Sub push config attribute (HTTP header).
+  return baseUrl;
 }
 
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {

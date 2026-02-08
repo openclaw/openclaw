@@ -41,6 +41,8 @@ import {
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
+  redactArgs,
+  redactToken,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -191,14 +193,13 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
         path: tailscalePath,
         port: servePort,
         target: normalizedTailscaleTarget,
-        token: pushToken,
       });
 
   if (!pushEndpoint) {
     throw new Error("push endpoint required (set --push-endpoint)");
   }
 
-  await ensureSubscription(projectId, subscription, topicName, pushEndpoint);
+  await ensureSubscription(projectId, subscription, topicName, pushEndpoint, pushToken);
 
   await startGmailWatch(
     {
@@ -256,8 +257,8 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     subscription,
     pushEndpoint,
     hookUrl,
-    hookToken,
-    pushToken,
+    hookToken: redactToken(hookToken),
+    pushToken: redactToken(pushToken),
     serve: {
       bind: serveBind,
       port: servePort,
@@ -358,7 +359,7 @@ export async function runGmailService(opts: GmailRunOptions) {
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
-  defaultRuntime.log(`Starting gog ${args.join(" ")}`);
+  defaultRuntime.log(`Starting gog ${redactArgs(args)}`);
   return spawn("gog", args, { stdio: "inherit" });
 }
 

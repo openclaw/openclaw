@@ -15,6 +15,7 @@ import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   type GmailHookRuntimeConfig,
+  redactArgs,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -65,7 +66,7 @@ async function startGmailWatch(
  */
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
-  log.info(`starting gog ${args.join(" ")}`);
+  log.info(`starting gog ${redactArgs(args)}`);
   let addressInUse = false;
 
   const child = spawn("gog", args, {
