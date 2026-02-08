@@ -20,7 +20,7 @@ import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -70,6 +70,18 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+
+function resolveTelegramThreadScope(
+  chatId: string,
+): Extract<TelegramThreadSpec["scope"], "dm" | "forum"> {
+  // Telegram chat ids are numeric strings for DMs (positive) and groups/supergroups (negative, often -100...).
+  // Non-numeric targets like @username are not DMs; treat them like forum/group scope.
+  const asNumber = Number(chatId);
+  if (Number.isFinite(asNumber)) {
+    return asNumber > 0 ? "dm" : "forum";
+  }
+  return "forum";
+}
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -221,8 +233,11 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+
+  const threadSpec: TelegramThreadSpec | undefined =
+    messageThreadId != null
+      ? { id: messageThreadId, scope: resolveTelegramThreadScope(chatId) }
+      : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
   const quoteText = opts.quoteText?.trim();
@@ -696,8 +711,11 @@ export async function sendStickerTelegram(
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+
+  const threadSpec: TelegramThreadSpec | undefined =
+    messageThreadId != null
+      ? { id: messageThreadId, scope: resolveTelegramThreadScope(chatId) }
+      : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
