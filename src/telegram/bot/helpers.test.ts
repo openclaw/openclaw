@@ -1,11 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { cacheTopicName, clearTopicCache } from "../topic-cache.js";
 import {
+  buildTelegramGroupPeerId,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
+
+describe("buildTelegramGroupPeerId", () => {
+  afterEach(() => {
+    clearTopicCache();
+  });
+
+  it("returns chat ID as string when no topic", () => {
+    expect(buildTelegramGroupPeerId(-1003856094222)).toBe("-1003856094222");
+    expect(buildTelegramGroupPeerId("-1003856094222")).toBe("-1003856094222");
+  });
+
+  it("returns chat:topic:id format when topic provided without name", () => {
+    expect(buildTelegramGroupPeerId(-1003856094222, 49)).toBe("-1003856094222:topic:49");
+  });
+
+  it("appends slugified topic name when provided", () => {
+    expect(buildTelegramGroupPeerId(-1003856094222, 49, "Telegram Ops")).toBe(
+      "-1003856094222:topic:49-telegram-ops",
+    );
+  });
+
+  it("uses cached topic name when not explicitly provided", () => {
+    cacheTopicName(-1003856094222, 49, "Cached Topic Name");
+    expect(buildTelegramGroupPeerId(-1003856094222, 49)).toBe(
+      "-1003856094222:topic:49-cached-topic-name",
+    );
+  });
+
+  it("prefers explicit topic name over cached name", () => {
+    cacheTopicName(-1003856094222, 49, "Cached Name");
+    expect(buildTelegramGroupPeerId(-1003856094222, 49, "Explicit Name")).toBe(
+      "-1003856094222:topic:49-explicit-name",
+    );
+  });
+
+  it("falls back to id-only format when slug is empty", () => {
+    // Topic name with only special characters produces empty slug
+    expect(buildTelegramGroupPeerId(-1003856094222, 49, "🎉🎊🎁")).toBe("-1003856094222:topic:49");
+  });
+
+  it("handles General topic (id=1)", () => {
+    cacheTopicName(-1003856094222, 1, "General");
+    expect(buildTelegramGroupPeerId(-1003856094222, 1)).toBe("-1003856094222:topic:1-general");
+  });
+});
 
 describe("resolveTelegramForumThreadId", () => {
   it("returns undefined for non-forum groups even with messageThreadId", () => {
