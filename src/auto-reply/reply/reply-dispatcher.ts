@@ -2,6 +2,7 @@ import type { HumanDelayConfig } from "../../config/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
@@ -53,6 +54,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Channel/routing context for message_sent hook (optional). */
+  hookContext?: {
+    channelId?: string;
+    accountId?: string;
+    conversationId?: string;
+  };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -141,6 +148,26 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         await options.deliver(normalized, { kind });
+
+        // Fire message_sent hook after successful delivery (all channels)
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner && normalized.text) {
+          const hctx = options.hookContext;
+          void hookRunner
+            .runMessageSent(
+              {
+                to: hctx?.conversationId ?? "",
+                content: normalized.text,
+                success: true,
+              },
+              {
+                channelId: hctx?.channelId ?? "",
+                accountId: hctx?.accountId,
+                conversationId: hctx?.conversationId,
+              },
+            )
+            .catch(() => {});
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
