@@ -360,6 +360,68 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+function isWithinDir(targetPath: string, rootDir: string): boolean {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(targetPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(currentDir, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(entryPath);
+    } catch {
+      return false;
+    }
+    if (stat.isSymbolicLink()) {
+      const resolvedTarget = resolveSymlinkTarget(entryPath);
+      if (!resolvedTarget) {
+        return false;
+      }
+      let resolvedRealTarget: string;
+      try {
+        resolvedRealTarget = fs.realpathSync(resolvedTarget);
+      } catch {
+        return false;
+      }
+      if (!isWithinDir(resolvedRealTarget, realTargetDir)) {
+        return false;
+      }
+      continue;
+    }
+    if (stat.isDirectory()) {
+      if (!isLegacyTreeSymlinkMirror(entryPath, realTargetDir)) {
+        return false;
+      }
+      continue;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean {
+  let realTargetDir: string;
+  try {
+    realTargetDir = fs.realpathSync(targetDir);
+  } catch {
+    return false;
+  }
+  return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
+}
+
 export async function autoMigrateLegacyStateDir(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -443,6 +505,9 @@ export async function autoMigrateLegacyStateDir(params: {
   }
 
   if (isDirPath(targetDir)) {
+    if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
