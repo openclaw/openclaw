@@ -226,6 +226,7 @@ export async function ensureSandboxBrowser(params: {
 
   return {
     bridgeUrl: resolvedBridge.baseUrl,
+    bridgeAuthToken: resolvedBridge.authToken,
     noVncUrl,
     containerName,
   };

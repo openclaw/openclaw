@@ -431,13 +431,17 @@ describe("browser control server", () => {
       },
       onEnsureAttachTarget: ensured,
     });
+    const authHeaders = { Authorization: `Bearer ${bridge.authToken}` };
 
     const started = (await realFetch(`${bridge.baseUrl}/start`, {
       method: "POST",
+      headers: authHeaders,
     }).then((r) => r.json())) as { ok?: boolean; error?: string };
     expect(started.error).toBeUndefined();
     expect(started.ok).toBe(true);
-    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) => r.json())) as {
+    const status = (await realFetch(`${bridge.baseUrl}/`, { headers: authHeaders }).then((r) =>
+      r.json(),
+    )) as {
       running?: boolean;
     };
     expect(status.running).toBe(true);

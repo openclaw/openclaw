@@ -21,6 +21,7 @@ import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
+  sandboxBrowserBridgeAuthToken?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
@@ -91,6 +92,7 @@ export function createOpenClawTools(options?: {
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+      sandboxBridgeAuthToken: options?.sandboxBrowserBridgeAuthToken,
       allowHostControl: options?.allowHostBrowserControl,
     }),
     createCanvasTool(),

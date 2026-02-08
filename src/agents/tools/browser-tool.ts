@@ -219,6 +219,7 @@ function resolveBrowserBaseUrl(params: {
 
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
+  sandboxBridgeAuthToken?: string;
   allowHostControl?: boolean;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
@@ -270,6 +271,13 @@ export function createBrowserTool(opts?: {
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             allowHostControl: opts?.allowHostControl,
           });
+      const bridgeAuthToken = opts?.sandboxBridgeAuthToken?.trim();
+      const authToken = !nodeTarget && resolvedTarget === "sandbox" ? bridgeAuthToken : undefined;
+      if (!nodeTarget && resolvedTarget === "sandbox" && baseUrl && !authToken) {
+        throw new Error(
+          "Sandbox browser bridge requires an auth token. Restart the gateway to regenerate it.",
+        );
+      }
 
       const proxyRequest = nodeTarget
         ? async (opts: {
@@ -306,7 +314,7 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(await browserStatus(baseUrl, { profile, authToken }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -322,8 +330,8 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStart(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserStart(baseUrl, { profile, authToken });
+          return jsonResult(await browserStatus(baseUrl, { profile, authToken }));
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
@@ -339,8 +347,8 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserStop(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserStop(baseUrl, { profile, authToken });
+          return jsonResult(await browserStatus(baseUrl, { profile, authToken }));
         case "profiles":
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -349,7 +357,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult({ profiles: await browserProfiles(baseUrl) });
+          return jsonResult({ profiles: await browserProfiles(baseUrl, { authToken }) });
         case "tabs":
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -360,7 +368,7 @@ export function createBrowserTool(opts?: {
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
             return jsonResult({ tabs });
           }
-          return jsonResult({ tabs: await browserTabs(baseUrl, { profile }) });
+          return jsonResult({ tabs: await browserTabs(baseUrl, { profile, authToken }) });
         case "open": {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
@@ -374,7 +382,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile, authToken }));
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -389,7 +397,7 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          await browserFocusTab(baseUrl, targetId, { profile });
+          await browserFocusTab(baseUrl, targetId, { profile, authToken });
           return jsonResult({ ok: true });
         }
         case "close": {
@@ -410,9 +418,9 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           if (targetId) {
-            await browserCloseTab(baseUrl, targetId, { profile });
+            await browserCloseTab(baseUrl, targetId, { profile, authToken });
           } else {
-            await browserAct(baseUrl, { kind: "close" }, { profile });
+            await browserAct(baseUrl, { kind: "close" }, { profile, authToken });
           }
           return jsonResult({ ok: true });
         }
@@ -493,6 +501,7 @@ export function createBrowserTool(opts?: {
                 labels,
                 mode,
                 profile,
+                authToken,
               });
           if (snapshot.format === "ai") {
             if (labels && snapshot.imagePath) {
@@ -536,6 +545,7 @@ export function createBrowserTool(opts?: {
                 element,
                 type,
                 profile,
+                authToken,
               });
           return await imageResultFromFile({
             label: "browser:screenshot",
@@ -565,6 +575,7 @@ export function createBrowserTool(opts?: {
               url: targetUrl,
               targetId,
               profile,
+              authToken,
             }),
           );
         }
@@ -583,7 +594,9 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(await browserConsoleMessages(baseUrl, { level, targetId, profile }));
+          return jsonResult(
+            await browserConsoleMessages(baseUrl, { level, targetId, profile, authToken }),
+          );
         }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
@@ -594,7 +607,7 @@ export function createBrowserTool(opts?: {
                 profile,
                 body: { targetId },
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
-            : await browserPdfSave(baseUrl, { targetId, profile });
+            : await browserPdfSave(baseUrl, { targetId, profile, authToken });
           return {
             content: [{ type: "text", text: `FILE:${result.path}` }],
             details: result,
@@ -638,6 +651,7 @@ export function createBrowserTool(opts?: {
               targetId,
               timeoutMs,
               profile,
+              authToken,
             }),
           );
         }
@@ -670,6 +684,7 @@ export function createBrowserTool(opts?: {
               targetId,
               timeoutMs,
               profile,
+              authToken,
             }),
           );
         }
@@ -688,6 +703,7 @@ export function createBrowserTool(opts?: {
                 })
               : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
                   profile,
+                  authToken,
                 });
             return jsonResult(result);
           } catch (err) {
@@ -701,7 +717,7 @@ export function createBrowserTool(opts?: {
                       profile,
                     })) as { tabs?: unknown[] }
                   ).tabs ?? [])
-                : await browserTabs(baseUrl, { profile }).catch(() => []);
+                : await browserTabs(baseUrl, { profile, authToken }).catch(() => []);
               if (!tabs.length) {
                 throw new Error(
                   "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",

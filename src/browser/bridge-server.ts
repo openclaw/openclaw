@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import crypto from "node:crypto";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { registerBrowserRoutes } from "./routes/index.js";
@@ -15,6 +16,7 @@ export type BrowserBridge = {
   port: number;
   baseUrl: string;
   state: BrowserServerState;
+  authToken: string;
 };
 
 export async function startBrowserBridgeServer(params: {
@@ -30,16 +32,20 @@ export async function startBrowserBridgeServer(params: {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
-  const authToken = params.authToken?.trim();
-  if (authToken) {
-    app.use((req, res, next) => {
-      const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) {
-        return next();
-      }
-      res.status(401).send("Unauthorized");
-    });
+  const providedAuthToken = params.authToken?.trim();
+  const authToken = providedAuthToken || crypto.randomUUID();
+  if (!providedAuthToken) {
+    console.warn(
+      "[openclaw] Browser bridge auth token missing; generated a temporary token for this session.",
+    );
   }
+  app.use((req, res, next) => {
+    const auth = String(req.headers.authorization ?? "").trim();
+    if (auth === `Bearer ${authToken}`) {
+      return next();
+    }
+    res.status(401).send("Unauthorized");
+  });
 
   const state: BrowserServerState = {
     server: null as unknown as Server,
@@ -66,7 +72,7 @@ export async function startBrowserBridgeServer(params: {
   state.resolved.controlPort = resolvedPort;
 
   const baseUrl = `http://${host}:${resolvedPort}`;
-  return { server, port: resolvedPort, baseUrl, state };
+  return { server, port: resolvedPort, baseUrl, state, authToken };
 }
 
 export async function stopBrowserBridgeServer(server: Server): Promise<void> {

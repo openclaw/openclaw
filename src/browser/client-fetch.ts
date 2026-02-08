@@ -29,10 +29,20 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   return new Error(`Can't reach the OpenClaw browser control service. ${hint} (${msg})`);
 }
 
-async function fetchHttpJson<T>(
-  url: string,
-  init: RequestInit & { timeoutMs?: number },
-): Promise<T> {
+type BrowserFetchInit = RequestInit & { timeoutMs?: number; authToken?: string };
+
+function buildAuthHeaders(
+  headersInit: HeadersInit | undefined,
+  authToken: string | undefined,
+): Headers {
+  const headers = new Headers(headersInit ?? undefined);
+  if (authToken && !headers.has("authorization")) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+  return headers;
+}
+
+async function fetchHttpJson<T>(url: string, init: BrowserFetchInit): Promise<T> {
   const timeoutMs = init.timeoutMs ?? 5000;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -48,14 +58,12 @@ async function fetchHttpJson<T>(
   }
 }
 
-export async function fetchBrowserJson<T>(
-  url: string,
-  init?: RequestInit & { timeoutMs?: number },
-): Promise<T> {
+export async function fetchBrowserJson<T>(url: string, init?: BrowserFetchInit): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
   try {
     if (isAbsoluteHttp(url)) {
-      return await fetchHttpJson<T>(url, { ...init, timeoutMs });
+      const headers = buildAuthHeaders(init?.headers, init?.authToken?.trim());
+      return await fetchHttpJson<T>(url, { ...init, headers, timeoutMs });
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {

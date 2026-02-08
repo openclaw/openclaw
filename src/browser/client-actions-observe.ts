@@ -20,7 +20,7 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
 
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
-  opts: { level?: string; targetId?: string; profile?: string } = {},
+  opts: { level?: string; targetId?: string; profile?: string; authToken?: string } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
   const q = new URLSearchParams();
   if (opts.level) {
@@ -37,25 +37,29 @@ export async function browserConsoleMessages(
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
-  }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/console${suffix}`), {
+    timeoutMs: 20000,
+    authToken: opts.authToken,
+  });
 }
 
 export async function browserPdfSave(
   baseUrl: string | undefined,
-  opts: { targetId?: string; profile?: string } = {},
+  opts: { targetId?: string; profile?: string; authToken?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/pdf${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId }),
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }
 
 export async function browserPageErrors(
   baseUrl: string | undefined,
-  opts: { targetId?: string; clear?: boolean; profile?: string } = {},
+  opts: { targetId?: string; clear?: boolean; profile?: string; authToken?: string } = {},
 ): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
   const q = new URLSearchParams();
   if (opts.targetId) {
@@ -72,7 +76,10 @@ export async function browserPageErrors(
     ok: true;
     targetId: string;
     errors: BrowserPageError[];
-  }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/errors${suffix}`), {
+    timeoutMs: 20000,
+    authToken: opts.authToken,
+  });
 }
 
 export async function browserRequests(
@@ -82,6 +89,7 @@ export async function browserRequests(
     filter?: string;
     clear?: boolean;
     profile?: string;
+    authToken?: string;
   } = {},
 ): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
   const q = new URLSearchParams();
@@ -102,7 +110,10 @@ export async function browserRequests(
     ok: true;
     targetId: string;
     requests: BrowserNetworkRequest[];
-  }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/requests${suffix}`), {
+    timeoutMs: 20000,
+    authToken: opts.authToken,
+  });
 }
 
 export async function browserTraceStart(
@@ -113,6 +124,7 @@ export async function browserTraceStart(
     snapshots?: boolean;
     sources?: boolean;
     profile?: string;
+    authToken?: string;
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
@@ -125,32 +137,35 @@ export async function browserTraceStart(
       snapshots: opts.snapshots,
       sources: opts.sources,
     }),
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }
 
 export async function browserTraceStop(
   baseUrl: string | undefined,
-  opts: { targetId?: string; path?: string; profile?: string } = {},
+  opts: { targetId?: string; path?: string; profile?: string; authToken?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/trace/stop${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }
 
 export async function browserHighlight(
   baseUrl: string | undefined,
-  opts: { ref: string; targetId?: string; profile?: string },
+  opts: { ref: string; targetId?: string; profile?: string; authToken?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/highlight${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }
@@ -163,6 +178,7 @@ export async function browserResponseBody(
     timeoutMs?: number;
     maxChars?: number;
     profile?: string;
+    authToken?: string;
   },
 ): Promise<{
   ok: true;
@@ -195,6 +211,7 @@ export async function browserResponseBody(
       timeoutMs: opts.timeoutMs,
       maxChars: opts.maxChars,
     }),
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }

@@ -90,6 +90,11 @@ function buildProfileQuery(profile?: string): string {
   return profile ? `?profile=${encodeURIComponent(profile)}` : "";
 }
 
+type BrowserAuthOptions = {
+  profile?: string;
+  authToken?: string;
+};
+
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
@@ -100,49 +105,57 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
 
 export async function browserStatus(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
+    authToken: opts?.authToken,
     timeoutMs: 1500,
   });
 }
 
-export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]> {
+export async function browserProfiles(
+  baseUrl?: string,
+  opts?: { authToken?: string },
+): Promise<ProfileStatus[]> {
   const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
     withBaseUrl(baseUrl, `/profiles`),
     {
+      authToken: opts?.authToken,
       timeoutMs: 3000,
     },
   );
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(baseUrl?: string, opts?: BrowserAuthOptions): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
+    authToken: opts?.authToken,
     timeoutMs: 15000,
   });
 }
 
-export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStop(baseUrl?: string, opts?: BrowserAuthOptions): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
+    authToken: opts?.authToken,
     timeoutMs: 15000,
   });
 }
 
 export async function browserResetProfile(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<BrowserResetProfileResult> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserResetProfileResult>(
     withBaseUrl(baseUrl, `/reset-profile${q}`),
     {
       method: "POST",
+      authToken: opts?.authToken,
       timeoutMs: 20000,
     },
   );
@@ -164,6 +177,7 @@ export async function browserCreateProfile(
     color?: string;
     cdpUrl?: string;
     driver?: "openclaw" | "extension";
+    authToken?: string;
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(
@@ -177,6 +191,7 @@ export async function browserCreateProfile(
         cdpUrl: opts.cdpUrl,
         driver: opts.driver,
       }),
+      authToken: opts.authToken,
       timeoutMs: 10000,
     },
   );
@@ -191,11 +206,13 @@ export type BrowserDeleteProfileResult = {
 export async function browserDeleteProfile(
   baseUrl: string | undefined,
   profile: string,
+  opts?: { authToken?: string },
 ): Promise<BrowserDeleteProfileResult> {
   return await fetchBrowserJson<BrowserDeleteProfileResult>(
     withBaseUrl(baseUrl, `/profiles/${encodeURIComponent(profile)}`),
     {
       method: "DELETE",
+      authToken: opts?.authToken,
       timeoutMs: 20000,
     },
   );
@@ -203,12 +220,12 @@ export async function browserDeleteProfile(
 
 export async function browserTabs(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<BrowserTab[]> {
   const q = buildProfileQuery(opts?.profile);
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
     withBaseUrl(baseUrl, `/tabs${q}`),
-    { timeoutMs: 3000 },
+    { timeoutMs: 3000, authToken: opts?.authToken },
   );
   return res.tabs ?? [];
 }
@@ -216,13 +233,14 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
+    authToken: opts?.authToken,
     timeoutMs: 15000,
   });
 }
@@ -230,13 +248,14 @@ export async function browserOpenTab(
 export async function browserFocusTab(
   baseUrl: string | undefined,
   targetId: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/focus${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId }),
+    authToken: opts?.authToken,
     timeoutMs: 5000,
   });
 }
@@ -244,11 +263,12 @@ export async function browserFocusTab(
 export async function browserCloseTab(
   baseUrl: string | undefined,
   targetId: string,
-  opts?: { profile?: string },
+  opts?: BrowserAuthOptions,
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
     method: "DELETE",
+    authToken: opts?.authToken,
     timeoutMs: 5000,
   });
 }
@@ -259,6 +279,7 @@ export async function browserTabAction(
     action: "list" | "new" | "close" | "select";
     index?: number;
     profile?: string;
+    authToken?: string;
   },
 ): Promise<unknown> {
   const q = buildProfileQuery(opts.profile);
@@ -269,6 +290,7 @@ export async function browserTabAction(
       action: opts.action,
       index: opts.index,
     }),
+    authToken: opts.authToken,
     timeoutMs: 10_000,
   });
 }
@@ -289,6 +311,7 @@ export async function browserSnapshot(
     labels?: boolean;
     mode?: "efficient";
     profile?: string;
+    authToken?: string;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
@@ -330,6 +353,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
+    authToken: opts.authToken,
     timeoutMs: 20000,
   });
 }
