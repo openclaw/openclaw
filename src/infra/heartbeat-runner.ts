@@ -907,7 +907,8 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    const MAX_TIMEOUT = 2_147_483_647; // setTimeout max (2^31 - 1)
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT);
     state.timer = setTimeout(() => {
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
