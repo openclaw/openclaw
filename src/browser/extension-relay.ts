@@ -429,7 +429,14 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     const activateMatch = path.match(/^\/json\/activate\/(.+)$/);
     if (activateMatch && (req.method === "GET" || req.method === "PUT")) {
-      const targetId = decodeURIComponent(activateMatch[1] ?? "").trim();
+      let targetId: string;
+      try {
+        targetId = decodeURIComponent(activateMatch[1] ?? "").trim();
+      } catch {
+        res.writeHead(400);
+        res.end("invalid percent-encoding");
+        return;
+      }
       if (!targetId) {
         res.writeHead(400);
         res.end("targetId required");
@@ -453,7 +460,14 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     const closeMatch = path.match(/^\/json\/close\/(.+)$/);
     if (closeMatch && (req.method === "GET" || req.method === "PUT")) {
-      const targetId = decodeURIComponent(closeMatch[1] ?? "").trim();
+      let targetId: string;
+      try {
+        targetId = decodeURIComponent(closeMatch[1] ?? "").trim();
+      } catch {
+        res.writeHead(400);
+        res.end("invalid percent-encoding");
+        return;
+      }
       if (!targetId) {
         res.writeHead(400);
         res.end("targetId required");
