@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "inworld";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,17 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Inworld AI TTS configuration. */
+  inworld?: {
+    /** API key (Base64 encoded). Falls back to INWORLD_API_KEY env var. */
+    apiKey?: string;
+    /** Voice ID (e.g., "Dennis", "Johanna", "Pixie"). */
+    voiceId?: string;
+    /** Model variant: "inworld-tts-1" (faster) or "inworld-tts-1-max" (higher quality). */
+    modelId?: "inworld-tts-1" | "inworld-tts-1-max";
+    /** Output audio format. */
+    outputFormat?: "mp3" | "wav" | "opus";
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
