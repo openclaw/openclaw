@@ -1,6 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -274,11 +274,46 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+export type PinnedDispatcherOptions = {
+  /** HTTP/HTTPS proxy URL (e.g., "http://proxy.example.com:8080") */
+  proxyUrl?: string;
+};
+
+/**
+ * Create a dispatcher with DNS pinning for SSRF protection.
+ * Optionally routes through a proxy while maintaining DNS pinning.
+ *
+ * Note: When using a proxy, DNS pinning is applied via both `connect` (for HTTP)
+ * and `requestTls` (for HTTPS) to ensure SSRF protection regardless of protocol.
+ *
+ * ProxyAgent options used here require Undici 5.x+. The `requestTls` option
+ * is used for TLS connection options when connecting to the target through proxy.
+ * See: https://undici.nodejs.org/#/docs/api/ProxyAgent
+ */
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  options?: PinnedDispatcherOptions,
+): Dispatcher {
+  const connectOptions = {
+    lookup: pinned.lookup,
+  };
+
+  if (options?.proxyUrl) {
+    // ProxyAgent with custom lookup for DNS pinning through proxy.
+    // Apply pinning to both connect (HTTP) and requestTls (HTTPS) to
+    // ensure SSRF protection regardless of target protocol.
+    // Note: requestTls is documented in Undici 5.x+ for TLS options.
+    return new ProxyAgent({
+      uri: options.proxyUrl,
+      connect: connectOptions,
+      requestTls: {
+        lookup: pinned.lookup,
+      },
+    });
+  }
+
   return new Agent({
-    connect: {
-      lookup: pinned.lookup,
-    },
+    connect: connectOptions,
   });
 }
 
