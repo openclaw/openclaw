@@ -14,6 +14,51 @@ import {
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+
+const TRANSCRIPT_FALLBACK_MAX_ENTRIES = 20;
+const TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY = 500;
+
+/**
+ * Extract recent message text for fallback context when summarization fails.
+ * Provides raw transcript chunks so agent has SOME context rather than none.
+ */
+function extractRecentTranscriptContext(messages: AgentMessage[]): string {
+  const recentMessages = messages.slice(-TRANSCRIPT_FALLBACK_MAX_ENTRIES);
+  const lines: string[] = [];
+
+  for (const msg of recentMessages) {
+    const role = (msg as { role?: string }).role ?? "unknown";
+    let text = "";
+
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      // Handle array content (e.g., [{type: "text", text: "..."}])
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          "text" in block &&
+          typeof block.text === "string"
+        ) {
+          text += block.text + " ";
+        }
+      }
+      text = text.trim();
+    }
+
+    if (text) {
+      const truncated =
+        text.length > TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY
+          ? text.substring(0, TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY) + "..."
+          : text;
+      lines.push(`[${role}]: ${truncated}`);
+    }
+  }
+
+  return lines.join("\n");
+}
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -170,11 +215,24 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
+    // Helper to build transcript fallback when summarization can't run
+    const buildTranscriptFallback = (reason: string): string => {
+      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+      const transcriptContext = extractRecentTranscriptContext(allMessages);
+      console.warn(
+        `[compaction-safeguard] FALLBACK (${reason}): ${allMessages.length} messages, ${transcriptContext.length} chars extracted`,
+      );
+
+      return transcriptContext
+        ? `${FALLBACK_SUMMARY}\n\n## Recent Context (from transcript):\n${transcriptContext}${toolFailureSection}${fileOpsSummary}`
+        : fallbackSummary;
+    };
+
     const model = ctx.model;
     if (!model) {
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback("no model in ctx.model"),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
@@ -186,7 +244,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     if (!apiKey) {
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback(`no API key for model ${model.id ?? model}`),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
@@ -318,14 +376,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
-        `Compaction summarization failed; truncating history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      const errorMsg = error instanceof Error ? error.message : String(error);
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback(`summarization failed: ${errorMsg}`),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
