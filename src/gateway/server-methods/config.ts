@@ -35,6 +35,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
+import { sendGatewayRestartNotice } from "../restart-notice.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;
@@ -327,6 +328,13 @@ export const configHandlers: GatewayRequestHandlers = {
     } catch {
       sentinelPath = null;
     }
+    await sendGatewayRestartNotice({
+      cfg: snapshot.config,
+      sessionKey,
+      reason: "config.patch",
+      delayMs: restartDelayMs,
+    });
+
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.patch",
@@ -438,6 +446,13 @@ export const configHandlers: GatewayRequestHandlers = {
     } catch {
       sentinelPath = null;
     }
+    await sendGatewayRestartNotice({
+      cfg: snapshot.config,
+      sessionKey,
+      reason: "config.apply",
+      delayMs: restartDelayMs,
+    });
+
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.apply",

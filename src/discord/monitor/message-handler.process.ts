@@ -40,8 +40,49 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { DiscordStatusOutbox, resolveDiscordStatusOutboxConfig } from "./status-outbox.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
+
+export async function removeDiscordStatusReactions(params: {
+  channelId: string;
+  messageId: string;
+  emojis: string[];
+  rest: import("@buape/carbon").Client["rest"];
+}) {
+  const unique = Array.from(
+    new Set(params.emojis.map((e) => String(e ?? "").trim()).filter(Boolean)),
+  );
+  await Promise.all(
+    unique.map((emoji) =>
+      removeReactionDiscord(params.channelId, params.messageId, emoji, { rest: params.rest }).catch(
+        () => null,
+      ),
+    ),
+  );
+}
+
+export async function setDiscordStatusReaction(params: {
+  channelId: string;
+  messageId: string;
+  emoji: string;
+  allStateEmojis: string[];
+  rest: import("@buape/carbon").Client["rest"];
+}) {
+  const next = String(params.emoji ?? "").trim();
+  if (!next) {
+    return;
+  }
+  await removeDiscordStatusReactions({
+    channelId: params.channelId,
+    messageId: params.messageId,
+    emojis: params.allStateEmojis,
+    rest: params.rest,
+  });
+  await reactMessageDiscord(params.channelId, params.messageId, next, { rest: params.rest }).catch(
+    () => null,
+  );
+}
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
@@ -108,17 +149,49 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         shouldBypassMention,
       }),
     );
-  const ackReactionPromise = shouldAckReaction()
-    ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
-        rest: client.rest,
-      }).then(
-        () => true,
-        (err) => {
-          logVerbose(`discord react failed for channel ${message.channelId}: ${String(err)}`);
-          return false;
-        },
-      )
-    : null;
+
+  const statusCfg = discordConfig?.statusReactions;
+  const statusEnabled = statusCfg?.enabled === true;
+  const outboxCfg = resolveDiscordStatusOutboxConfig(cfg);
+  const outbox = outboxCfg.enabled ? new DiscordStatusOutbox() : null;
+  const statusWorking = (statusCfg?.working ?? "🤔").trim();
+  const statusDone = (statusCfg?.done ?? "👍").trim();
+  const statusError = (statusCfg?.error ?? "😢").trim();
+  const statusEmojis = [ackReaction, statusWorking, statusDone, statusError]
+    .map((e) => String(e ?? "").trim())
+    .filter(Boolean);
+
+  // If status reactions are enabled, keep exactly one “latest state” reaction.
+  // This is deterministic and does not involve the LLM.
+  let outboxState: "idle" | "working" | "done" | "error" = "idle";
+  if (statusEnabled && shouldAckReaction()) {
+    await setDiscordStatusReaction({
+      channelId: message.channelId,
+      messageId: message.id,
+      emoji: statusWorking,
+      allStateEmojis: statusEmojis,
+      rest: client.rest,
+    });
+    outbox?.upsertWorking({
+      messageId: message.id,
+      channelId: message.channelId,
+      replyToId: message.id,
+    });
+    outboxState = "working";
+  }
+
+  const ackReactionPromise =
+    !statusEnabled && shouldAckReaction()
+      ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
+          rest: client.rest,
+        }).then(
+          () => true,
+          (err) => {
+            logVerbose(`discord react failed for channel ${message.channelId}: ${String(err)}`);
+            return false;
+          },
+        )
+      : null;
 
   const fromLabel = isDirectMessage
     ? buildDirectLabel(author)
@@ -391,22 +464,60 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }).onReplyStart,
   });
 
-  const { queuedFinal, counts } = await dispatchInboundMessage({
-    ctx: ctxPayload,
-    cfg,
-    dispatcher,
-    replyOptions: {
-      ...replyOptions,
-      skillFilter: channelConfig?.skills,
-      disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
-          : undefined,
-      onModelSelected,
-    },
-  });
-  markDispatchIdle();
+  let queuedFinal: boolean;
+  let counts: { final: number };
+  try {
+    ({ queuedFinal, counts } = await dispatchInboundMessage({
+      ctx: ctxPayload,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        ...replyOptions,
+        skillFilter: channelConfig?.skills,
+        disableBlockStreaming:
+          typeof discordConfig?.blockStreaming === "boolean"
+            ? !discordConfig.blockStreaming
+            : undefined,
+        onModelSelected,
+      },
+    }));
+  } catch (err) {
+    if (statusEnabled && shouldAckReaction()) {
+      await setDiscordStatusReaction({
+        channelId: message.channelId,
+        messageId: message.id,
+        emoji: statusError,
+        allStateEmojis: statusEmojis,
+        rest: client.rest,
+      });
+      outbox?.markTerminal({ messageId: message.id, state: "error" });
+      outboxState = "error";
+    }
+    throw err;
+  } finally {
+    // Best-effort invariant: if we ever upserted a working outbox row for this message,
+    // we should never leave it in "working" after processing completes.
+    if (outboxState === "working") {
+      outbox?.markTerminal({ messageId: message.id, state: "done" });
+    }
+    markDispatchIdle();
+    outbox?.close();
+  }
+
   if (!queuedFinal) {
+    if (statusEnabled && shouldAckReaction()) {
+      await removeDiscordStatusReactions({
+        channelId: message.channelId,
+        messageId: message.id,
+        emojis: statusEmojis,
+        rest: client.rest,
+      });
+      // Critical: if we decided to not send a final reply (e.g. NO_REPLY),
+      // we must still close out the outbox entry so the watchdog doesn't
+      // misclassify it as an interrupted run.
+      outbox?.markTerminal({ messageId: message.id, state: "done" });
+      outboxState = "done";
+    }
     if (isGuildMessage) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
@@ -416,30 +527,50 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return;
   }
+
+  if (statusEnabled && shouldAckReaction()) {
+    await setDiscordStatusReaction({
+      channelId: message.channelId,
+      messageId: message.id,
+      emoji: statusDone,
+      allStateEmojis: statusEmojis,
+      rest: client.rest,
+    });
+    // Mark terminal after the reply pipeline completed without throwing.
+    // This is still best-effort (a hard restart can interrupt mid-run),
+    // and the outbox reconciliation on startup handles those cases.
+    outbox?.markTerminal({ messageId: message.id, state: "done" });
+    outboxState = "done";
+  }
+
   if (shouldLogVerbose()) {
     const finalCount = counts.final;
     logVerbose(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
-  removeAckReactionAfterReply({
-    removeAfterReply: removeAckAfterReply,
-    ackReactionPromise,
-    ackReactionValue: ackReaction,
-    remove: async () => {
-      await removeReactionDiscord(message.channelId, message.id, ackReaction, {
-        rest: client.rest,
-      });
-    },
-    onError: (err) => {
-      logAckFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: `${message.channelId}/${message.id}`,
-        error: err,
-      });
-    },
-  });
+
+  if (!statusEnabled) {
+    removeAckReactionAfterReply({
+      removeAfterReply: removeAckAfterReply,
+      ackReactionPromise,
+      ackReactionValue: ackReaction,
+      remove: async () => {
+        await removeReactionDiscord(message.channelId, message.id, ackReaction, {
+          rest: client.rest,
+        });
+      },
+      onError: (err) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: `${message.channelId}/${message.id}`,
+          error: err,
+        });
+      },
+    });
+  }
+
   if (isGuildMessage) {
     clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,

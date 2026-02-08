@@ -40,6 +40,11 @@ import {
   createDiscordCommandArgFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import {
+  DiscordStatusOutbox,
+  reconcileDiscordStatusOutbox,
+  resolveDiscordStatusOutboxConfig,
+} from "./status-outbox.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -585,6 +590,51 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+
+  // Deterministic reconciliation: if the gateway restarted mid-run after setting 🤔,
+  // reconcile stale outbox entries by flipping to 😢 and posting a fixed recovery line.
+  try {
+    const statusCfg = cfg.channels?.discord?.statusReactions;
+    const statusEnabled = statusCfg?.enabled === true;
+    const outboxCfg = resolveDiscordStatusOutboxConfig(cfg);
+    if (statusEnabled && outboxCfg.enabled) {
+      const ackReaction = cfg.messages?.ackReaction ?? "👀";
+      const allStateEmojis = [
+        ackReaction,
+        (statusCfg?.working ?? "🤔").trim(),
+        (statusCfg?.done ?? "👍").trim(),
+        (statusCfg?.error ?? "😢").trim(),
+      ]
+        .map((e) => String(e ?? "").trim())
+        .filter(Boolean);
+      const outbox = new DiscordStatusOutbox();
+      const errorEmoji = (statusCfg?.error ?? "😢").trim();
+      await reconcileDiscordStatusOutbox({
+        cfg,
+        outbox,
+        rest: client.rest,
+        token,
+        accountId: account.accountId,
+        errorEmoji,
+        allStateEmojis,
+        setErrorReaction: async ({ channelId, messageId }) => {
+          // Reuse the same one-state reaction semantics as the message handler.
+          // eslint-disable-next-line @typescript-eslint/no-shadow
+          const { setDiscordStatusReaction } = await import("./message-handler.process.js");
+          await setDiscordStatusReaction({
+            channelId,
+            messageId,
+            emoji: errorEmoji,
+            allStateEmojis,
+            rest: client.rest,
+          });
+        },
+      });
+      outbox.close();
+    }
+  } catch (err) {
+    runtime.log?.(warn(`discord outbox reconcile failed: ${String(err)}`));
+  }
 
   // Start exec approvals handler after client is ready
   if (execApprovalsHandler) {

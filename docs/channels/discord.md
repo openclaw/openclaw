@@ -317,6 +317,23 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 `messages.ackReactionScope`. Use `messages.removeAckAfterReply` to clear the
 ack reaction after the bot replies.
 
+### Deterministic status reactions (working/done/error)
+
+Discord can also maintain a single “latest state” reaction on inbound messages while the
+bot processes them. This is **deterministic** (no extra LLM calls/tokens) and uses Discord’s
+reaction API only.
+
+Configure under `channels.discord.statusReactions`:
+
+- `statusReactions.enabled`: enable status reactions (default: `false`).
+- `statusReactions.working`: reaction while handling (default: `🤔`).
+- `statusReactions.done`: reaction after a reply is delivered (default: `👍`).
+- `statusReactions.error`: reaction on failure (default: `😢`).
+
+When `statusReactions.enabled=true`, OpenClaw will **replace** the prior state reaction so there is
+at most **one** of these reactions on the message at a time. (The normal ack reaction is suppressed
+to avoid multiple reactions.)
+
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.
 - `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation. The wizard accepts usernames and resolves them to ids when the bot can search members.
