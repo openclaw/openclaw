@@ -18,6 +18,20 @@ Automatically saves session context to memory when you issue `/new`.
 openclaw hooks enable session-memory
 ```
 
+### 🧠 session-graphiti
+
+Store recent conversation excerpts for Graphiti sync when a session ends.
+
+Events: command:new, command:reset, command:stop
+What it does: Appends JSONL to <workspace>/memory/conversations.jsonl for the Graphiti sync job.
+Output: <workspace>/memory/conversations.jsonl
+
+Enable:
+
+```bash
+openclaw hooks enable session-graphiti
+```
+
 ### 📝 command-logger
 
 Logs all command events to a centralized audit file.
