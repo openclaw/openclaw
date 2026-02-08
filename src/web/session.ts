@@ -164,24 +164,47 @@ export async function createWaSocket(
   return sock;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+/** Default timeout (60s) for waiting on WhatsApp connection state changes. */
+const DEFAULT_WA_CONNECTION_TIMEOUT_MS = 60_000;
+
+export async function waitForWaConnection(
+  sock: ReturnType<typeof makeWASocket>,
+  timeoutMs: number = DEFAULT_WA_CONNECTION_TIMEOUT_MS,
+) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
     };
     const evWithOff = sock.ev as unknown as OffCapable;
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      evWithOff.off?.("connection.update", handler);
+    };
+
     const handler = (...args: unknown[]) => {
       const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
       if (update.connection === "open") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         resolve();
       }
       if (update.connection === "close") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         reject(update.lastDisconnect ?? new Error("Connection closed"));
       }
     };
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("WhatsApp connection timeout"));
+      }, timeoutMs);
+    }
 
     sock.ev.on("connection.update", handler);
   });
