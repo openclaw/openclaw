@@ -13,6 +13,7 @@ import type {
   SignalEventHandlerDeps,
 } from "./event-handler.types.js";
 import { logVerbose } from "../../globals.js";
+import { logWarn } from "../../logger.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
@@ -335,11 +336,11 @@ async function fetchStickerMedia(params: {
   deps: SignalEnhancementDeps;
 }): Promise<{ path: string; contentType?: string } | null> {
   const { sticker, senderRecipient, groupId, deps } = params;
-  logVerbose(`sticker data: ${JSON.stringify(sticker)}`);
+  logWarn(`signal: sticker data: ${JSON.stringify(sticker)}`);
 
   if (!sticker.attachment?.id) {
-    logVerbose(
-      `sticker has no attachment.id, packId=${sticker.packId}, stickerId=${sticker.stickerId}`,
+    logWarn(
+      `signal: sticker has no attachment.id, packId=${sticker.packId}, stickerId=${sticker.stickerId}`,
     );
     // Try getSticker RPC (packId + stickerId) → base64 decode → save to inbound/
     if (sticker.packId && typeof sticker.stickerId === "number") {
@@ -363,7 +364,7 @@ async function fetchStickerMedia(params: {
           return { path: saved.path, contentType: saved.contentType };
         }
       } catch (err) {
-        logVerbose(`sticker fetch via packId failed: ${String(err)}`);
+        logWarn(`signal: sticker fetch via packId failed: ${String(err)}`);
       }
     }
     return null;
@@ -383,7 +384,7 @@ async function fetchStickerMedia(params: {
       maxBytes: deps.mediaMaxBytes,
     });
   } catch (err) {
-    logVerbose(`sticker fetch failed: ${String(err)}`);
+    logWarn(`signal: sticker fetch via attachment.id failed: ${String(err)}`);
     return null;
   }
 }
