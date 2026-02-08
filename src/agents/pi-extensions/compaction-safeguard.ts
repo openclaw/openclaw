@@ -20,6 +20,164 @@ const TURN_PREFIX_INSTRUCTIONS =
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
 
+/**
+ * Maximum number of recent messages to preserve images in.
+ * Images in older messages will be replaced with text placeholders.
+ * This prevents 413 errors from accumulated screenshots bloating the session.
+ */
+const KEEP_RECENT_IMAGES_COUNT = 3;
+
+// ============================================================================
+// Image Stripping Functions (413 Session Bloat Prevention)
+// ============================================================================
+
+type ContentBlock = { type?: string; data?: string; mimeType?: string; text?: string };
+
+function isImageBlock(block: unknown): block is ContentBlock & { type: "image"; data: string } {
+  if (!block || typeof block !== "object") return false;
+  const rec = block as ContentBlock;
+  return rec.type === "image" && typeof rec.data === "string";
+}
+
+function getMessageContent(msg: AgentMessage): unknown[] | null {
+  if (!msg || typeof msg !== "object") return null;
+  const rec = msg as { content?: unknown };
+  if (Array.isArray(rec.content)) return rec.content;
+  return null;
+}
+
+function hasImageContent(msg: AgentMessage): boolean {
+  const content = getMessageContent(msg);
+  if (!content) return false;
+  return content.some(isImageBlock);
+}
+
+function estimateImageDataBytes(data: string): number {
+  // Strip data URL prefix if present (e.g., "data:image/png;base64,")
+  let base64Data = data;
+  const dataUrlMatch = data.match(/^data:[^;]+;base64,/);
+  if (dataUrlMatch) {
+    base64Data = data.slice(dataUrlMatch[0].length);
+  }
+
+  // Remove padding characters and newlines which don't contribute to decoded size
+  const cleanData = base64Data.replace(/[=\s]/g, "");
+
+  // Base64 encoding overhead is ~4/3, so actual bytes = chars * 3/4
+  return Math.round((cleanData.length * 3) / 4);
+}
+
+function createImagePlaceholder(
+  block: ContentBlock & { type: "image"; data: string },
+): ContentBlock {
+  const sizeBytes = estimateImageDataBytes(block.data);
+  const sizeKb = Math.round(sizeBytes / 1024);
+  const mimeType = block.mimeType ?? "image";
+
+  // Preserve safe metadata fields from the original block, excluding data
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { data: _data, type: _type, text: _text, ...metadata } = block;
+
+  return {
+    ...metadata,
+    type: "text",
+    text: `[Image omitted during compaction: ${mimeType}, ~${sizeKb}KB]`,
+  };
+}
+
+function replaceImagesWithPlaceholders(msg: AgentMessage): AgentMessage {
+  const content = getMessageContent(msg);
+  if (!content) return msg;
+
+  let hasImages = false;
+  const newContent = content.map((block) => {
+    if (isImageBlock(block)) {
+      hasImages = true;
+      return createImagePlaceholder(block);
+    }
+    return block;
+  });
+
+  if (!hasImages) return msg;
+  return { ...msg, content: newContent } as AgentMessage;
+}
+
+/**
+ * Count images and estimate total image data size in messages.
+ */
+function countImagesInMessages(messages: AgentMessage[]): { count: number; totalBytes: number } {
+  let count = 0;
+  let totalBytes = 0;
+  for (const msg of messages) {
+    const content = getMessageContent(msg);
+    if (!content) continue;
+    for (const block of content) {
+      if (isImageBlock(block)) {
+        count++;
+        totalBytes += estimateImageDataBytes(block.data);
+      }
+    }
+  }
+  return { count, totalBytes };
+}
+
+/**
+ * Strip images from older messages, keeping only recent ones.
+ * This prevents sessions from bloating with accumulated screenshots,
+ * which can cause 413 Request Entity Too Large errors.
+ */
+function stripOldImagesFromMessages(
+  messages: AgentMessage[],
+  opts: { keepRecentCount?: number } = {},
+): {
+  messages: AgentMessage[];
+  strippedCount: number;
+  strippedBytes: number;
+} {
+  const keepRecentCount = opts.keepRecentCount ?? KEEP_RECENT_IMAGES_COUNT;
+
+  // Find indices of messages with images, from the end (most recent)
+  const indicesWithImages: number[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (hasImageContent(messages[i])) {
+      indicesWithImages.push(i);
+    }
+  }
+
+  // Keep images in the last N messages that have them
+  const keepIndices = new Set(indicesWithImages.slice(0, keepRecentCount));
+
+  let strippedCount = 0;
+  let strippedBytes = 0;
+  const result: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (keepIndices.has(i) || !hasImageContent(msg)) {
+      result.push(msg);
+      continue;
+    }
+
+    // Strip images from this message
+    const content = getMessageContent(msg);
+    if (content) {
+      for (const block of content) {
+        if (isImageBlock(block)) {
+          strippedCount++;
+          strippedBytes += estimateImageDataBytes(block.data);
+        }
+      }
+    }
+    result.push(replaceImagesWithPlaceholders(msg));
+  }
+
+  return { messages: result, strippedCount, strippedBytes };
+}
+
+// ============================================================================
+// Tool Failure Tracking
+// ============================================================================
+
 type ToolFailure = {
   toolCallId: string;
   toolName: string;
@@ -203,6 +361,45 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
+      // === IMAGE STRIPPING (prevents 413 session bloat) ===
+      // Strip images from older messages before summarization to reduce payload size.
+      // This addresses the issue where accumulated screenshots cause 413 Request Entity
+      // Too Large errors by replacing old image data with lightweight text placeholders.
+      //
+      // Important: We must strip from BOTH messagesToSummarize AND turnPrefixMessages,
+      // with the "keep N most recent" logic applied across the combined list (since
+      // turnPrefixMessages come after messagesToSummarize chronologically).
+      const allMessagesForImages = [...messagesToSummarize, ...turnPrefixMessages];
+      const imageStats = countImagesInMessages(allMessagesForImages);
+
+      let strippedTurnPrefixMessages = turnPrefixMessages;
+
+      if (imageStats.count > 0) {
+        const imagesMb = (imageStats.totalBytes / 1024 / 1024).toFixed(2);
+        console.log(
+          `Compaction safeguard: session has ${imageStats.count} images (~${imagesMb}MB). ` +
+            `Stripping old images, keeping ${KEEP_RECENT_IMAGES_COUNT} recent.`,
+        );
+
+        // Strip images across the combined list to ensure "keep N most recent" applies globally
+        const strippedResult = stripOldImagesFromMessages(allMessagesForImages, {
+          keepRecentCount: KEEP_RECENT_IMAGES_COUNT,
+        });
+
+        // Re-split the stripped messages back into the two arrays
+        const splitPoint = messagesToSummarize.length;
+        messagesToSummarize = strippedResult.messages.slice(0, splitPoint);
+        strippedTurnPrefixMessages = strippedResult.messages.slice(splitPoint);
+
+        if (strippedResult.strippedCount > 0) {
+          const strippedMb = (strippedResult.strippedBytes / 1024 / 1024).toFixed(2);
+          console.log(
+            `Compaction safeguard: stripped ${strippedResult.strippedCount} images (~${strippedMb}MB).`,
+          );
+        }
+      }
+      // === END IMAGE STRIPPING ===
+
       const tokensBefore =
         typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
           ? preparation.tokensBefore
@@ -212,7 +409,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       if (tokensBefore !== undefined) {
         const summarizableTokens =
-          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+          estimateMessagesTokens(messagesToSummarize) +
+          estimateMessagesTokens(strippedTurnPrefixMessages);
         const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
         // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
         const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
@@ -269,7 +467,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
 
       // Use adaptive chunk ratio based on message sizes
-      const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const allMessages = [...messagesToSummarize, ...strippedTurnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
@@ -291,9 +489,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
 
       let summary = historySummary;
-      if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+      if (preparation.isSplitTurn && strippedTurnPrefixMessages.length > 0) {
         const prefixSummary = await summarizeInStages({
-          messages: turnPrefixMessages,
+          messages: strippedTurnPrefixMessages,
           model,
           apiKey,
           signal,
@@ -343,4 +541,12 @@ export const __testing = {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  // Image stripping functions (for 413 session bloat prevention)
+  stripOldImagesFromMessages,
+  countImagesInMessages,
+  replaceImagesWithPlaceholders,
+  createImagePlaceholder,
+  estimateImageDataBytes,
+  hasImageContent,
+  KEEP_RECENT_IMAGES_COUNT,
 } as const;
