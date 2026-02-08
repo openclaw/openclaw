@@ -1,0 +1,11 @@
+{
+  "id": "homeassistant",
+  "name": "Home Assistant",
+  "description": "Home Assistant tools (ping, entities, automations).",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

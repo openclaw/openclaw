@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "entity_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "semantic_type": { "type": "string" },
+          "control_model": { "type": "string" },
+          "smoke_test_safe": { "type": "boolean" },
+          "notes": { "type": "string" },
+          "ts": { "type": "string" }
+        }
+      }
+    },
+    "device_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "semantic_type": { "type": "string" },
+          "control_model": { "type": "string" },
+          "smoke_test_safe": { "type": "boolean" },
+          "notes": { "type": "string" },
+          "ts": { "type": "string" }
+        }
+      }
+    }
+  }
+}
