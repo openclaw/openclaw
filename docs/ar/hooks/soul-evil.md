@@ -1,0 +1,76 @@
+---
+summary: "خطاف SOUL Evil (استبدال SOUL.md بـ SOUL_EVIL.md)"
+read_when:
+  - "تريد تمكين خطاف SOUL Evil أو ضبطه"
+  - "تريد نافذة تطهير أو تبديل شخصية باحتمال عشوائي"
+title: "خطاف SOUL Evil"
+x-i18n:
+  source_path: hooks/soul-evil.md
+  source_hash: 32aba100712317d1
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:19Z
+---
+
+# خطاف SOUL Evil
+
+يقوم خطاف SOUL Evil باستبدال محتوى `SOUL.md` **المُحقَن** بـ `SOUL_EVIL.md` أثناء
+نافذة تطهير أو باحتمال عشوائي. وهو **لا** يعدّل الملفات على القرص.
+
+## كيف يعمل
+
+عند تشغيل `agent:bootstrap`، يمكن للخطاف استبدال محتوى `SOUL.md` في الذاكرة
+قبل تجميع موجه النظام. إذا كان `SOUL_EVIL.md` مفقودًا أو فارغًا،
+يسجّل OpenClaw تحذيرًا ويُبقي `SOUL.md` العادي.
+
+تشغيل الوكلاء الفرعيين لا **يتضمن** `SOUL.md` في ملفات التمهيد الخاصة بهم، لذلك
+لا يكون لهذا الخطاف أي تأثير على الوكلاء الفرعيين.
+
+## التمكين
+
+```bash
+openclaw hooks enable soul-evil
+```
+
+ثم اضبط التهيئة:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "soul-evil": {
+          "enabled": true,
+          "file": "SOUL_EVIL.md",
+          "chance": 0.1,
+          "purge": { "at": "21:00", "duration": "15m" }
+        }
+      }
+    }
+  }
+}
+```
+
+أنشئ `SOUL_EVIL.md` في جذر مساحة عمل الوكيل (بجوار `SOUL.md`).
+
+## الخيارات
+
+- `file` (سلسلة): اسم ملف SOUL بديل (الافتراضي: `SOUL_EVIL.md`)
+- `chance` (رقم 0–1): احتمال عشوائي لكل تشغيل لاستخدام `SOUL_EVIL.md`
+- `purge.at` (HH:mm): بداية التطهير اليومية (بنظام 24 ساعة)
+- `purge.duration` (مدة): طول النافذة (مثل `30s`، `10m`، `1h`)
+
+**الأولوية:** نافذة التطهير تتغلب على الاحتمال.
+
+**المنطقة الزمنية:** تستخدم `agents.defaults.userTimezone` عند تعيينها؛ وإلا تُستخدم المنطقة الزمنية للمضيف.
+
+## ملاحظات
+
+- لا تتم كتابة أو تعديل أي ملفات على القرص.
+- إذا لم يكن `SOUL.md` ضمن قائمة التمهيد، فلن يفعل الخطاف شيئًا.
+
+## انظر أيضًا
+
+- [Hooks](/automation/hooks)

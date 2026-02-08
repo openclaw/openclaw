@@ -1,0 +1,106 @@
+---
+summary: "OpenClaw がプロンプトコンテキストを構築し、トークン使用量とコストを報告する方法"
+read_when:
+  - トークン使用量、コスト、またはコンテキストウィンドウを説明する場合
+  - コンテキストの増加や圧縮の挙動をデバッグする場合
+title: "トークン使用量とコスト"
+x-i18n:
+  source_path: reference/token-use.md
+  source_hash: f8bfadb36b51830c
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:23:17Z
+---
+
+# トークン使用量 & コスト
+
+OpenClaw は文字数ではなく **トークン** を追跡します。トークンはモデル固有ですが、多くの OpenAI 系モデルでは、英語テキストで 1 トークンあたり平均約 4 文字です。
+
+## システムプロンプトの構築方法
+
+OpenClaw は実行のたびに独自のシステムプロンプトを組み立てます。これには次が含まれます。
+
+- ツール一覧 + 短い説明
+- Skills 一覧（メタデータのみ。指示は `read` によりオンデマンドで読み込まれます）
+- 自己更新の指示
+- ワークスペース + ブートストラップファイル（新規時は `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`）。大きなファイルは `agents.defaults.bootstrapMaxChars` により切り詰められます（デフォルト: 20000）。
+- 時刻（UTC + ユーザーのタイムゾーン）
+- 返信タグ + ハートビートの挙動
+- ランタイムのメタデータ（ホスト / OS / モデル / 思考）
+
+完全な内訳は [System Prompt](/concepts/system-prompt) を参照してください。
+
+## コンテキストウィンドウに含まれるもの
+
+モデルが受信するすべての内容がコンテキスト上限にカウントされます。
+
+- システムプロンプト（上記のすべてのセクション）
+- 会話履歴（ユーザー + アシスタントのメッセージ）
+- ツール呼び出しとツール結果
+- 添付 / 文字起こし（画像、音声、ファイル）
+- 圧縮サマリーとプルーニングの成果物
+- プロバイダーのラッパーや安全性ヘッダー（表示されませんが、カウントされます）
+
+実用的な内訳（注入されたファイル、ツール、Skills、システムプロンプトサイズごと）については `/context list` または `/context detail` を使用してください。 [Context](/concepts/context) も参照してください。
+
+## 現在のトークン使用量を確認する方法
+
+チャット内で次を使用します。
+
+- `/status` → セッションのモデル、コンテキスト使用量、直前の応答の入出力トークン、**推定コスト**（API キーのみ）を表示する **絵文字が豊富なステータスカード**。
+- `/usage off|tokens|full` → すべての返信に **応答ごとの使用量フッター** を追加します。
+  - セッションごとに永続化されます（`responseUsage` として保存）。
+  - OAuth 認証では **コストは非表示**（トークンのみ）です。
+- `/usage cost` → OpenClaw のセッションログからローカルのコスト要約を表示します。
+
+その他の表示面:
+
+- **TUI / Web TUI:** `/status` + `/usage` がサポートされています。
+- **CLI:** `openclaw status --usage` と `openclaw channels list` は、プロバイダーのクォータウィンドウ（応答ごとのコストではありません）を表示します。
+
+## コスト見積もり（表示される場合）
+
+コストはモデルの価格設定 Config から見積もられます。
+
+```
+models.providers.<provider>.models[].cost
+```
+
+これらは `input`, `output`, `cacheRead`, および
+`cacheWrite` に対する **100 万トークンあたりの USD** です。価格設定が不足している場合、OpenClaw はトークンのみを表示します。OAuth トークンではドル建てコストは表示されません。
+
+## キャッシュ TTL とプルーニングの影響
+
+プロバイダーのプロンプトキャッシュは、キャッシュ TTL のウィンドウ内でのみ適用されます。OpenClaw は任意で **cache-ttl プルーニング** を実行できます。これは、キャッシュ TTL が期限切れになったらセッションをプルーニングし、その後キャッシュウィンドウをリセットして、以降のリクエストでフル履歴を再キャッシュする代わりに、最新のキャッシュ済みコンテキストを再利用できるようにします。これにより、セッションが TTL を超えてアイドル状態になった場合でも、キャッシュ書き込みコストを低く抑えられます。
+
+設定は [Gateway configuration](/gateway/configuration) で行い、挙動の詳細は [Session pruning](/concepts/session-pruning) を参照してください。
+
+ハートビートは、アイドルの間もキャッシュを **ウォーム** に保つことができます。モデルのキャッシュ TTL が `1h` の場合、ハートビート間隔をそれより少し短く（例: `55m`）設定すると、フルプロンプトの再キャッシュを回避でき、キャッシュ書き込みコストを削減できます。
+
+Anthropic API の価格設定では、キャッシュの読み取りは入力トークンより大幅に安価で、キャッシュの書き込みはより高い乗数で課金されます。最新のレートと TTL 乗数については、Anthropic のプロンプトキャッシュ価格設定を参照してください:
+[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+
+### 例: ハートビートで 1 時間のキャッシュをウォームに保つ
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "anthropic/claude-opus-4-6"
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          cacheRetention: "long"
+    heartbeat:
+      every: "55m"
+```
+
+## トークン圧迫を減らすためのヒント
+
+- 長いセッションを要約するには `/compact` を使用します。
+- ワークフロー内で大きなツール出力をトリミングします。
+- Skills の説明は短く保ちます（Skills 一覧はプロンプトに注入されます）。
+- 冗長で探索的な作業には、より小さなモデルを優先します。
+
+Skills 一覧の正確なオーバーヘッド計算式については [Skills](/tools/skills) を参照してください。

@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Kom igång"
+  },
+  {
+    "source": "Quick start",
+    "target": "Snabbstart"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Snabbstart"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Förutsättningar"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Config",
+    "target": "Konfig"
+  },
+  {
+    "source": "Config snippet",
+    "target": "Konfigutdrag"
+  },
+  {
+    "source": "Setup",
+    "target": "Konfigurering"
+  },
+  {
+    "source": "Install",
+    "target": "Installera"
+  },
+  {
+    "source": "Usage",
+    "target": "Användning"
+  },
+  {
+    "source": "Commands",
+    "target": "Kommandon"
+  },
+  {
+    "source": "Common commands",
+    "target": "Vanliga kommandon"
+  },
+  {
+    "source": "Overview",
+    "target": "Översikt"
+  },
+  {
+    "source": "Features",
+    "target": "Funktioner"
+  },
+  {
+    "source": "FAQ",
+    "target": "Vanliga frågor"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Felsökning"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "felsökning"
+  },
+  {
+    "source": "Notes",
+    "target": "Noteringar"
+  },
+  {
+    "source": "Note:",
+    "target": "Obs:"
+  },
+  {
+    "source": "Important:",
+    "target": "Viktigt:"
+  },
+  {
+    "source": "Summary",
+    "target": "Sammanfattning"
+  },
+  {
+    "source": "Related docs",
+    "target": "Relaterad dokumentation"
+  },
+  {
+    "source": "Next steps",
+    "target": "Nästa steg"
+  },
+  {
+    "source": "onboarding",
+    "target": "introduktion"
+  },
+  {
+    "source": "wizard",
+    "target": "guide"
+  },
+  {
+    "source": "environment variables",
+    "target": "miljövariabler"
+  },
+  {
+    "source": "Authentication",
+    "target": "Autentisering"
+  },
+  {
+    "source": "API key",
+    "target": "API-nyckel"
+  },
+  {
+    "source": "Output",
+    "target": "Utdata"
+  },
+  {
+    "source": "JSON output",
+    "target": "JSON-utdata"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (nätverksgateway)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (nätverksgateway)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway-värd"
+  },
+  {
+    "source": "gateway host",
+    "target": "gateway-värd"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway-RPC"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "Agent",
+    "target": "Agent"
+  },
+  {
+    "source": "channel",
+    "target": "kanal"
+  },
+  {
+    "source": "Channel",
+    "target": "Kanal"
+  },
+  {
+    "source": "session",
+    "target": "session"
+  },
+  {
+    "source": "provider",
+    "target": "leverantör"
+  },
+  {
+    "source": "model",
+    "target": "modell"
+  },
+  {
+    "source": "tool",
+    "target": "verktyg"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "block streaming",
+    "target": "blockstreaming"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery (upptäckt)"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Companion-appar"
+  },
+  {
+    "source": "expected keys",
+    "target": "förväntade nycklar"
+  },
+  {
+    "source": "allowlist",
+    "target": "tillåtelselista"
+  }
+]

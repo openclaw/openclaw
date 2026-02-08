@@ -1,0 +1,74 @@
+---
+summary: "ブラウザー自動化のための手動ログイン + X/Twitter への投稿"
+read_when:
+  - ブラウザー自動化のためにサイトへログインする必要がある場合
+  - X/Twitter に更新を投稿したい場合
+title: "ブラウザーログイン"
+x-i18n:
+  source_path: tools/browser-login.md
+  source_hash: c30faa9da6c6ef70
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:23:20Z
+---
+
+# ブラウザーログイン + X/Twitter への投稿
+
+## 手動ログイン（推奨）
+
+サイトでログインが必要な場合は、**ホスト** ブラウザーのプロファイル（openclaw ブラウザー）で **手動でサインイン** してください。
+
+モデルに認証情報を渡してはいけません。自動ログインはアンチボット防御を作動させることが多く、アカウントがロックされる可能性があります。
+
+メインのブラウザー関連ドキュメントに戻る: [Browser](/tools/browser)。
+
+## どの Chrome プロファイルが使用されますか？
+
+OpenClaw は **専用の Chrome プロファイル**（`openclaw`、UI はオレンジ色）を制御します。これは日常的に使用するブラウザーのプロファイルとは別です。
+
+アクセスするための簡単な方法は 2 つあります。
+
+1. **エージェントにブラウザーを開かせて**、その後ご自身でログインする。
+2. **CLI 経由で開く**:
+
+```bash
+openclaw browser start
+openclaw browser open https://x.com
+```
+
+複数のプロファイルがある場合は、`--browser-profile <name>` を渡してください（デフォルトは `openclaw` です）。
+
+## X/Twitter: 推奨フロー
+
+- **閲覧／検索／スレッド:** **ホスト** ブラウザーを使用（手動ログイン）。
+- **更新の投稿:** **ホスト** ブラウザーを使用（手動ログイン）。
+
+## サンドボックス化 + ホストブラウザーへのアクセス
+
+サンドボックス化されたブラウザーセッションは、ボット検出を **より起こしやすい** 傾向があります。X/Twitter（および他の厳格なサイト）では、**ホスト** ブラウザーを優先してください。
+
+エージェントがサンドボックス化されている場合、ブラウザーツールはデフォルトでサンドボックスを使用します。ホストの制御を許可するには、次を設定します。
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        browser: {
+          allowHostControl: true,
+        },
+      },
+    },
+  },
+}
+```
+
+その後、ホストブラウザーを対象にします。
+
+```bash
+openclaw browser open https://x.com --browser-profile openclaw --target host
+```
+
+または、更新を投稿するエージェントについてサンドボックス化を無効にしてください。

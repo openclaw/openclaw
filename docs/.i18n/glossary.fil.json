@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (gatewey)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (gatewey)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "host ng Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "host ng gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Pagsisimula"
+  },
+  {
+    "source": "Quick start",
+    "target": "Mabilis na pagsisimula"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Mabilis na setup (baguhan)"
+  },
+  {
+    "source": "Overview",
+    "target": "Pangkalahatang-ideya"
+  },
+  {
+    "source": "Features",
+    "target": "Mga tampok"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Pag-troubleshoot"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "pag-troubleshoot"
+  },
+  {
+    "source": "Notes",
+    "target": "Mga tala"
+  },
+  {
+    "source": "Examples",
+    "target": "Mga halimbawa"
+  },
+  {
+    "source": "Summary",
+    "target": "Buod"
+  },
+  {
+    "source": "Related docs",
+    "target": "Kaugnay na docs"
+  },
+  {
+    "source": "Next steps",
+    "target": "Mga susunod na hakbang"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Mga paunang kinakailangan"
+  },
+  {
+    "source": "Requirements",
+    "target": "Mga kinakailangan"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konpigurasyon"
+  },
+  {
+    "source": "Config",
+    "target": "Config"
+  },
+  {
+    "source": "Config snippet",
+    "target": "Snippet ng config"
+  },
+  {
+    "source": "environment variables",
+    "target": "mga environment variable"
+  },
+  {
+    "source": "Defaults",
+    "target": "Mga default"
+  },
+  {
+    "source": "Options",
+    "target": "Mga opsyon"
+  },
+  {
+    "source": "Setup",
+    "target": "Setup"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "Setup (mabilis na ruta)"
+  },
+  {
+    "source": "Steps",
+    "target": "Mga hakbang"
+  },
+  {
+    "source": "Install",
+    "target": "I-install"
+  },
+  {
+    "source": "Usage",
+    "target": "Paggamit"
+  },
+  {
+    "source": "Commands",
+    "target": "Mga command"
+  },
+  {
+    "source": "Output",
+    "target": "Output"
+  },
+  {
+    "source": "JSON output",
+    "target": "JSON output"
+  },
+  {
+    "source": "host",
+    "target": "host"
+  },
+  {
+    "source": "node",
+    "target": "node"
+  },
+  {
+    "source": "node host",
+    "target": "host ng node"
+  },
+  {
+    "source": "Access control",
+    "target": "Kontrol sa access"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "channel",
+    "target": "channel"
+  },
+  {
+    "source": "session",
+    "target": "session"
+  },
+  {
+    "source": "provider",
+    "target": "provider"
+  },
+  {
+    "source": "model",
+    "target": "model"
+  },
+  {
+    "source": "tool",
+    "target": "tool"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "block streaming",
+    "target": "block streaming"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Companion apps"
+  },
+  {
+    "source": "expected keys",
+    "target": "inaasahang mga key"
+  }
+]

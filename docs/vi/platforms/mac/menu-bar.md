@@ -1,0 +1,88 @@
+---
+summary: "Logic trạng thái menu bar và những gì hiển thị cho người dùng"
+read_when:
+  - Điều chỉnh UI menu mac hoặc logic trạng thái
+title: "Menu Bar"
+x-i18n:
+  source_path: platforms/mac/menu-bar.md
+  source_hash: 8eb73c0e671a76aa
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:39:45Z
+---
+
+# Logic Trạng Thái Menu Bar
+
+## Những gì được hiển thị
+
+- Chúng tôi hiển thị trạng thái làm việc hiện tại của tác tử trong biểu tượng menu bar và ở hàng trạng thái đầu tiên của menu.
+- Trạng thái sức khỏe bị ẩn khi đang có công việc; nó sẽ quay lại khi tất cả các phiên đều ở trạng thái nhàn rỗi.
+- Khối “Nodes” trong menu chỉ liệt kê **thiết bị** (các node đã ghép cặp qua `node.list`), không phải các mục client/presence.
+- Một mục “Usage” xuất hiện dưới Context khi có sẵn ảnh chụp mức sử dụng của nhà cung cấp.
+
+## Mô hình trạng thái
+
+- Phiên: các sự kiện đến với `runId` (theo từng lần chạy) kèm `sessionKey` trong payload. Phiên “chính” là khóa `main`; nếu không có, chúng tôi dùng phiên được cập nhật gần nhất.
+- Ưu tiên: phiên chính luôn thắng. Nếu phiên chính đang hoạt động, trạng thái của nó được hiển thị ngay. Nếu phiên chính nhàn rỗi, phiên không‑chính hoạt động gần nhất sẽ được hiển thị. Chúng tôi không đổi qua lại giữa chừng khi đang hoạt động; chỉ chuyển khi phiên hiện tại chuyển sang nhàn rỗi hoặc phiên chính bắt đầu hoạt động.
+- Loại hoạt động:
+  - `job`: thực thi lệnh mức cao (`state: started|streaming|done|error`).
+  - `tool`: `phase: start|result` với `toolName` và `meta/args`.
+
+## Enum IconState (Swift)
+
+- `idle`
+- `workingMain(ActivityKind)`
+- `workingOther(ActivityKind)`
+- `overridden(ActivityKind)` (ghi đè debug)
+
+### ActivityKind → glyph
+
+- `exec` → 💻
+- `read` → 📄
+- `write` → ✍️
+- `edit` → 📝
+- `attach` → 📎
+- default → 🛠️
+
+### Ánh xạ hiển thị
+
+- `idle`: critter bình thường.
+- `workingMain`: huy hiệu có glyph, màu đầy đủ, hoạt ảnh chân “đang làm việc”.
+- `workingOther`: huy hiệu có glyph, màu dịu, không chạy.
+- `overridden`: dùng glyph/màu đã chọn bất kể hoạt động.
+
+## Văn bản hàng trạng thái (menu)
+
+- Khi đang có công việc: `<Session role> · <activity label>`
+  - Ví dụ: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/OpenClaw/AppState.swift`.
+- Khi nhàn rỗi: quay về tóm tắt sức khỏe.
+
+## Thu nhận sự kiện
+
+- Nguồn: các sự kiện kênh điều khiển `agent` (`ControlChannel.handleAgentEvent`).
+- Trường được phân tích:
+  - `stream: "job"` với `data.state` cho bắt đầu/kết thúc.
+  - `stream: "tool"` với `data.phase`, `name`, tùy chọn `meta`/`args`.
+- Nhãn:
+  - `exec`: dòng đầu của `args.command`.
+  - `read`/`write`: đường dẫn rút gọn.
+  - `edit`: đường dẫn cộng với loại thay đổi suy luận từ `meta`/số lượng diff.
+  - fallback: tên công cụ.
+
+## Ghi đè debug
+
+- Settings ▸ Debug ▸ bộ chọn “Icon override”:
+  - `System (auto)` (mặc định)
+  - `Working: main` (theo loại công cụ)
+  - `Working: other` (theo loại công cụ)
+  - `Idle`
+- Lưu qua `@AppStorage("iconOverride")`; ánh xạ tới `IconState.overridden`.
+
+## Danh sách kiểm tra kiểm thử
+
+- Kích hoạt job của phiên chính: xác minh biểu tượng chuyển ngay và hàng trạng thái hiển thị nhãn của phiên chính.
+- Kích hoạt job của phiên không‑chính khi phiên chính nhàn rỗi: biểu tượng/trạng thái hiển thị phiên không‑chính; giữ ổn định cho đến khi hoàn tất.
+- Bắt đầu phiên chính khi phiên khác đang hoạt động: biểu tượng chuyển sang phiên chính ngay lập tức.
+- Các đợt công cụ nhanh: đảm bảo huy hiệu không nhấp nháy (TTL ân hạn trên kết quả công cụ).
+- Hàng sức khỏe xuất hiện lại khi tất cả các phiên đều nhàn rỗi.

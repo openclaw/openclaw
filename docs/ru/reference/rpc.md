@@ -1,0 +1,50 @@
+---
+summary: "RPC-адаптеры для внешних CLI (signal-cli, legacy imsg) и паттерны шлюзов"
+read_when:
+  - Добавление или изменение интеграций внешних CLI
+  - Отладка RPC-адаптеров (signal-cli, imsg)
+title: "RPC-адаптеры"
+x-i18n:
+  source_path: reference/rpc.md
+  source_hash: 06dc6b97184cc704
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:55Z
+---
+
+# RPC-адаптеры
+
+OpenClaw интегрирует внешние CLI через JSON-RPC. В настоящее время используются два паттерна.
+
+## Паттерн A: HTTP-демон (signal-cli)
+
+- `signal-cli` работает как демон с JSON-RPC поверх HTTP.
+- Поток событий — SSE (`/api/v1/events`).
+- Проверка работоспособности: `/api/v1/check`.
+- Жизненным циклом управляет OpenClaw, когда `channels.signal.autoStart=true`.
+
+См. [Signal](/channels/signal) для настройки и эндпоинтов.
+
+## Паттерн B: дочерний процесс со stdio (legacy: imsg)
+
+> **Примечание:** Для новых настроек iMessage используйте [BlueBubbles](/channels/bluebubbles).
+
+- OpenClaw запускает `imsg rpc` как дочерний процесс (устаревшая интеграция iMessage).
+- JSON-RPC — построчно через stdin/stdout (один JSON-объект на строку).
+- TCP-порт не используется, демон не требуется.
+
+Используемые основные методы:
+
+- `watch.subscribe` → уведомления (`method: "message"`)
+- `watch.unsubscribe`
+- `send`
+- `chats.list` (проверка/диагностика)
+
+См. [iMessage](/channels/imessage) для устаревшей настройки и адресации (предпочтительно `chat_id`).
+
+## Рекомендации по адаптерам
+
+- Gateway (шлюз) владеет процессом (запуск/остановка привязаны к жизненному циклу провайдера).
+- Делайте RPC-клиенты устойчивыми: тайм-ауты, перезапуск при завершении.
+- Отдавайте предпочтение стабильным идентификаторам (например, `chat_id`), а не отображаемым строкам.

@@ -1,0 +1,33 @@
+---
+summary: "Справочник CLI для `openclaw status` (диагностика, пробы, снимки использования)"
+read_when:
+  - Вам нужна быстрая диагностика состояния каналов и недавних получателей сеансов
+  - Вам нужен вставляемый «all»‑статус для отладки
+title: "status"
+x-i18n:
+  source_path: cli/status.md
+  source_hash: 2bbf5579c48034fc
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:55:21Z
+---
+
+# `openclaw status`
+
+Диагностика для каналов и сеансов.
+
+```bash
+openclaw status
+openclaw status --all
+openclaw status --deep
+openclaw status --usage
+```
+
+Примечания:
+
+- `--deep` выполняет живые пробы (WhatsApp Web + Telegram + Discord + Google Chat + Slack + Signal).
+- Вывод включает хранилища сеансов для каждого агента, если настроено несколько агентов.
+- Обзор включает состояние установки/выполнения сервиса Gateway (шлюз) и хоста узла, когда доступно.
+- Обзор включает канал обновлений и git SHA (для сборок из исходников).
+- Информация об обновлениях отображается в разделе «Обзор»; если обновление доступно, статус выводит подсказку запустить `openclaw update` (см. [Updating](/install/updating)).

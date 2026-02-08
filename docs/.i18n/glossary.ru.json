@@ -1,0 +1,674 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (шлюз)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (шлюз)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "хост шлюза Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "хост шлюза Gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC шлюза Gateway"
+  },
+  {
+    "source": "Configuration",
+    "target": "Конфигурация"
+  },
+  {
+    "source": "Config",
+    "target": "Конфиг"
+  },
+  {
+    "source": "Config snippet",
+    "target": "фрагмент конфига"
+  },
+  {
+    "source": "Config writes",
+    "target": "запись конфига"
+  },
+  {
+    "source": "environment variables",
+    "target": "переменные окружения"
+  },
+  {
+    "source": "Setup",
+    "target": "Настройка"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "Настройка (быстрый путь)"
+  },
+  {
+    "source": "Quick start",
+    "target": "Быстрый старт"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Быстрый старт"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Быстрая настройка (для начинающих)"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Начало работы"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Предварительные требования"
+  },
+  {
+    "source": "Prereqs",
+    "target": "Предварительные требования"
+  },
+  {
+    "source": "Requirements",
+    "target": "Требования"
+  },
+  {
+    "source": "Install",
+    "target": "Установка"
+  },
+  {
+    "source": "Usage",
+    "target": "Использование"
+  },
+  {
+    "source": "Commands",
+    "target": "Команды"
+  },
+  {
+    "source": "Common commands",
+    "target": "Часто используемые команды"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI:",
+    "target": "CLI:"
+  },
+  {
+    "source": "CLI setup",
+    "target": "настройка CLI"
+  },
+  {
+    "source": "Tests",
+    "target": "Тесты"
+  },
+  {
+    "source": "Testing",
+    "target": "Тестирование"
+  },
+  {
+    "source": "Manual Testing",
+    "target": "Ручное тестирование"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Устранение неполадок"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ"
+  },
+  {
+    "source": "Overview",
+    "target": "Обзор"
+  },
+  {
+    "source": "Summary",
+    "target": "Краткое резюме"
+  },
+  {
+    "source": "Features",
+    "target": "Возможности"
+  },
+  {
+    "source": "Goals",
+    "target": "Цели"
+  },
+  {
+    "source": "Goal",
+    "target": "Цель"
+  },
+  {
+    "source": "Non-goals",
+    "target": "Не цели"
+  },
+  {
+    "source": "How it works",
+    "target": "Как это работает"
+  },
+  {
+    "source": "How It Works",
+    "target": "Как это работает"
+  },
+  {
+    "source": "How it works (behavior)",
+    "target": "Как это работает (поведение)"
+  },
+  {
+    "source": "What it is",
+    "target": "Что это такое"
+  },
+  {
+    "source": "What it does",
+    "target": "Что это делает"
+  },
+  {
+    "source": "Steps",
+    "target": "Шаги"
+  },
+  {
+    "source": "Next steps",
+    "target": "Дальнейшие шаги"
+  },
+  {
+    "source": "Notes",
+    "target": "Примечания"
+  },
+  {
+    "source": "Notes:",
+    "target": "Примечания:"
+  },
+  {
+    "source": "Note:",
+    "target": "Примечание:"
+  },
+  {
+    "source": "Tip:",
+    "target": "Совет:"
+  },
+  {
+    "source": "Important:",
+    "target": "Важно:"
+  },
+  {
+    "source": "Recommended:",
+    "target": "Рекомендуется:"
+  },
+  {
+    "source": "See Also",
+    "target": "См. также"
+  },
+  {
+    "source": "See:",
+    "target": "См.:"
+  },
+  {
+    "source": "Related",
+    "target": "Связанное"
+  },
+  {
+    "source": "Related docs",
+    "target": "Связанная документация"
+  },
+  {
+    "source": "References",
+    "target": "Ссылки"
+  },
+  {
+    "source": "Examples",
+    "target": "Примеры"
+  },
+  {
+    "source": "Example",
+    "target": "Пример"
+  },
+  {
+    "source": "Output",
+    "target": "Вывод"
+  },
+  {
+    "source": "Output:",
+    "target": "Вывод:"
+  },
+  {
+    "source": "JSON output",
+    "target": "вывод в формате JSON"
+  },
+  {
+    "source": "errors",
+    "target": "ошибки"
+  },
+  {
+    "source": "Fix:",
+    "target": "Исправление:"
+  },
+  {
+    "source": "Reset",
+    "target": "Сброс"
+  },
+  {
+    "source": "Enable",
+    "target": "Включить"
+  },
+  {
+    "source": "disabled",
+    "target": "отключено"
+  },
+  {
+    "source": "off",
+    "target": "выкл."
+  },
+  {
+    "source": "off by default",
+    "target": "по умолчанию выключено"
+  },
+  {
+    "source": "disabled by default",
+    "target": "по умолчанию отключено"
+  },
+  {
+    "source": "optional",
+    "target": "необязательно"
+  },
+  {
+    "source": "must",
+    "target": "обязательно"
+  },
+  {
+    "source": "not recommended",
+    "target": "не рекомендуется"
+  },
+  {
+    "source": "Options",
+    "target": "Параметры"
+  },
+  {
+    "source": "Options:",
+    "target": "Параметры:"
+  },
+  {
+    "source": "Limits",
+    "target": "Ограничения"
+  },
+  {
+    "source": "Defaults",
+    "target": "Значения по умолчанию"
+  },
+  {
+    "source": "global",
+    "target": "глобально"
+  },
+  {
+    "source": "main",
+    "target": "основной"
+  },
+  {
+    "source": "Local",
+    "target": "Локально"
+  },
+  {
+    "source": "remote",
+    "target": "удалённый"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "удалённо через SSH"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH-туннель"
+  },
+  {
+    "source": "Transport",
+    "target": "Транспорт"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "Прямое подключение (ws/wss)"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Events",
+    "target": "События"
+  },
+  {
+    "source": "Heartbeats",
+    "target": "сигналы keepalive"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "индикаторы набора текста"
+  },
+  {
+    "source": "Compaction",
+    "target": "уплотнение"
+  },
+  {
+    "source": "Context",
+    "target": "Контекст"
+  },
+  {
+    "source": "Modes",
+    "target": "Режимы"
+  },
+  {
+    "source": "Security",
+    "target": "Безопасность"
+  },
+  {
+    "source": "Safety",
+    "target": "Безопасная работа"
+  },
+  {
+    "source": "Security notes",
+    "target": "примечания по безопасности"
+  },
+  {
+    "source": "Authentication",
+    "target": "Аутентификация"
+  },
+  {
+    "source": "API key",
+    "target": "ключ API"
+  },
+  {
+    "source": "Permissions",
+    "target": "Права доступа"
+  },
+  {
+    "source": "Access control",
+    "target": "Контроль доступа"
+  },
+  {
+    "source": "Access control (DMs)",
+    "target": "Контроль доступа (личные сообщения)"
+  },
+  {
+    "source": "Access control (DMs + groups)",
+    "target": "Контроль доступа (личные сообщения + группы)"
+  },
+  {
+    "source": "authorized senders",
+    "target": "авторизованные отправители"
+  },
+  {
+    "source": "allowlist",
+    "target": "список разрешённых"
+  },
+  {
+    "source": "Workspace",
+    "target": "Рабочее пространство"
+  },
+  {
+    "source": "Groups",
+    "target": "Группы"
+  },
+  {
+    "source": "DMs",
+    "target": "личные сообщения"
+  },
+  {
+    "source": "DM access",
+    "target": "доступ к личным сообщениям"
+  },
+  {
+    "source": "private",
+    "target": "приватный"
+  },
+  {
+    "source": "Bot",
+    "target": "Бот"
+  },
+  {
+    "source": "Bot Token",
+    "target": "токен бота"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "Intent «Message Content»"
+  },
+  {
+    "source": "Plugin required",
+    "target": "требуется плагин"
+  },
+  {
+    "source": "Sign-Off",
+    "target": "Подтверждение"
+  },
+  {
+    "source": "Impact",
+    "target": "Влияние"
+  },
+  {
+    "source": "Why",
+    "target": "Зачем"
+  },
+  {
+    "source": "Best for:",
+    "target": "Лучше всего подходит для:"
+  },
+  {
+    "source": "Name:",
+    "target": "Имя:"
+  },
+  {
+    "source": "Claim:",
+    "target": "Утверждение:"
+  },
+  {
+    "source": "Evidence",
+    "target": "Доказательства"
+  },
+  {
+    "source": "Delivery targets (CLI/cron)",
+    "target": "цели доставки (CLI/cron)"
+  },
+  {
+    "source": "Command ladder",
+    "target": "цепочка команд"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "подтверждения выполнения команд"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "pairing",
+    "target": "сопряжение"
+  },
+  {
+    "source": "unset",
+    "target": "сбросить (unset)"
+  },
+  {
+    "source": "per-agent",
+    "target": "для каждого агента"
+  },
+  {
+    "source": "agent",
+    "target": "агент"
+  },
+  {
+    "source": "channel",
+    "target": "канал"
+  },
+  {
+    "source": "session",
+    "target": "сеанс"
+  },
+  {
+    "source": "provider",
+    "target": "провайдер"
+  },
+  {
+    "source": "model",
+    "target": "модель"
+  },
+  {
+    "source": "tool",
+    "target": "инструмент"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery"
+  },
+  {
+    "source": "Companion apps",
+    "target": "сопутствующие приложения"
+  },
+  {
+    "source": "expected keys",
+    "target": "ожидаемые ключи"
+  },
+  {
+    "source": "block streaming",
+    "target": "потоковая передача блоками"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "изолированный (sandboxed)"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Node",
+    "target": "узел"
+  },
+  {
+    "source": "node",
+    "target": "узел"
+  },
+  {
+    "source": "Nodes",
+    "target": "узлы"
+  },
+  {
+    "source": "nodes",
+    "target": "узлы"
+  },
+  {
+    "source": "host",
+    "target": "хост"
+  },
+  {
+    "source": "node host",
+    "target": "хост узла"
+  },
+  {
+    "source": "macOS app",
+    "target": "приложение для macOS"
+  },
+  {
+    "source": "bundled",
+    "target": "в комплекте"
+  },
+  {
+    "source": "beta",
+    "target": "бета"
+  },
+  {
+    "source": "3 per channel",
+    "target": "3 на канал"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "MiniMax M2.1",
+    "target": "MiniMax M2.1"
+  },
+  {
+    "source": "Kimi Coding",
+    "target": "Kimi Coding"
+  },
+  {
+    "source": "Gemini CLI",
+    "target": "Gemini CLI"
+  },
+  {
+    "source": "Anthropic token (paste setup-token)",
+    "target": "токен Anthropic (вставьте setup-token)"
+  },
+  {
+    "source": "Community",
+    "target": "Сообщество"
+  }
+]

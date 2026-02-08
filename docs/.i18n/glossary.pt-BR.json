@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (gateway)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (gateway)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "host do Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "host do gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC do Gateway"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI setup",
+    "target": "configuração da CLI"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Primeiros passos"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Início Rápido"
+  },
+  {
+    "source": "Quick start",
+    "target": "Início rápido"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Solução de problemas"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "solução de problemas"
+  },
+  {
+    "source": "FAQ",
+    "target": "Perguntas frequentes"
+  },
+  {
+    "source": "Notes",
+    "target": "Notas"
+  },
+  {
+    "source": "Note:",
+    "target": "Nota:"
+  },
+  {
+    "source": "Examples",
+    "target": "Exemplos"
+  },
+  {
+    "source": "Summary",
+    "target": "Resumo"
+  },
+  {
+    "source": "Related docs",
+    "target": "Documentos relacionados"
+  },
+  {
+    "source": "See Also",
+    "target": "Veja também"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Pré-requisitos"
+  },
+  {
+    "source": "Requirements",
+    "target": "Requisitos"
+  },
+  {
+    "source": "Setup",
+    "target": "Configuração"
+  },
+  {
+    "source": "Configuration",
+    "target": "Configuração"
+  },
+  {
+    "source": "Config",
+    "target": "Configuração"
+  },
+  {
+    "source": "Config snippet",
+    "target": "trecho de configuração"
+  },
+  {
+    "source": "environment variables",
+    "target": "variáveis de ambiente"
+  },
+  {
+    "source": "env vars",
+    "target": "variáveis de ambiente"
+  },
+  {
+    "source": "onboarding",
+    "target": "integração inicial"
+  },
+  {
+    "source": "wizard",
+    "target": "assistente"
+  },
+  {
+    "source": "How it works",
+    "target": "Como funciona"
+  },
+  {
+    "source": "Events",
+    "target": "Eventos"
+  },
+  {
+    "source": "agent",
+    "target": "agente"
+  },
+  {
+    "source": "channel",
+    "target": "canal"
+  },
+  {
+    "source": "session",
+    "target": "sessão"
+  },
+  {
+    "source": "provider",
+    "target": "provedor"
+  },
+  {
+    "source": "model",
+    "target": "modelo"
+  },
+  {
+    "source": "tool",
+    "target": "ferramenta"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "em sandbox"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "Em sandbox"
+  },
+  {
+    "source": "block streaming",
+    "target": "streaming em blocos"
+  },
+  {
+    "source": "Discovery",
+    "target": "Descoberta"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Aplicativos complementares"
+  },
+  {
+    "source": "expected keys",
+    "target": "chaves esperadas"
+  },
+  {
+    "source": "allowlist",
+    "target": "lista de permissões"
+  },
+  {
+    "source": "Access control",
+    "target": "controle de acesso"
+  },
+  {
+    "source": "Authentication",
+    "target": "autenticação"
+  },
+  {
+    "source": "API key",
+    "target": "chave de API"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "túnel SSH"
+  }
+]

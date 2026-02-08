@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway（ゲートウェイ）"
+  },
+  {
+    "source": "gateway",
+    "target": "ゲートウェイ"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway ホスト"
+  },
+  {
+    "source": "gateway host",
+    "target": "ゲートウェイ ホスト"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC（リモートプロシージャコール）"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Getting Started",
+    "target": "はじめに"
+  },
+  {
+    "source": "Quick start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Quick Start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Features",
+    "target": "機能"
+  },
+  {
+    "source": "FAQ",
+    "target": "よくある質問"
+  },
+  {
+    "source": "onboarding",
+    "target": "オンボーディング"
+  },
+  {
+    "source": "wizard",
+    "target": "ウィザード"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "前提条件"
+  },
+  {
+    "source": "Requirements",
+    "target": "要件"
+  },
+  {
+    "source": "Setup",
+    "target": "セットアップ"
+  },
+  {
+    "source": "Configuration",
+    "target": "設定"
+  },
+  {
+    "source": "Config",
+    "target": "設定"
+  },
+  {
+    "source": "environment variables",
+    "target": "環境変数"
+  },
+  {
+    "source": "Notes",
+    "target": "注記"
+  },
+  {
+    "source": "Examples",
+    "target": "例"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "トラブルシューティング"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "トラブルシューティング"
+  },
+  {
+    "source": "agent",
+    "target": "エージェント"
+  },
+  {
+    "source": "channel",
+    "target": "チャンネル"
+  },
+  {
+    "source": "session",
+    "target": "セッション"
+  },
+  {
+    "source": "provider",
+    "target": "プロバイダー"
+  },
+  {
+    "source": "model",
+    "target": "モデル"
+  },
+  {
+    "source": "tool",
+    "target": "ツール"
+  },
+  {
+    "source": "node",
+    "target": "ノード"
+  },
+  {
+    "source": "Workspace",
+    "target": "ワークスペース"
+  },
+  {
+    "source": "Groups",
+    "target": "グループ"
+  },
+  {
+    "source": "DM",
+    "target": "ダイレクトメッセージ"
+  },
+  {
+    "source": "DMs",
+    "target": "ダイレクトメッセージ"
+  },
+  {
+    "source": "sandbox",
+    "target": "サンドボックス"
+  },
+  {
+    "source": "Sandbox",
+    "target": "サンドボックス"
+  },
+  {
+    "source": "sandboxing",
+    "target": "サンドボックス化"
+  },
+  {
+    "source": "sandboxed",
+    "target": "サンドボックス化された"
+  },
+  {
+    "source": "block streaming",
+    "target": "ブロックストリーミング"
+  },
+  {
+    "source": "Companion apps",
+    "target": "コンパニオンアプリ"
+  },
+  {
+    "source": "expected keys",
+    "target": "期待されるキー"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "実行承認"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "直接接続（ws/wss）"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH トンネル"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "SSH 経由のリモート接続"
+  },
+  {
+    "source": "Authentication",
+    "target": "認証"
+  },
+  {
+    "source": "API key",
+    "target": "API キー"
+  },
+  {
+    "source": "Access control",
+    "target": "アクセス制御"
+  },
+  {
+    "source": "allowlist",
+    "target": "許可リスト"
+  },
+  {
+    "source": "authorized senders",
+    "target": "許可された送信者"
+  },
+  {
+    "source": "Permissions",
+    "target": "権限"
+  },
+  {
+    "source": "Bot",
+    "target": "ボット"
+  },
+  {
+    "source": "Bot Token",
+    "target": "ボットトークン"
+  },
+  {
+    "source": "Safety",
+    "target": "安全性"
+  },
+  {
+    "source": "Security",
+    "target": "セキュリティ"
+  }
+]

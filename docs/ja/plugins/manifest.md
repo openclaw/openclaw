@@ -1,0 +1,70 @@
+---
+summary: "プラグインマニフェストおよび JSON Schema 要件（厳密な設定検証）"
+read_when:
+  - OpenClaw プラグインを構築している場合
+  - プラグイン設定スキーマを配布する、またはプラグイン検証エラーをデバッグする必要がある場合
+title: "プラグインマニフェスト"
+x-i18n:
+  source_path: plugins/manifest.md
+  source_hash: 234c7c0e77f22f5c
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:22:47Z
+---
+
+# プラグインマニフェスト（openclaw.plugin.json）
+
+すべてのプラグインは、**プラグインルート**に `openclaw.plugin.json` ファイルを**必ず**同梱する必要があります。
+OpenClaw は、このマニフェストを使用して、**プラグインコードを実行することなく**設定を検証します。
+マニフェストが欠落している、または無効な場合はプラグインエラーとして扱われ、設定検証がブロックされます。
+
+プラグインシステムの完全なガイドについては、次を参照してください: [Plugins](/tools/plugin)。
+
+## 必須フィールド
+
+```json
+{
+  "id": "voice-call",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+```
+
+必須キー:
+
+- `id`（string）: 正式なプラグイン ID。
+- `configSchema`（object）: プラグイン設定用の JSON Schema（インライン）。
+
+任意キー:
+
+- `kind`（string）: プラグイン種別（例: `"memory"`）。
+- `channels`（array）: このプラグインによって登録されるチャンネル ID（例: `["matrix"]`）。
+- `providers`（array）: このプラグインによって登録されるプロバイダー ID。
+- `skills`（array）: 読み込む Skill ディレクトリ（プラグインルートからの相対パス）。
+- `name`（string）: プラグインの表示名。
+- `description`（string）: プラグインの短い要約。
+- `uiHints`（object）: UI レンダリング用の設定フィールドのラベル／プレースホルダー／機密フラグ。
+- `version`（string）: プラグインのバージョン（情報用）。
+
+## JSON Schema 要件
+
+- **すべてのプラグインは JSON Schema を同梱する必要があります**。設定を受け付けない場合でも必要です。
+- 空のスキーマでも問題ありません（例: `{ "type": "object", "additionalProperties": false }`）。
+- スキーマは、実行時ではなく、設定の読み取り／書き込み時に検証されます。
+
+## 検証の挙動
+
+- 不明な `channels.*` キーは、対応するチャンネル ID がプラグインマニフェストで宣言されていない限り、**エラー**になります。
+- `plugins.entries.<id>`、`plugins.allow`、`plugins.deny`、および `plugins.slots.*` は、**検出可能**なプラグイン ID を参照している必要があります。不明な ID は **エラー** になります。
+- プラグインがインストールされていても、マニフェストやスキーマが破損している、または欠落している場合、検証は失敗し、Doctor はプラグインエラーを報告します。
+- プラグイン設定が存在するが、プラグインが**無効**な場合、設定は保持され、Doctor とログに **警告** が表示されます。
+
+## 注記
+
+- マニフェストは、ローカルファイルシステムからの読み込みを含め、**すべてのプラグインで必須**です。
+- 実行時にはプラグインモジュールは別途読み込まれます。マニフェストは、検出および検証のためだけに使用されます。
+- プラグインがネイティブモジュールに依存する場合は、ビルド手順および必要なパッケージマネージャーの許可リスト要件（例: pnpm `allow-build-scripts` - `pnpm rebuild <package>`）を文書化してください。

@@ -1,0 +1,474 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (گیٹ وے)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (گیٹ وے)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "گیٹ وے ہوسٹ"
+  },
+  {
+    "source": "gateway host",
+    "target": "گیٹ وے ہوسٹ"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI:",
+    "target": "CLI:"
+  },
+  {
+    "source": "CLI setup",
+    "target": "CLI سیٹ اپ"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Getting Started",
+    "target": "ابتدائی رہنمائی"
+  },
+  {
+    "source": "Quick Start",
+    "target": "فوری آغاز"
+  },
+  {
+    "source": "Quick start",
+    "target": "فوری آغاز"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "فوری سیٹ اپ (مبتدی)"
+  },
+  {
+    "source": "Overview",
+    "target": "جائزہ"
+  },
+  {
+    "source": "Summary",
+    "target": "خلاصہ"
+  },
+  {
+    "source": "Features",
+    "target": "خصوصیات"
+  },
+  {
+    "source": "FAQ",
+    "target": "عمومی سوالات"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "خرابیوں کا ازالہ"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "خرابیوں کا ازالہ"
+  },
+  {
+    "source": "Notes",
+    "target": "نوٹس"
+  },
+  {
+    "source": "Notes:",
+    "target": "نوٹس:"
+  },
+  {
+    "source": "Note:",
+    "target": "نوٹ:"
+  },
+  {
+    "source": "Examples",
+    "target": "مثالیں"
+  },
+  {
+    "source": "Example",
+    "target": "مثال"
+  },
+  {
+    "source": "Related docs",
+    "target": "متعلقہ دستاویزات"
+  },
+  {
+    "source": "Related",
+    "target": "متعلقہ"
+  },
+  {
+    "source": "See Also",
+    "target": "یہ بھی دیکھیں"
+  },
+  {
+    "source": "References",
+    "target": "مراجع"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "پیشگی تقاضے"
+  },
+  {
+    "source": "Prereqs",
+    "target": "پیشگی تقاضے"
+  },
+  {
+    "source": "Requirements",
+    "target": "ضروریات"
+  },
+  {
+    "source": "Setup",
+    "target": "سیٹ اپ"
+  },
+  {
+    "source": "setup",
+    "target": "سیٹ اپ"
+  },
+  {
+    "source": "Steps",
+    "target": "مراحل"
+  },
+  {
+    "source": "How it works",
+    "target": "یہ کیسے کام کرتا ہے"
+  },
+  {
+    "source": "How It Works",
+    "target": "یہ کیسے کام کرتا ہے"
+  },
+  {
+    "source": "What it does",
+    "target": "یہ کیا کرتا ہے"
+  },
+  {
+    "source": "What it is",
+    "target": "یہ کیا ہے"
+  },
+  {
+    "source": "Configuration",
+    "target": "کنفیگریشن"
+  },
+  {
+    "source": "Config",
+    "target": "کنفیگ"
+  },
+  {
+    "source": "config",
+    "target": "کنفیگ"
+  },
+  {
+    "source": "Config snippet",
+    "target": "کنفیگ ٹکڑا"
+  },
+  {
+    "source": "Config writes",
+    "target": "کنفیگ لکھائی"
+  },
+  {
+    "source": "environment variables",
+    "target": "ماحولیاتی متغیرات"
+  },
+  {
+    "source": "Environment",
+    "target": "ماحول"
+  },
+  {
+    "source": "Install",
+    "target": "انسٹال کریں"
+  },
+  {
+    "source": "Usage",
+    "target": "استعمال"
+  },
+  {
+    "source": "Commands",
+    "target": "کمانڈز"
+  },
+  {
+    "source": "Common commands",
+    "target": "عام کمانڈز"
+  },
+  {
+    "source": "Options",
+    "target": "اختیارات"
+  },
+  {
+    "source": "Options:",
+    "target": "اختیارات:"
+  },
+  {
+    "source": "optional",
+    "target": "اختیاری"
+  },
+  {
+    "source": "Enable",
+    "target": "فعال کریں"
+  },
+  {
+    "source": "disabled",
+    "target": "غیرفعال"
+  },
+  {
+    "source": "off",
+    "target": "بند"
+  },
+  {
+    "source": "off by default",
+    "target": "بطورِ طے شدہ بند"
+  },
+  {
+    "source": "disabled by default",
+    "target": "بطورِ طے شدہ غیرفعال"
+  },
+  {
+    "source": "Security",
+    "target": "سکیورٹی"
+  },
+  {
+    "source": "Safety",
+    "target": "حفاظت"
+  },
+  {
+    "source": "Security notes",
+    "target": "سکیورٹی نوٹس"
+  },
+  {
+    "source": "allowlist",
+    "target": "اجازت فہرست"
+  },
+  {
+    "source": "Access control",
+    "target": "رسائی کا کنٹرول"
+  },
+  {
+    "source": "authorized senders",
+    "target": "مجاز ارسال کنندگان"
+  },
+  {
+    "source": "DMs",
+    "target": "DMs (براہِ راست پیغامات)"
+  },
+  {
+    "source": "Groups",
+    "target": "گروپس"
+  },
+  {
+    "source": "Workspace",
+    "target": "ورک اسپیس"
+  },
+  {
+    "source": "agent",
+    "target": "ایجنٹ"
+  },
+  {
+    "source": "per-agent",
+    "target": "ہر ایجنٹ کے لیے"
+  },
+  {
+    "source": "channel",
+    "target": "چینل"
+  },
+  {
+    "source": "session",
+    "target": "سیشن"
+  },
+  {
+    "source": "provider",
+    "target": "فراہم کنندہ"
+  },
+  {
+    "source": "model",
+    "target": "ماڈل"
+  },
+  {
+    "source": "tool",
+    "target": "اوزار"
+  },
+  {
+    "source": "Transport",
+    "target": "ٹرانسپورٹ"
+  },
+  {
+    "source": "Events",
+    "target": "واقعات"
+  },
+  {
+    "source": "Context",
+    "target": "سیاق"
+  },
+  {
+    "source": "Errors",
+    "target": "غلطیاں"
+  },
+  {
+    "source": "errors",
+    "target": "غلطیاں"
+  },
+  {
+    "source": "Fix:",
+    "target": "حل:"
+  },
+  {
+    "source": "Tip:",
+    "target": "مشورہ:"
+  },
+  {
+    "source": "Important:",
+    "target": "اہم:"
+  },
+  {
+    "source": "Recommended:",
+    "target": "سفارش کردہ:"
+  },
+  {
+    "source": "must",
+    "target": "لازم"
+  },
+  {
+    "source": "Reset",
+    "target": "ری سیٹ"
+  },
+  {
+    "source": "Next steps",
+    "target": "اگلے اقدامات"
+  },
+  {
+    "source": "Authentication",
+    "target": "تصدیق"
+  },
+  {
+    "source": "API key",
+    "target": "API کلید"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token (سیٹ اپ ٹوکن)"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "براہِ راست (ws/wss)"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "SSH کے ذریعے ریموٹ"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH سرنگ"
+  },
+  {
+    "source": "JSON output",
+    "target": "JSON آؤٹ پٹ"
+  },
+  {
+    "source": "Output",
+    "target": "آؤٹ پٹ"
+  },
+  {
+    "source": "Output:",
+    "target": "آؤٹ پٹ:"
+  },
+  {
+    "source": "Tests",
+    "target": "ٹیسٹس"
+  },
+  {
+    "source": "Testing",
+    "target": "جانچ"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "ٹائپنگ اشارے"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "Message Content Intent (پیغام کے مواد کا انٹینٹ)"
+  },
+  {
+    "source": "Bot",
+    "target": "بوٹ"
+  },
+  {
+    "source": "Bot Token",
+    "target": "بوٹ ٹوکن"
+  },
+  {
+    "source": "Permissions",
+    "target": "اجازتیں"
+  },
+  {
+    "source": "pairing",
+    "target": "جوڑی بنانا"
+  },
+  {
+    "source": "Heartbeats",
+    "target": "ہارٹ بیٹس"
+  },
+  {
+    "source": "Compaction",
+    "target": "کمپیکشن"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "ایگزیک منظوریات"
+  },
+  {
+    "source": "Command ladder",
+    "target": "کمانڈ سیڑھی"
+  },
+  {
+    "source": "Discovery",
+    "target": "ڈسکوری"
+  },
+  {
+    "source": "Companion apps",
+    "target": "معاون ایپس"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  }
+]

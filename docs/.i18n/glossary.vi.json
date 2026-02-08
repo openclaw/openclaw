@@ -1,0 +1,270 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (cổng kết nối)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (cổng kết nối)"
+  },
+  {
+    "source": "gateway host",
+    "target": "máy chủ gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC của Gateway"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "cấu hình Skills"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Cấu hình Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Bắt đầu"
+  },
+  {
+    "source": "Getting started",
+    "target": "Bắt đầu"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Khởi động nhanh"
+  },
+  {
+    "source": "Quick start",
+    "target": "Khởi động nhanh"
+  },
+  {
+    "source": "Setup",
+    "target": "Thiết lập"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "Thiết lập (nhanh)"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Thiết lập nhanh (cho người mới)"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Điều kiện tiên quyết"
+  },
+  {
+    "source": "Requirements",
+    "target": "Yêu cầu"
+  },
+  {
+    "source": "Configuration",
+    "target": "Cấu hình"
+  },
+  {
+    "source": "Config",
+    "target": "Cấu hình"
+  },
+  {
+    "source": "environment variables",
+    "target": "biến môi trường"
+  },
+  {
+    "source": "environment variable",
+    "target": "biến môi trường"
+  },
+  {
+    "source": "env vars",
+    "target": "biến môi trường"
+  },
+  {
+    "source": "env var",
+    "target": "biến môi trường"
+  },
+  {
+    "source": "onboarding",
+    "target": "hướng dẫn ban đầu"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Hướng dẫn ban đầu"
+  },
+  {
+    "source": "Features",
+    "target": "Tính năng"
+  },
+  {
+    "source": "FAQ",
+    "target": "Câu hỏi thường gặp"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Xử lý sự cố"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "xử lý sự cố"
+  },
+  {
+    "source": "Notes",
+    "target": "Ghi chú"
+  },
+  {
+    "source": "Note:",
+    "target": "Lưu ý:"
+  },
+  {
+    "source": "Examples",
+    "target": "Ví dụ"
+  },
+  {
+    "source": "Example",
+    "target": "Ví dụ"
+  },
+  {
+    "source": "Summary",
+    "target": "Tóm tắt"
+  },
+  {
+    "source": "Overview",
+    "target": "Tổng quan"
+  },
+  {
+    "source": "See Also",
+    "target": "Xem thêm"
+  },
+  {
+    "source": "Next steps",
+    "target": "Bước tiếp theo"
+  },
+  {
+    "source": "Install",
+    "target": "Cài đặt"
+  },
+  {
+    "source": "Usage",
+    "target": "Cách dùng"
+  },
+  {
+    "source": "Commands",
+    "target": "Lệnh"
+  },
+  {
+    "source": "Output",
+    "target": "Đầu ra"
+  },
+  {
+    "source": "JSON output",
+    "target": "đầu ra JSON"
+  },
+  {
+    "source": "agent",
+    "target": "tác tử"
+  },
+  {
+    "source": "per-agent",
+    "target": "theo từng tác tử"
+  },
+  {
+    "source": "channel",
+    "target": "kênh"
+  },
+  {
+    "source": "session",
+    "target": "phiên"
+  },
+  {
+    "source": "provider",
+    "target": "nhà cung cấp"
+  },
+  {
+    "source": "model",
+    "target": "mô hình"
+  },
+  {
+    "source": "tool",
+    "target": "công cụ"
+  },
+  {
+    "source": "Discovery",
+    "target": "Khám phá"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Ứng dụng đồng hành"
+  },
+  {
+    "source": "expected keys",
+    "target": "khóa mong đợi"
+  },
+  {
+    "source": "allowlist",
+    "target": "danh sách cho phép"
+  },
+  {
+    "source": "Access control",
+    "target": "kiểm soát truy cập"
+  },
+  {
+    "source": "authorized senders",
+    "target": "người gửi được ủy quyền"
+  },
+  {
+    "source": "Authentication",
+    "target": "Xác thực"
+  },
+  {
+    "source": "API key",
+    "target": "khóa API"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "đường hầm SSH"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  }
+]

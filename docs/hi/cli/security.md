@@ -1,0 +1,33 @@
+---
+summary: "CLI संदर्भ `openclaw security` के लिए (सामान्य सुरक्षा जोखिमों का ऑडिट और सुधार)"
+read_when:
+  - आप कॉन्फ़िग/स्थिति पर त्वरित सुरक्षा ऑडिट चलाना चाहते हैं
+  - आप सुरक्षित “fix” सुझाव लागू करना चाहते हैं (chmod, डिफ़ॉल्ट्स को कड़ा करना)
+title: "सुरक्षा"
+x-i18n:
+  source_path: cli/security.md
+  source_hash: 96542b4784e53933
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:05Z
+---
+
+# `openclaw security`
+
+सुरक्षा टूल्स (ऑडिट + वैकल्पिक सुधार)।
+
+संबंधित:
+
+- सुरक्षा मार्गदर्शिका: [सुरक्षा](/gateway/security)
+
+## ऑडिट
+
+```bash
+openclaw security audit
+openclaw security audit --deep
+openclaw security audit --fix
+```
+
+जब कई DM प्रेषक मुख्य सत्र साझा करते हैं, तो ऑडिट चेतावनी देता है और साझा इनबॉक्स के लिए **secure DM mode**: `session.dmScope="per-channel-peer"` (या मल्टी-अकाउंट चैनलों के लिए `per-account-channel-peer`) की सिफ़ारिश करता है।
+यह तब भी चेतावनी देता है जब छोटे मॉडल (`<=300B`) sandboxing के बिना और वेब/ब्राउज़र टूल्स सक्षम होने के साथ उपयोग किए जाते हैं।

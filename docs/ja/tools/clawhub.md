@@ -1,0 +1,257 @@
+---
+summary: "ClawHub ガイド：公開 Skills レジストリと CLI ワークフロー"
+read_when:
+  - 新規ユーザーに ClawHub を紹介する場合
+  - Skills のインストール、検索、または公開を行う場合
+  - ClawHub CLI フラグと同期動作を説明する場合
+title: "ClawHub"
+x-i18n:
+  source_path: tools/clawhub.md
+  source_hash: b572473a11246357
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:23:42Z
+---
+
+# ClawHub
+
+ClawHub は **OpenClaw 向けの公開 Skill レジストリ**です。これは無料のサービスで、すべての Skills は公開され、オープンで、共有と再利用のために誰でも閲覧できます。Skill とは、`SKILL.md` ファイル（および補助的なテキストファイル）を含む単なるフォルダです。Web アプリで Skills を閲覧することも、CLI を使用して Skills の検索、インストール、更新、公開を行うこともできます。
+
+サイト: [clawhub.ai](https://clawhub.ai)
+
+## ClawHub とは
+
+- OpenClaw Skills のための公開レジストリです。
+- Skill バンドルとメタデータをバージョン管理して保存します。
+- 検索、タグ、利用シグナルのための発見面を提供します。
+
+## 仕組み
+
+1. ユーザーが Skill バンドル（ファイル + メタデータ）を公開します。
+2. ClawHub がバンドルを保存し、メタデータを解析してバージョンを割り当てます。
+3. レジストリが Skill を検索および発見のためにインデックス化します。
+4. ユーザーは OpenClaw 内で Skills を閲覧、ダウンロード、インストールします。
+
+## できること
+
+- 新しい Skills や既存 Skills の新バージョンを公開できます。
+- 名前、タグ、または検索によって Skills を発見できます。
+- Skill バンドルをダウンロードし、そのファイルを確認できます。
+- 不正または安全でない Skills を報告できます。
+- モデレーターであれば、非表示、再表示、削除、または BAN を行えます。
+
+## 対象ユーザー（初心者向け）
+
+OpenClaw エージェントに新しい機能を追加したい場合、ClawHub は Skills を見つけてインストールする最も簡単な方法です。バックエンドの仕組みを理解する必要はありません。次のことができます。
+
+- 平易な言葉で Skills を検索できます。
+- ワークスペースに Skill をインストールできます。
+- 1 つのコマンドで後から Skills を更新できます。
+- 自分の Skills を公開してバックアップできます。
+
+## クイックスタート（非技術者向け）
+
+1. CLI をインストールします（次のセクションを参照）。
+2. 必要なものを検索します:
+   - `clawhub search "calendar"`
+3. Skill をインストールします:
+   - `clawhub install <skill-slug>`
+4. 新しい OpenClaw セッションを開始し、新しい Skill を読み込ませます。
+
+## CLI のインストール
+
+いずれかを選択してください:
+
+```bash
+npm i -g clawhub
+```
+
+```bash
+pnpm add -g clawhub
+```
+
+## OpenClaw との統合方法
+
+デフォルトでは、CLI は Skills を現在の作業ディレクトリ配下の `./skills` にインストールします。OpenClaw ワークスペースが設定されている場合、`clawhub` は `--workdir`（または `CLAWHUB_WORKDIR`）で上書きしない限り、そのワークスペースにフォールバックします。OpenClaw はワークスペースの Skills を `<workspace>/skills` から読み込み、**次の** セッションでそれらを反映します。すでに `~/.openclaw/skills` やバンドルされた Skills を使用している場合でも、ワークスペースの Skills が優先されます。
+
+Skills の読み込み、共有、制御方法の詳細については、次を参照してください。
+[Skills](/tools/skills)
+
+## Skill システムの概要
+
+Skill とは、特定のタスクを実行する方法を OpenClaw に教える、バージョン管理されたファイルのバンドルです。公開のたびに新しいバージョンが作成され、レジストリは変更を監査できるようにバージョン履歴を保持します。
+
+一般的な Skill には次のものが含まれます。
+
+- 主な説明と使用方法を記載した `SKILL.md` ファイル。
+- Skill で使用されるオプションの設定、スクリプト、または補助ファイル。
+- タグ、概要、インストール要件などのメタデータ。
+
+ClawHub はメタデータを使用して発見性を高め、Skill の機能を安全に公開します。また、ランキングや可視性を改善するために、スターやダウンロード数などの利用シグナルも追跡します。
+
+## サービスが提供するもの（機能）
+
+- Skills とその `SKILL.md` コンテンツの **公開ブラウジング**。
+- キーワードだけでなく埋め込み（ベクトル検索）によって強化された **検索**。
+- semver、変更履歴、タグ（`latest` を含む）による **バージョン管理**。
+- バージョンごとの zip としての **ダウンロード**。
+- コミュニティフィードバックのための **スターとコメント**。
+- 承認や監査のための **モデレーション** フック。
+- 自動化やスクリプト向けの **CLI フレンドリーな API**。
+
+## セキュリティとモデレーション
+
+ClawHub はデフォルトでオープンです。誰でも Skills をアップロードできますが、公開するには GitHub アカウントが少なくとも 1 週間以上経過している必要があります。これにより、正当な貢献者を妨げることなく、悪用を抑制します。
+
+報告とモデレーション:
+
+- サインインしているユーザーであれば誰でも Skill を報告できます。
+- 報告理由は必須で、記録されます。
+- 各ユーザーは同時に最大 20 件のアクティブな報告を持てます。
+- 3 人以上の異なるユーザーから報告された Skills は、デフォルトで自動的に非表示になります。
+- モデレーターは非表示の Skills を確認し、再表示、削除、またはユーザーを BAN できます。
+- 報告機能の悪用はアカウント BAN につながる可能性があります。
+
+モデレーターになることに興味がありますか？OpenClaw Discord で質問し、モデレーターまたはメンテナーに連絡してください。
+
+## CLI コマンドとパラメータ
+
+グローバルオプション（すべてのコマンドに適用）:
+
+- `--workdir <dir>`: 作業ディレクトリ（デフォルト: 現在のディレクトリ。OpenClaw ワークスペースにフォールバック）。
+- `--dir <dir>`: workdir からの相対パスで指定する Skills ディレクトリ（デフォルト: `skills`）。
+- `--site <url>`: サイトのベース URL（ブラウザログイン）。
+- `--registry <url>`: レジストリ API のベース URL。
+- `--no-input`: プロンプトを無効化（非対話モード）。
+- `-V, --cli-version`: CLI バージョンを表示。
+
+認証:
+
+- `clawhub login`（ブラウザフロー）または `clawhub login --token <token>`
+- `clawhub logout`
+- `clawhub whoami`
+
+オプション:
+
+- `--token <token>`: API トークンを貼り付けます。
+- `--label <label>`: ブラウザログイントークン用に保存されるラベル（デフォルト: `CLI token`）。
+- `--no-browser`: ブラウザを開かない（`--token` が必要）。
+
+検索:
+
+- `clawhub search "query"`
+- `--limit <n>`: 最大結果数。
+
+インストール:
+
+- `clawhub install <slug>`
+- `--version <version>`: 特定のバージョンをインストールします。
+- `--force`: フォルダがすでに存在する場合に上書きします。
+
+更新:
+
+- `clawhub update <slug>`
+- `clawhub update --all`
+- `--version <version>`: 特定のバージョンに更新します（単一の slug のみ）。
+- `--force`: ローカルファイルが公開済みのどのバージョンとも一致しない場合に上書きします。
+
+一覧表示:
+
+- `clawhub list`（`.clawhub/lock.json` を読み取ります）
+
+公開:
+
+- `clawhub publish <path>`
+- `--slug <slug>`: Skill の slug。
+- `--name <name>`: 表示名。
+- `--version <version>`: semver バージョン。
+- `--changelog <text>`: 変更履歴テキスト（空でも可）。
+- `--tags <tags>`: カンマ区切りのタグ（デフォルト: `latest`）。
+
+削除 / 復元（所有者 / 管理者のみ）:
+
+- `clawhub delete <slug> --yes`
+- `clawhub undelete <slug> --yes`
+
+同期（ローカル Skills をスキャンし、新規 / 更新分を公開）:
+
+- `clawhub sync`
+- `--root <dir...>`: 追加のスキャンルート。
+- `--all`: すべてをプロンプトなしでアップロードします。
+- `--dry-run`: アップロードされる内容を表示します。
+- `--bump <type>`: 更新時の `patch|minor|major`（デフォルト: `patch`）。
+- `--changelog <text>`: 非対話モードでの更新用の変更履歴。
+- `--tags <tags>`: カンマ区切りのタグ（デフォルト: `latest`）。
+- `--concurrency <n>`: レジストリチェック数（デフォルト: 4）。
+
+## エージェント向けの一般的なワークフロー
+
+### Skills を検索する
+
+```bash
+clawhub search "postgres backups"
+```
+
+### 新しい Skills をダウンロードする
+
+```bash
+clawhub install my-skill-pack
+```
+
+### インストール済み Skills を更新する
+
+```bash
+clawhub update --all
+```
+
+### Skills をバックアップする（公開または同期）
+
+単一の Skill フォルダの場合:
+
+```bash
+clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
+```
+
+複数の Skills を一度にスキャンしてバックアップする場合:
+
+```bash
+clawhub sync --all
+```
+
+## 高度な詳細（技術的）
+
+### バージョニングとタグ
+
+- 各公開は新しい **semver** の `SkillVersion` を作成します。
+- `latest` のようなタグは特定のバージョンを指し、タグを移動することでロールバックできます。
+- 変更履歴はバージョンごとに付与され、同期や更新公開時には空にすることもできます。
+
+### ローカル変更とレジストリバージョン
+
+更新時には、ローカルの Skill 内容とレジストリ上のバージョンをコンテンツハッシュで比較します。ローカルファイルが公開済みのどのバージョンとも一致しない場合、CLI は上書き前に確認します（非対話実行では `--force` が必要です）。
+
+### 同期スキャンとフォールバックルート
+
+`clawhub sync` は最初に現在の workdir をスキャンします。Skills が見つからない場合、既知のレガシーな場所（例: `~/openclaw/skills` や `~/.openclaw/skills`）にフォールバックします。これは、追加フラグなしで古い Skill インストールを検出するための設計です。
+
+### ストレージとロックファイル
+
+- インストールされた Skills は、workdir 配下の `.clawhub/lock.json` に記録されます。
+- 認証トークンは ClawHub CLI 設定ファイルに保存されます（`CLAWHUB_CONFIG_PATH` で上書き可能）。
+
+### テレメトリ（インストール数）
+
+ログインした状態で `clawhub sync` を実行すると、CLI はインストール数を算出するための最小限のスナップショットを送信します。これは完全に無効化できます。
+
+```bash
+export CLAWHUB_DISABLE_TELEMETRY=1
+```
+
+## 環境変数
+
+- `CLAWHUB_SITE`: サイト URL を上書きします。
+- `CLAWHUB_REGISTRY`: レジストリ API URL を上書きします。
+- `CLAWHUB_CONFIG_PATH`: CLI がトークン / 設定を保存する場所を上書きします。
+- `CLAWHUB_WORKDIR`: デフォルトの workdir を上書きします。
+- `CLAWHUB_DISABLE_TELEMETRY=1`: `sync` におけるテレメトリを無効化します。

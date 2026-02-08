@@ -1,0 +1,33 @@
+---
+summary: "`openclaw status` के लिए CLI संदर्भ (डायग्नोस्टिक्स, प्रोब्स, उपयोग स्नैपशॉट)"
+read_when:
+  - आपको चैनल स्वास्थ्य + हाल के सत्र प्राप्तकर्ताओं का त्वरित निदान चाहिए
+  - आपको डिबगिंग के लिए पेस्ट करने योग्य “all” स्थिति चाहिए
+title: "status"
+x-i18n:
+  source_path: cli/status.md
+  source_hash: 2bbf5579c48034fc
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:49:00Z
+---
+
+# `openclaw status`
+
+चैनलों + सत्रों के लिए डायग्नोस्टिक्स।
+
+```bash
+openclaw status
+openclaw status --all
+openclaw status --deep
+openclaw status --usage
+```
+
+नोट्स:
+
+- `--deep` लाइव प्रोब्स चलाता है (WhatsApp Web + Telegram + Discord + Google Chat + Slack + Signal)।
+- आउटपुट में प्रति-एजेंट सत्र स्टोर शामिल होते हैं जब कई एजेंट कॉन्फ़िगर किए गए हों।
+- अवलोकन में Gateway + नोड होस्ट सेवा की इंस्टॉल/रनटाइम स्थिति शामिल होती है, जब उपलब्ध हो।
+- अवलोकन में अपडेट चैनल + git SHA (सोर्स चेकआउट्स के लिए) शामिल होते हैं।
+- अपडेट जानकारी अवलोकन में दिखाई जाती है; यदि कोई अपडेट उपलब्ध है, तो स्थिति `openclaw update` चलाने का संकेत प्रिंट करती है (देखें [Updating](/install/updating))।

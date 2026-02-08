@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway 閘道器"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway 閘道器"
+  },
+  {
+    "source": "gateway host",
+    "target": "閘道器主機"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC （遠端程序呼叫）"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入門指南"
+  },
+  {
+    "source": "Quick Start",
+    "target": "快速開始"
+  },
+  {
+    "source": "Quick start",
+    "target": "快速開始"
+  },
+  {
+    "source": "Features",
+    "target": "功能"
+  },
+  {
+    "source": "FAQ",
+    "target": "常見問題"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "疑難排解"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "疑難排解"
+  },
+  {
+    "source": "onboarding",
+    "target": "入門引導"
+  },
+  {
+    "source": "wizard",
+    "target": "精靈"
+  },
+  {
+    "source": "Overview",
+    "target": "概覽"
+  },
+  {
+    "source": "Notes",
+    "target": "注意事項"
+  },
+  {
+    "source": "Examples",
+    "target": "範例"
+  },
+  {
+    "source": "Next steps",
+    "target": "後續步驟"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "先決條件"
+  },
+  {
+    "source": "Requirements",
+    "target": "需求"
+  },
+  {
+    "source": "Configuration",
+    "target": "設定"
+  },
+  {
+    "source": "Config",
+    "target": "設定"
+  },
+  {
+    "source": "Config snippet",
+    "target": "設定片段"
+  },
+  {
+    "source": "environment variables",
+    "target": "環境變數"
+  },
+  {
+    "source": "env var",
+    "target": "環境變數"
+  },
+  {
+    "source": "Authentication",
+    "target": "身分驗證"
+  },
+  {
+    "source": "API key",
+    "target": "API 金鑰"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "Security",
+    "target": "安全性"
+  },
+  {
+    "source": "Access control",
+    "target": "存取控制"
+  },
+  {
+    "source": "allowlist",
+    "target": "允許清單"
+  },
+  {
+    "source": "authorized senders",
+    "target": "已授權的寄件者"
+  },
+  {
+    "source": "Permissions",
+    "target": "權限"
+  },
+  {
+    "source": "Bot",
+    "target": "機器人"
+  },
+  {
+    "source": "Bot Token",
+    "target": "Bot 權杖"
+  },
+  {
+    "source": "DMs",
+    "target": "私訊"
+  },
+  {
+    "source": "agent",
+    "target": "代理程式"
+  },
+  {
+    "source": "channel",
+    "target": "頻道"
+  },
+  {
+    "source": "session",
+    "target": "工作階段"
+  },
+  {
+    "source": "provider",
+    "target": "提供者"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔離"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔離的"
+  },
+  {
+    "source": "block streaming",
+    "target": "區塊串流"
+  },
+  {
+    "source": "Discovery",
+    "target": "裝置探索"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套應用程式"
+  },
+  {
+    "source": "expected keys",
+    "target": "預期金鑰"
+  },
+  {
+    "source": "Transport",
+    "target": "傳輸協定"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket 連線"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH 通道"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "透過 SSH 遠端連線"
+  }
+]

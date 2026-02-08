@@ -1,0 +1,98 @@
+---
+summary: "التعامل مع المناطق الزمنية للوكلاء، والأظرف، والمطالبات"
+read_when:
+  - تحتاج إلى فهم كيفية توحيد الطوابع الزمنية للنموذج
+  - تهيئة المنطقة الزمنية للمستخدم في مطالبات النظام
+title: "المناطق الزمنية"
+x-i18n:
+  source_path: concepts/timezone.md
+  source_hash: 9ee809c96897db11
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:09Z
+---
+
+# المناطق الزمنية
+
+يقوم OpenClaw بتوحيد الطوابع الزمنية بحيث يرى النموذج **مرجعًا زمنيًا واحدًا**.
+
+## أظرف الرسائل (محلية افتراضيًا)
+
+تُغلَّف الرسائل الواردة داخل ظرف مثل:
+
+```
+[Provider ... 2026-01-05 16:26 PST] message text
+```
+
+يكون الطابع الزمني في الظرف **محليًا للمضيف افتراضيًا**، بدقة الدقائق.
+
+يمكنك تجاوز ذلك باستخدام:
+
+```json5
+{
+  agents: {
+    defaults: {
+      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimestamp: "on", // "on" | "off"
+      envelopeElapsed: "on", // "on" | "off"
+    },
+  },
+}
+```
+
+- `envelopeTimezone: "utc"` يستخدم UTC.
+- `envelopeTimezone: "user"` يستخدم `agents.defaults.userTimezone` (ويعود إلى المنطقة الزمنية للمضيف عند التعذر).
+- استخدم منطقة زمنية صريحة وفق IANA (مثل `"Europe/Vienna"`) لإزاحة ثابتة.
+- `envelopeTimestamp: "off"` يزيل الطوابع الزمنية المطلقة من ترويسات الظرف.
+- `envelopeElapsed: "off"` يزيل لاحقات الزمن المنقضي (نمط `+2m`).
+
+### أمثلة
+
+**محلي (افتراضي):**
+
+```
+[Signal Alice +1555 2026-01-18 00:19 PST] hello
+```
+
+**منطقة زمنية ثابتة:**
+
+```
+[Signal Alice +1555 2026-01-18 06:19 GMT+1] hello
+```
+
+**الزمن المنقضي:**
+
+```
+[Signal Alice +1555 +2m 2026-01-18T05:19Z] follow-up
+```
+
+## حمولات الأدوات (بيانات الموفّر الخام + حقول مُوحَّدة)
+
+تعيد استدعاءات الأدوات (`channels.discord.readMessages`، `channels.slack.readMessages`، إلخ) **طوابع زمنية خام من الموفّر**.
+كما نُرفِق حقولًا مُوحَّدة لتحقيق الاتساق:
+
+- `timestampMs` (ميلي ثانية من حقبة UTC)
+- `timestampUtc` (سلسلة UTC بصيغة ISO 8601)
+
+يتم الاحتفاظ بحقول الموفّر الخام.
+
+## المنطقة الزمنية للمستخدم في مطالبة النظام
+
+عيّن `agents.defaults.userTimezone` لإبلاغ النموذج بالمنطقة الزمنية المحلية للمستخدم. إذا كانت
+غير معيّنة، يحلّ OpenClaw **منطقة المضيف الزمنية وقت التشغيل** (من دون كتابة تهيئة).
+
+```json5
+{
+  agents: { defaults: { userTimezone: "America/Chicago" } },
+}
+```
+
+تتضمن مطالبة النظام:
+
+- قسم `Current Date & Time` مع الوقت المحلي والمنطقة الزمنية
+- `Time format: 12-hour` أو `24-hour`
+
+يمكنك التحكم في تنسيق المطالبة باستخدام `agents.defaults.timeFormat` (`auto` | `12` | `24`).
+
+راجع [Date & Time](/date-time) للاطلاع على السلوك الكامل والأمثلة.

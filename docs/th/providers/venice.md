@@ -1,0 +1,274 @@
+---
+summary: "ใช้โมเดลของ Venice AI ที่เน้นความเป็นส่วนตัวใน OpenClaw"
+read_when:
+  - คุณต้องการการอนุมานที่เน้นความเป็นส่วนตัวใน OpenClaw
+  - คุณต้องการคำแนะนำการตั้งค่า Venice AI
+title: "Venice AI"
+x-i18n:
+  source_path: providers/venice.md
+  source_hash: 2453a6ec3a715c24
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:53:04Z
+---
+
+# Venice AI (ไฮไลต์ Venice)
+
+**Venice** คือการตั้งค่า Venice ที่เราแนะนำสำหรับการอนุมานที่ให้ความสำคัญกับความเป็นส่วนตัวเป็นอันดับแรก พร้อมตัวเลือกการเข้าถึงโมเดลกรรมสิทธิ์แบบไม่ระบุตัวตน
+
+Venice AI ให้บริการการอนุมาน AI ที่เน้นความเป็นส่วนตัว รองรับโมเดลแบบไม่เซ็นเซอร์ และการเข้าถึงโมเดลกรรมสิทธิ์รายใหญ่ผ่านพร็อกซีแบบไม่ระบุตัวตนของ Venice การอนุมานทั้งหมดเป็นแบบส่วนตัวโดยค่าเริ่มต้น—ไม่ฝึกจากข้อมูลของคุณ และไม่บันทึกล็อก
+
+## ทำไมต้อง Venice ใน OpenClaw
+
+- **การอนุมานแบบส่วนตัว** สำหรับโมเดลโอเพนซอร์ส (ไม่บันทึกล็อก)
+- **โมเดลไม่เซ็นเซอร์** เมื่อคุณต้องการ
+- **การเข้าถึงโมเดลกรรมสิทธิ์แบบไม่ระบุตัวตน** (Opus/GPT/Gemini) เมื่อคุณภาพสำคัญ
+- เอ็นด์พอยต์ที่เข้ากันได้กับ OpenAI `/v1`
+
+## โหมดความเป็นส่วนตัว
+
+Venice มีระดับความเป็นส่วนตัวสองแบบ—การทำความเข้าใจส่วนนี้สำคัญต่อการเลือกโมเดลของคุณ:
+
+| โหมด           | คำอธิบาย                                                                                                   | โมเดล                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **Private**    | เป็นส่วนตัวเต็มรูปแบบ พรอมป์ต์/คำตอบ **จะไม่ถูกจัดเก็บหรือบันทึกล็อก** เป็นแบบชั่วคราว                     | Llama, Qwen, DeepSeek, Venice Uncensored ฯลฯ |
+| **Anonymized** | ส่งผ่านพร็อกซีของ Venice พร้อมลบเมทาดาทา ผู้ให้บริการปลายทาง (OpenAI, Anthropic) จะเห็นคำขอแบบไม่ระบุตัวตน | Claude, GPT, Gemini, Grok, Kimi, MiniMax     |
+
+## ฟีเจอร์
+
+- **เน้นความเป็นส่วนตัว**: เลือกระหว่างโหมด "private"(ส่วนตัวเต็มรูปแบบ) และ "anonymized"(ผ่านพร็อกซี)
+- **โมเดลไม่เซ็นเซอร์**: เข้าถึงโมเดลที่ไม่มีข้อจำกัดด้านเนื้อหา
+- **เข้าถึงโมเดลหลัก**: ใช้ Claude, GPT-5.2, Gemini, Grok ผ่านพร็อกซีแบบไม่ระบุตัวตนของ Venice
+- **API ที่เข้ากันได้กับ OpenAI**: เอ็นด์พอยต์มาตรฐาน `/v1` เพื่อการผสานรวมที่ง่าย
+- **สตรีมมิง**: ✅ รองรับทุกโมเดล
+- **การเรียกใช้ฟังก์ชัน**: ✅ รองรับในบางโมเดล (ตรวจสอบความสามารถของโมเดล)
+- **Vision**: ✅ รองรับในโมเดลที่มีความสามารถด้านภาพ
+- **ไม่มีการจำกัดอัตราแบบตายตัว**: อาจมีการจำกัดตามการใช้งานที่เป็นธรรมในกรณีใช้งานหนักมาก
+
+## การตั้งค่า
+
+### 1. รับ API Key
+
+1. สมัครที่ [venice.ai](https://venice.ai)
+2. ไปที่ **Settings → API Keys → Create new key**
+3. คัดลอก API key ของคุณ (รูปแบบ: `vapi_xxxxxxxxxxxx`)
+
+### 2. กำหนดค่า OpenClaw
+
+**ตัวเลือก A: ตัวแปรสภาพแวดล้อม**
+
+```bash
+export VENICE_API_KEY="vapi_xxxxxxxxxxxx"
+```
+
+**ตัวเลือก B: การตั้งค่าแบบโต้ตอบ (แนะนำ)**
+
+```bash
+openclaw onboard --auth-choice venice-api-key
+```
+
+สิ่งที่จะเกิดขึ้น:
+
+1. ขอ API key ของคุณ (หรือใช้ `VENICE_API_KEY` ที่มีอยู่)
+2. แสดงโมเดล Venice ที่พร้อมใช้งานทั้งหมด
+3. ให้คุณเลือกโมเดลเริ่มต้น
+4. กำหนดค่าผู้ให้บริการโดยอัตโนมัติ
+
+**ตัวเลือก C: แบบไม่โต้ตอบ**
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice venice-api-key \
+  --venice-api-key "vapi_xxxxxxxxxxxx"
+```
+
+### 3. ตรวจสอบการตั้งค่า
+
+```bash
+openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
+```
+
+## การเลือกโมเดล
+
+หลังการตั้งค่า OpenClaw จะแสดงโมเดล Venice ที่พร้อมใช้งานทั้งหมด เลือกตามความต้องการของคุณ:
+
+- **ค่าเริ่มต้น(ที่เราแนะนำ)**: `venice/llama-3.3-70b` สำหรับความเป็นส่วนตัวและประสิทธิภาพที่สมดุล
+- **คุณภาพโดยรวมดีที่สุด**: `venice/claude-opus-45` สำหรับงานยาก (Opus ยังคงแข็งแกร่งที่สุด)
+- **ความเป็นส่วนตัว**: เลือกโมเดล "private" เพื่อการอนุมานที่เป็นส่วนตัวเต็มรูปแบบ
+- **ความสามารถ**: เลือกโมเดล "anonymized" เพื่อเข้าถึง Claude, GPT, Gemini ผ่านพร็อกซีของ Venice
+
+เปลี่ยนโมเดลเริ่มต้นได้ทุกเมื่อ:
+
+```bash
+openclaw models set venice/claude-opus-45
+openclaw models set venice/llama-3.3-70b
+```
+
+แสดงรายการโมเดลที่พร้อมใช้งานทั้งหมด:
+
+```bash
+openclaw models list | grep venice
+```
+
+## กำหนดค่าผ่าน `openclaw configure`
+
+1. รัน `openclaw configure`
+2. เลือก **Model/auth**
+3. เลือก **Venice AI**
+
+## ควรใช้โมเดลใด
+
+| กรณีใช้งาน                        | โมเดลที่แนะนำ                    | เหตุผล                                         |
+| --------------------------------- | -------------------------------- | ---------------------------------------------- |
+| **แชตทั่วไป**                     | `llama-3.3-70b`                  | ครอบคลุมการใช้งานทั่วไป เป็นส่วนตัวเต็มรูปแบบ  |
+| **คุณภาพโดยรวมดีที่สุด**          | `claude-opus-45`                 | Opus แข็งแกร่งที่สุดสำหรับงานยาก               |
+| **ความเป็นส่วนตัว+คุณภาพ Claude** | `claude-opus-45`                 | การให้เหตุผลดีที่สุดผ่านพร็อกซีแบบไม่ระบุตัวตน |
+| **เขียนโค้ด**                     | `qwen3-coder-480b-a35b-instruct` | ปรับให้เหมาะกับโค้ด บริบท 262k                 |
+| **งานด้านภาพ**                    | `qwen3-vl-235b-a22b`             | โมเดลด้านภาพแบบส่วนตัวที่ดีที่สุด              |
+| **ไม่เซ็นเซอร์**                  | `venice-uncensored`              | ไม่มีข้อจำกัดด้านเนื้อหา                       |
+| **เร็ว+ประหยัด**                  | `qwen3-4b`                       | น้ำหนักเบาแต่ยังมีความสามารถ                   |
+| **การให้เหตุผลซับซ้อน**           | `deepseek-v3.2`                  | การให้เหตุผลแข็งแกร่ง เป็นส่วนตัว              |
+
+## โมเดลที่พร้อมใช้งาน (รวม 25)
+
+### โมเดล Private (15) — เป็นส่วนตัวเต็มรูปแบบ ไม่บันทึกล็อก
+
+| Model ID                         | ชื่อ                    | บริบท(โทเคน) | ฟีเจอร์               |
+| -------------------------------- | ----------------------- | ------------ | --------------------- |
+| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k         | ทั่วไป                |
+| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k         | เร็ว น้ำหนักเบา       |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k         | งานซับซ้อน            |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k         | การให้เหตุผล          |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k         | ทั่วไป                |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k         | โค้ด                  |
+| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k         | ทั่วไป                |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k         | Vision                |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k          | เร็ว การให้เหตุผล     |
+| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k         | การให้เหตุผล          |
+| `venice-uncensored`              | Venice Uncensored       | 32k          | ไม่เซ็นเซอร์          |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k         | Vision                |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k         | Vision                |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k         | ทั่วไป                |
+| `zai-org-glm-4.7`                | GLM 4.7                 | 202k         | การให้เหตุผล หลายภาษา |
+
+### โมเดล Anonymized (10) — ผ่านพร็อกซีของ Venice
+
+| Model ID                 | ต้นฉบับ           | บริบท(โทเคน) | ฟีเจอร์             |
+| ------------------------ | ----------------- | ------------ | ------------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k         | การให้เหตุผล Vision |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k         | การให้เหตุผล Vision |
+| `openai-gpt-52`          | GPT-5.2           | 262k         | การให้เหตุผล        |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k         | การให้เหตุผล Vision |
+| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k         | การให้เหตุผล Vision |
+| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k         | การให้เหตุผล Vision |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k         | การให้เหตุผล Vision |
+| `grok-code-fast-1`       | Grok Code Fast 1  | 262k         | การให้เหตุผล โค้ด   |
+| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k         | การให้เหตุผล        |
+| `minimax-m21`            | MiniMax M2.1      | 202k         | การให้เหตุผล        |
+
+## การค้นหาโมเดล
+
+OpenClaw จะค้นหาโมเดลจาก Venice API โดยอัตโนมัติเมื่อมีการตั้งค่า `VENICE_API_KEY` หาก API ไม่สามารถเข้าถึงได้ ระบบจะย้อนกลับไปใช้แคตตาล็อกแบบคงที่
+
+เอ็นด์พอยต์ `/models` เป็นแบบสาธารณะ (ไม่ต้องยืนยันตัวตนสำหรับการแสดงรายการ) แต่การอนุมานต้องใช้ API key ที่ถูกต้อง
+
+## การรองรับสตรีมมิงและเครื่องมือ
+
+| ฟีเจอร์                 | การรองรับ                                                   |
+| ----------------------- | ----------------------------------------------------------- |
+| **สตรีมมิง**            | ✅ ทุกโมเดล                                                 |
+| **การเรียกใช้ฟังก์ชัน** | ✅ โมเดลส่วนใหญ่ (ตรวจสอบ `supportsFunctionCalling` ใน API) |
+| **Vision/รูปภาพ**       | ✅ โมเดลที่ระบุฟีเจอร์ "Vision"                             |
+| **โหมด JSON**           | ✅ รองรับผ่าน `response_format`                             |
+
+## ราคา
+
+Venice ใช้ระบบเครดิต ตรวจสอบอัตราปัจจุบันที่ [venice.ai/pricing](https://venice.ai/pricing):
+
+- **โมเดล Private**: โดยทั่วไปมีต้นทุนต่ำกว่า
+- **โมเดล Anonymized**: ใกล้เคียงราคาของ API โดยตรง+ค่าธรรมเนียม Venice เล็กน้อย
+
+## การเปรียบเทียบ: Venice vs Direct API
+
+| แง่มุม               | Venice (Anonymized)     | Direct API                      |
+| -------------------- | ----------------------- | ------------------------------- |
+| **ความเป็นส่วนตัว**  | ลบเมทาดาทา ไม่ระบุตัวตน | เชื่อมกับบัญชีของคุณ            |
+| **เวลาแฝง**          | +10-50ms (พร็อกซี)      | โดยตรง                          |
+| **ฟีเจอร์**          | รองรับฟีเจอร์ส่วนใหญ่   | ฟีเจอร์ครบถ้วน                  |
+| **การเรียกเก็บเงิน** | เครดิตของ Venice        | การเรียกเก็บเงินของผู้ให้บริการ |
+
+## ตัวอย่างการใช้งาน
+
+```bash
+# Use default private model
+openclaw chat --model venice/llama-3.3-70b
+
+# Use Claude via Venice (anonymized)
+openclaw chat --model venice/claude-opus-45
+
+# Use uncensored model
+openclaw chat --model venice/venice-uncensored
+
+# Use vision model with image
+openclaw chat --model venice/qwen3-vl-235b-a22b
+
+# Use coding model
+openclaw chat --model venice/qwen3-coder-480b-a35b-instruct
+```
+
+## การแก้ไขปัญหา
+
+### ไม่รู้จัก API key
+
+```bash
+echo $VENICE_API_KEY
+openclaw models list | grep venice
+```
+
+ตรวจสอบให้แน่ใจว่าคีย์ขึ้นต้นด้วย `vapi_`.
+
+### โมเดลไม่พร้อมใช้งาน
+
+แคตตาล็อกโมเดลของ Venice อัปเดตแบบไดนามิก รัน `openclaw models list` เพื่อดูโมเดลที่พร้อมใช้งานในขณะนี้ บางโมเดลอาจออฟไลน์ชั่วคราว
+
+### ปัญหาการเชื่อมต่อ
+
+Venice API อยู่ที่ `https://api.venice.ai/api/v1`. ตรวจสอบให้แน่ใจว่าเครือข่ายของคุณอนุญาตการเชื่อมต่อ HTTPS
+
+## ตัวอย่างไฟล์คอนฟิก
+
+```json5
+{
+  env: { VENICE_API_KEY: "vapi_..." },
+  agents: { defaults: { model: { primary: "venice/llama-3.3-70b" } } },
+  models: {
+    mode: "merge",
+    providers: {
+      venice: {
+        baseUrl: "https://api.venice.ai/api/v1",
+        apiKey: "${VENICE_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "llama-3.3-70b",
+            name: "Llama 3.3 70B",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 131072,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+## ลิงก์
+
+- [Venice AI](https://venice.ai)
+- [เอกสาร API](https://docs.venice.ai)
+- [ราคา](https://venice.ai/pricing)
+- [สถานะ](https://status.venice.ai)

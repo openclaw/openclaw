@@ -1,0 +1,67 @@
+---
+summary: "OpenClaw がタイピングインジケーターを表示するタイミングと、その調整方法"
+read_when:
+  - タイピングインジケーターの挙動やデフォルトを変更する場合
+title: "タイピングインジケーター"
+x-i18n:
+  source_path: concepts/typing-indicators.md
+  source_hash: 8ee82d02829c4ff5
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:21:36Z
+---
+
+# タイピングインジケーター
+
+タイピングインジケーターは、実行がアクティブな間にチャットチャンネルへ送信されます。`agents.defaults.typingMode` を使用してタイピングが **いつ** 開始されるかを制御し、`typingIntervalSeconds` を使用して **どの頻度** で更新されるかを制御します。
+
+## デフォルト
+
+`agents.defaults.typingMode` が **未設定** の場合、OpenClaw は従来の挙動を維持します。
+
+- **ダイレクトチャット**: モデルループが開始されると同時に、直ちにタイピングが開始されます。
+- **メンション付きのグループチャット**: 直ちにタイピングが開始されます。
+- **メンションなしのグループチャット**: メッセージテキストのストリーミングが開始された時点でのみ、タイピングが開始されます。
+- **ハートビート実行**: タイピングは無効です。
+
+## モード
+
+`agents.defaults.typingMode` を次のいずれかに設定します。
+
+- `never` — タイピングインジケーターを一切表示しません。
+- `instant` — 実行が後でサイレント返信トークンのみを返す場合であっても、**モデルループが開始され次第** タイピングを開始します。
+- `thinking` — **最初の reasoning デルタ** でタイピングを開始します（実行に `reasoningLevel: "stream"` が必要です）。
+- `message` — **最初の非サイレントなテキストデルタ** でタイピングを開始します（`NO_REPLY` のサイレントトークンは無視されます）。
+
+「どれだけ早く発火するか」の順序:
+`never` → `message` → `thinking` → `instant`
+
+## 設定
+
+```json5
+{
+  agent: {
+    typingMode: "thinking",
+    typingIntervalSeconds: 6,
+  },
+}
+```
+
+セッションごとにモードや間隔を上書きできます。
+
+```json5
+{
+  session: {
+    typingMode: "message",
+    typingIntervalSeconds: 4,
+  },
+}
+```
+
+## 注記
+
+- `message` モードでは、サイレントのみの返信（例: 出力を抑制するために使用される `NO_REPLY` トークン）に対してタイピングは表示されません。
+- `thinking` は、実行が reasoning をストリーミングする場合（`reasoningLevel: "stream"`）にのみ発火します。モデルが reasoning デルタを出力しない場合、タイピングは開始されません。
+- ハートビートでは、モードに関係なくタイピングは表示されません。
+- `typingIntervalSeconds` は **更新間隔** を制御するものであり、開始時刻ではありません。デフォルトは 6 秒です。

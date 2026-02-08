@@ -1,0 +1,270 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (puerta de enlace)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (puerta de enlace)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "host del Gateway"
+  },
+  {
+    "source": "gateway host",
+    "target": "host del Gateway"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC del Gateway"
+  },
+  {
+    "source": "Transport",
+    "target": "transporte"
+  },
+  {
+    "source": "agent",
+    "target": "agente"
+  },
+  {
+    "source": "Agent",
+    "target": "Agente"
+  },
+  {
+    "source": "channel",
+    "target": "canal"
+  },
+  {
+    "source": "Channel",
+    "target": "Canal"
+  },
+  {
+    "source": "session",
+    "target": "sesión"
+  },
+  {
+    "source": "Session",
+    "target": "Sesión"
+  },
+  {
+    "source": "provider",
+    "target": "proveedor"
+  },
+  {
+    "source": "model",
+    "target": "modelo"
+  },
+  {
+    "source": "tool",
+    "target": "herramienta"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "configuración de Skills"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Configuración de Skills"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "CLI:",
+    "target": "CLI:"
+  },
+  {
+    "source": "CLI setup",
+    "target": "configuración de la CLI"
+  },
+  {
+    "source": "environment variables",
+    "target": "variables de entorno"
+  },
+  {
+    "source": "environment variable",
+    "target": "variable de entorno"
+  },
+  {
+    "source": "env vars",
+    "target": "variables de entorno"
+  },
+  {
+    "source": "env var",
+    "target": "variable de entorno"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "en sandbox"
+  },
+  {
+    "source": "Companion apps",
+    "target": "aplicaciones complementarias"
+  },
+  {
+    "source": "Discovery",
+    "target": "descubrimiento"
+  },
+  {
+    "source": "block streaming",
+    "target": "streaming por bloques"
+  },
+  {
+    "source": "expected keys",
+    "target": "claves esperadas"
+  },
+  {
+    "source": "allowlist",
+    "target": "lista de permitidos"
+  },
+  {
+    "source": "Access control",
+    "target": "control de acceso"
+  },
+  {
+    "source": "authorized senders",
+    "target": "remitentes autorizados"
+  },
+  {
+    "source": "API key",
+    "target": "clave de API"
+  },
+  {
+    "source": "setup-token",
+    "target": "token de configuración"
+  },
+  {
+    "source": "Bot",
+    "target": "bot"
+  },
+  {
+    "source": "Bot Token",
+    "target": "token del bot"
+  },
+  {
+    "source": "Permissions",
+    "target": "permisos"
+  },
+  {
+    "source": "DMs",
+    "target": "mensajes directos"
+  },
+  {
+    "source": "DM",
+    "target": "mensaje directo"
+  },
+  {
+    "source": "DM access",
+    "target": "acceso a mensajes directos"
+  },
+  {
+    "source": "Groups",
+    "target": "grupos"
+  },
+  {
+    "source": "Workspace",
+    "target": "espacio de trabajo"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "túnel SSH"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "remoto por SSH"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "directo (ws/wss)"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Primeros pasos"
+  },
+  {
+    "source": "Getting started",
+    "target": "Primeros pasos"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Inicio rápido"
+  },
+  {
+    "source": "Quick start",
+    "target": "Inicio rápido"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Configuración rápida (principiante)"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Solución de problemas"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "solución de problemas"
+  },
+  {
+    "source": "FAQ",
+    "target": "Preguntas frecuentes"
+  },
+  {
+    "source": "Security notes",
+    "target": "Notas de seguridad"
+  },
+  {
+    "source": "Defaults",
+    "target": "Valores predeterminados"
+  },
+  {
+    "source": "Next steps",
+    "target": "Siguientes pasos"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  }
+]

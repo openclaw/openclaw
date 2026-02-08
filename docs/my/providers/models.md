@@ -1,0 +1,57 @@
+---
+summary: "OpenClaw မှ ပံ့ပိုးထားသော မော်ဒယ် ပံ့ပိုးသူများ (LLMs)"
+read_when:
+  - မော်ဒယ် ပံ့ပိုးသူကို ရွေးချယ်လိုသောအခါ
+  - LLM အတည်ပြုခြင်းနှင့် မော်ဒယ် ရွေးချယ်ခြင်းအတွက် အမြန်တပ်ဆင်နမူနာများ လိုအပ်သောအခါ
+title: "Model Provider အမြန်စတင်လမ်းညွှန်"
+x-i18n:
+  source_path: providers/models.md
+  source_hash: 691d2c97ef6b01cc
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:54:47Z
+---
+
+# Model Providers
+
+OpenClaw သည် LLM ပံ့ပိုးသူများ အများအပြားကို အသုံးပြုနိုင်ပါသည်။ တစ်ခုကို ရွေးချယ်ပြီး အတည်ပြုခြင်းကို လုပ်ဆောင်ပါ၊ ထို့နောက် မူလ မော်ဒယ်ကို `provider/model` အဖြစ် သတ်မှတ်ပါ။
+
+## အထူးအကြံပြုချက်: Venice (Venice AI)
+
+Venice သည် ကိုယ်ရေးအချက်အလက်ကို ဦးစားပေးသော inference အတွက် ကျွန်ုပ်တို့ အကြံပြုသော Venice AI တပ်ဆင်မှု ဖြစ်ပြီး အခက်ခဲဆုံး လုပ်ငန်းများအတွက် Opus ကို အသုံးပြုနိုင်သော ရွေးချယ်မှုလည်း ပါဝင်ပါသည်။
+
+- မူလ: `venice/llama-3.3-70b`
+- အလုံးစုံ အကောင်းဆုံး: `venice/claude-opus-45` (Opus သည် အားအကောင်းဆုံးအဖြစ် ဆက်လက် ရပ်တည်နေသည်)
+
+[Venice AI](/providers/venice) ကို ကြည့်ရှုပါ။
+
+## အမြန်စတင်ရန် (အဆင့် နှစ်ဆင့်)
+
+1. ပံ့ပိုးသူနှင့် အတည်ပြုခြင်းကို ပြုလုပ်ပါ (ပုံမှန်အားဖြင့် `openclaw onboard` မှတစ်ဆင့်)။
+2. မူလ မော်ဒယ်ကို သတ်မှတ်ပါ။
+
+```json5
+{
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+}
+```
+
+## ပံ့ပိုးထားသော ပံ့ပိုးသူများ (စတင်အသုံးပြုရန် အစု)
+
+- [OpenAI (API + Codex)](/providers/openai)
+- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [OpenRouter](/providers/openrouter)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [Synthetic](/providers/synthetic)
+- [OpenCode Zen](/providers/opencode)
+- [Z.AI](/providers/zai)
+- [GLM models](/providers/glm)
+- [MiniMax](/providers/minimax)
+- [Venice (Venice AI)](/providers/venice)
+- [Amazon Bedrock](/providers/bedrock)
+- [Qianfan](/providers/qianfan)
+
+ပံ့ပိုးသူ စာရင်းအပြည့်အစုံ (xAI, Groq, Mistral စသည်) နှင့် အဆင့်မြင့် ဖွဲ့စည်းပြင်ဆင်မှုများအတွက် [Model providers](/concepts/model-providers) ကို ကြည့်ရှုပါ။

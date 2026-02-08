@@ -1,0 +1,246 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (passerelle)"
+  },
+  {
+    "source": "gateway",
+    "target": "gateway (passerelle)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "hôte de la Gateway (passerelle)"
+  },
+  {
+    "source": "gateway host",
+    "target": "hôte de la Gateway (passerelle)"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "RPC de la Gateway (passerelle)"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "configuration des Skills"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Configuration des Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Premiers pas"
+  },
+  {
+    "source": "Getting started",
+    "target": "Premiers pas"
+  },
+  {
+    "source": "Quick start",
+    "target": "Démarrage rapide"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Démarrage rapide"
+  },
+  {
+    "source": "Docs directory",
+    "target": "Répertoire de documentation"
+  },
+  {
+    "source": "Credits",
+    "target": "Crédits"
+  },
+  {
+    "source": "Features",
+    "target": "Fonctionnalités"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Dépannage"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "dépannage"
+  },
+  {
+    "source": "FAQ",
+    "target": "Foire aux questions"
+  },
+  {
+    "source": "Notes",
+    "target": "Remarques"
+  },
+  {
+    "source": "Examples",
+    "target": "Exemples"
+  },
+  {
+    "source": "DMs",
+    "target": "messages privés"
+  },
+  {
+    "source": "DM",
+    "target": "message privé"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "dans un sandbox"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "Dans un sandbox"
+  },
+  {
+    "source": "Companion apps",
+    "target": "applications compagnons"
+  },
+  {
+    "source": "Discovery",
+    "target": "Découverte"
+  },
+  {
+    "source": "Network model",
+    "target": "modèle réseau"
+  },
+  {
+    "source": "for full details",
+    "target": "pour plus de détails"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "Les 60 premières secondes"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "channel",
+    "target": "canal"
+  },
+  {
+    "source": "session",
+    "target": "session"
+  },
+  {
+    "source": "provider",
+    "target": "fournisseur"
+  },
+  {
+    "source": "model",
+    "target": "modèle"
+  },
+  {
+    "source": "tool",
+    "target": "outil"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "onboarding",
+    "target": "prise en main"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Prise en main"
+  },
+  {
+    "source": "wizard",
+    "target": "assistant"
+  },
+  {
+    "source": "environment variables",
+    "target": "variables d'environnement"
+  },
+  {
+    "source": "environment variable",
+    "target": "variable d'environnement"
+  },
+  {
+    "source": "env vars",
+    "target": "variables d'environnement"
+  },
+  {
+    "source": "env var",
+    "target": "variable d'environnement"
+  },
+  {
+    "source": "Config snippet",
+    "target": "extrait de configuration"
+  },
+  {
+    "source": "JSON output",
+    "target": "sortie JSON"
+  },
+  {
+    "source": "API key",
+    "target": "clé API"
+  },
+  {
+    "source": "Bot Token",
+    "target": "jeton de bot"
+  },
+  {
+    "source": "allowlist",
+    "target": "liste d'autorisation"
+  },
+  {
+    "source": "Access control",
+    "target": "contrôle d'accès"
+  },
+  {
+    "source": "authorized senders",
+    "target": "expéditeurs autorisés"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "tunnel SSH"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  }
+]

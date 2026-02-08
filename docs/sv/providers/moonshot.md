@@ -1,0 +1,149 @@
+---
+summary: "Konfigurera Moonshot K2 kontra Kimi Coding (separata leverantörer + nycklar)"
+read_when:
+  - Du vill konfigurera Moonshot K2 (Moonshot Open Platform) kontra Kimi Coding
+  - Du behöver förstå separata endpoints, nycklar och modellreferenser
+  - Du vill ha kopiera/klistra-in-konfig för respektive leverantör
+title: "Moonshot AI"
+x-i18n:
+  source_path: providers/moonshot.md
+  source_hash: 9e4a6192faa21b88
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T08:18:11Z
+---
+
+# Moonshot AI (Kimi)
+
+Moonshot tillhandahåller Kimi API med OpenAI-kompatibla endpoints. Konfigurera
+leverantören och ställ in standardmodellen till `moonshot/kimi-k2.5`, eller använd
+Kimi Coding med `kimi-coding/k2p5`.
+
+Aktuella Kimi K2-modell-ID:n:
+
+{/_moonshot-kimi-k2-ids:start_/ && null}
+
+- `kimi-k2.5`
+- `kimi-k2-0905-preview`
+- `kimi-k2-turbo-preview`
+- `kimi-k2-thinking`
+- `kimi-k2-thinking-turbo`
+  {/_moonshot-kimi-k2-ids:end_/ && null}
+
+```bash
+openclaw onboard --auth-choice moonshot-api-key
+```
+
+Kimi Coding:
+
+```bash
+openclaw onboard --auth-choice kimi-code-api-key
+```
+
+Obs: Moonshot och Kimi Coding är separata leverantörer. Nycklar är inte utbytbara, endpoints skiljer sig och modellreferenser skiljer sig (Moonshot använder `moonshot/...`, Kimi Coding använder `kimi-coding/...`).
+
+## Konfigutdrag (Moonshot API)
+
+```json5
+{
+  env: { MOONSHOT_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "moonshot/kimi-k2.5" },
+      models: {
+        // moonshot-kimi-k2-aliases:start
+        "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
+        "moonshot/kimi-k2-0905-preview": { alias: "Kimi K2" },
+        "moonshot/kimi-k2-turbo-preview": { alias: "Kimi K2 Turbo" },
+        "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
+        "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
+        // moonshot-kimi-k2-aliases:end
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        apiKey: "${MOONSHOT_API_KEY}",
+        api: "openai-completions",
+        models: [
+          // moonshot-kimi-k2-models:start
+          {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+          {
+            id: "kimi-k2-0905-preview",
+            name: "Kimi K2 0905 Preview",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+          {
+            id: "kimi-k2-turbo-preview",
+            name: "Kimi K2 Turbo",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+          {
+            id: "kimi-k2-thinking",
+            name: "Kimi K2 Thinking",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+          {
+            id: "kimi-k2-thinking-turbo",
+            name: "Kimi K2 Thinking Turbo",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192,
+          },
+          // moonshot-kimi-k2-models:end
+        ],
+      },
+    },
+  },
+}
+```
+
+## Kimi Coding
+
+```json5
+{
+  env: { KIMI_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "kimi-coding/k2p5" },
+      models: {
+        "kimi-coding/k2p5": { alias: "Kimi K2.5" },
+      },
+    },
+  },
+}
+```
+
+## Noteringar
+
+- Moonshot-modellreferenser använder `moonshot/<modelId>`. Kimi Coding-modellreferenser använder `kimi-coding/<modelId>`.
+- Åsidosätt prissättning och kontextmetadata i `models.providers` vid behov.
+- Om Moonshot publicerar andra kontextgränser för en modell, justera
+  `contextWindow` därefter.
+- Använd `https://api.moonshot.ai/v1` för den internationella endpointen och `https://api.moonshot.cn/v1` för Kina-endpointen.

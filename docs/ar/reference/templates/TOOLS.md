@@ -1,0 +1,53 @@
+---
+summary: "قالب مساحة العمل لملف TOOLS.md"
+read_when:
+  - "التهيئة الأولية لمساحة عمل يدويًا"
+x-i18n:
+  source_path: reference/templates/TOOLS.md
+  source_hash: 3ed08cd537620749
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:43Z
+---
+
+# TOOLS.md - ملاحظات محلية
+
+تُعرِّف Skills _كيف_ تعمل الأدوات. هذا الملف مخصّص لتفاصيلك _الخاصة_ — الأشياء الفريدة لإعدادك.
+
+## ما الذي يُكتب هنا
+
+أشياء مثل:
+
+- أسماء الكاميرات ومواقعها
+- مضيفات SSH والأسماء المستعارة
+- الأصوات المفضلة لتحويل النص إلى كلام (TTS)
+- أسماء السماعات/الغرف
+- ألقاب الأجهزة
+- أي شيء خاص بالبيئة
+
+## أمثلة
+
+```markdown
+### Cameras
+
+- living-room → Main area, 180° wide angle
+- front-door → Entrance, motion-triggered
+
+### SSH
+
+- home-server → 192.168.1.100, user: admin
+
+### TTS
+
+- Preferred voice: "Nova" (warm, slightly British)
+- Default speaker: Kitchen HomePod
+```
+
+## لماذا الفصل؟
+
+تُشارك Skills بين الجميع. أمّا إعدادك فهو يخصك. الفصل بينهما يعني أنه يمكنك تحديث Skills دون فقدان ملاحظاتك، ومشاركة Skills دون تسريب بنيتك التحتية.
+
+---
+
+أضِف أي شيء يساعدك على إنجاز عملك. هذا هو «دليل الغش» الخاص بك.

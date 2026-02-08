@@ -1,0 +1,238 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (Netzwerk-Gateway)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (Netzwerk-Gateway)"
+  },
+  {
+    "source": "gateway host",
+    "target": "Gateway-Host"
+  },
+  {
+    "source": "host",
+    "target": "Host"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills-Konfiguration"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills-Konfiguration"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "node",
+    "target": "Node"
+  },
+  {
+    "source": "agent",
+    "target": "Agent"
+  },
+  {
+    "source": "channel",
+    "target": "Kanal"
+  },
+  {
+    "source": "session",
+    "target": "Sitzung"
+  },
+  {
+    "source": "provider",
+    "target": "Anbieter"
+  },
+  {
+    "source": "model",
+    "target": "Modell"
+  },
+  {
+    "source": "tool",
+    "target": "Werkzeug"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Erste Schritte"
+  },
+  {
+    "source": "Getting started",
+    "target": "Erste Schritte"
+  },
+  {
+    "source": "Quick start",
+    "target": "Schnellstart"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Schnellstart"
+  },
+  {
+    "source": "Overview",
+    "target": "Überblick"
+  },
+  {
+    "source": "Features",
+    "target": "Funktionen"
+  },
+  {
+    "source": "Configuration",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "Config",
+    "target": "Konfiguration"
+  },
+  {
+    "source": "environment variables",
+    "target": "Umgebungsvariablen"
+  },
+  {
+    "source": "environment variable",
+    "target": "Umgebungsvariable"
+  },
+  {
+    "source": "env vars",
+    "target": "Umgebungsvariablen"
+  },
+  {
+    "source": "env var",
+    "target": "Umgebungsvariable"
+  },
+  {
+    "source": "API key",
+    "target": "API-Schlüssel"
+  },
+  {
+    "source": "setup-token",
+    "target": "Setup-Token"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "Fehlerbehebung"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Fehlerbehebung"
+  },
+  {
+    "source": "FAQ",
+    "target": "Häufig gestellte Fragen"
+  },
+  {
+    "source": "Notes",
+    "target": "Hinweise"
+  },
+  {
+    "source": "Note:",
+    "target": "Hinweis:"
+  },
+  {
+    "source": "Examples",
+    "target": "Beispiele"
+  },
+  {
+    "source": "Summary",
+    "target": "Zusammenfassung"
+  },
+  {
+    "source": "DMs",
+    "target": "Direktnachrichten"
+  },
+  {
+    "source": "DM",
+    "target": "Direktnachricht"
+  },
+  {
+    "source": "onboarding",
+    "target": "Onboarding"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Onboarding"
+  },
+  {
+    "source": "wizard",
+    "target": "Assistent"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "in einer Sandbox"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Companion-Apps"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery (Erkennung)"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway-RPC"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Access control",
+    "target": "Zugriffskontrolle"
+  },
+  {
+    "source": "allowlist",
+    "target": "Allowlist"
+  },
+  {
+    "source": "authorized senders",
+    "target": "autorisierte Absender"
+  }
+]

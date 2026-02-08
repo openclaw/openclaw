@@ -1,0 +1,486 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway (gateway)"
+  },
+  {
+    "source": "gateway",
+    "target": "Gateway (gateway)"
+  },
+  {
+    "source": "Gateway host",
+    "target": "Gateway-host"
+  },
+  {
+    "source": "gateway host",
+    "target": "Gateway-host"
+  },
+  {
+    "source": "Gateway RPC",
+    "target": "Gateway RPC"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "Direct (ws/wss)",
+    "target": "Direct (ws/wss)"
+  },
+  {
+    "source": "Remote over SSH",
+    "target": "Op afstand via SSH"
+  },
+  {
+    "source": "SSH tunnel",
+    "target": "SSH-tunnel"
+  },
+  {
+    "source": "Transport",
+    "target": "Transport"
+  },
+  {
+    "source": "agent",
+    "target": "agent"
+  },
+  {
+    "source": "per-agent",
+    "target": "per agent"
+  },
+  {
+    "source": "channel",
+    "target": "kanaal"
+  },
+  {
+    "source": "session",
+    "target": "sessie"
+  },
+  {
+    "source": "provider",
+    "target": "provider"
+  },
+  {
+    "source": "model",
+    "target": "model"
+  },
+  {
+    "source": "tool",
+    "target": "tool"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "gesandboxed"
+  },
+  {
+    "source": "block streaming",
+    "target": "blokstreaming"
+  },
+  {
+    "source": "Discovery",
+    "target": "Discovery"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Companion-apps"
+  },
+  {
+    "source": "expected keys",
+    "target": "verwachte sleutels"
+  },
+  {
+    "source": "setup-token",
+    "target": "setup-token"
+  },
+  {
+    "source": "API key",
+    "target": "API-sleutel"
+  },
+  {
+    "source": "Authentication",
+    "target": "Authenticatie"
+  },
+  {
+    "source": "Bot",
+    "target": "bot"
+  },
+  {
+    "source": "Bot Token",
+    "target": "bot-token"
+  },
+  {
+    "source": "Permissions",
+    "target": "rechten"
+  },
+  {
+    "source": "Message Content Intent",
+    "target": "Message Content Intent"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "typindicatoren"
+  },
+  {
+    "source": "Heartbeats",
+    "target": "heartbeat-signalen"
+  },
+  {
+    "source": "Access control",
+    "target": "toegangsbeheer"
+  },
+  {
+    "source": "authorized senders",
+    "target": "geautoriseerde afzenders"
+  },
+  {
+    "source": "allowlist",
+    "target": "toegestane lijst"
+  },
+  {
+    "source": "DMs",
+    "target": "DM's"
+  },
+  {
+    "source": "DM access",
+    "target": "DM-toegang"
+  },
+  {
+    "source": "Groups",
+    "target": "groepen"
+  },
+  {
+    "source": "Workspace",
+    "target": "werkruimte"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "uitvoeringsgoedkeuringen"
+  },
+  {
+    "source": "Context",
+    "target": "context"
+  },
+  {
+    "source": "Security",
+    "target": "beveiliging"
+  },
+  {
+    "source": "Safety",
+    "target": "veiligheid"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Problemen oplossen"
+  },
+  {
+    "source": "FAQ",
+    "target": "Veelgestelde vragen"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Aan de slag"
+  },
+  {
+    "source": "Quick start",
+    "target": "Snelle start"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Snelle start"
+  },
+  {
+    "source": "Quick setup (beginner)",
+    "target": "Snelle installatie (beginner)"
+  },
+  {
+    "source": "Setup",
+    "target": "Installatie"
+  },
+  {
+    "source": "Setup (fast path)",
+    "target": "Installatie (snelle route)"
+  },
+  {
+    "source": "Prerequisites",
+    "target": "Vereisten"
+  },
+  {
+    "source": "Prereqs",
+    "target": "Vereisten"
+  },
+  {
+    "source": "Requirements",
+    "target": "Vereisten"
+  },
+  {
+    "source": "Configuration",
+    "target": "Configuratie"
+  },
+  {
+    "source": "Config",
+    "target": "config"
+  },
+  {
+    "source": "Config snippet",
+    "target": "config-fragment"
+  },
+  {
+    "source": "Config writes",
+    "target": "config-wegschrijvingen"
+  },
+  {
+    "source": "Environment variables",
+    "target": "omgevingsvariabelen"
+  },
+  {
+    "source": "Options",
+    "target": "opties"
+  },
+  {
+    "source": "Options:",
+    "target": "Opties:"
+  },
+  {
+    "source": "Defaults",
+    "target": "standaardwaarden"
+  },
+  {
+    "source": "Overview",
+    "target": "Overzicht"
+  },
+  {
+    "source": "How it works",
+    "target": "Hoe het werkt"
+  },
+  {
+    "source": "How It Works",
+    "target": "Hoe het werkt"
+  },
+  {
+    "source": "How it works (behavior)",
+    "target": "Hoe het werkt (gedrag)"
+  },
+  {
+    "source": "Examples",
+    "target": "Voorbeelden"
+  },
+  {
+    "source": "Example",
+    "target": "Voorbeeld"
+  },
+  {
+    "source": "Summary",
+    "target": "Samenvatting"
+  },
+  {
+    "source": "Notes",
+    "target": "Notities"
+  },
+  {
+    "source": "Notes:",
+    "target": "Notities:"
+  },
+  {
+    "source": "Note:",
+    "target": "Let op:"
+  },
+  {
+    "source": "Tip:",
+    "target": "Tip:"
+  },
+  {
+    "source": "Important:",
+    "target": "Belangrijk:"
+  },
+  {
+    "source": "Recommended:",
+    "target": "Aanbevolen:"
+  },
+  {
+    "source": "See Also",
+    "target": "Zie ook"
+  },
+  {
+    "source": "See:",
+    "target": "Zie:"
+  },
+  {
+    "source": "Related docs",
+    "target": "Gerelateerde documentatie"
+  },
+  {
+    "source": "Related",
+    "target": "Gerelateerd"
+  },
+  {
+    "source": "References",
+    "target": "Referenties"
+  },
+  {
+    "source": "Next steps",
+    "target": "Volgende stappen"
+  },
+  {
+    "source": "Usage",
+    "target": "Gebruik"
+  },
+  {
+    "source": "Commands",
+    "target": "Opdrachten"
+  },
+  {
+    "source": "Common commands",
+    "target": "Veelgebruikte opdrachten"
+  },
+  {
+    "source": "Install",
+    "target": "Installeren"
+  },
+  {
+    "source": "Enable",
+    "target": "Inschakelen"
+  },
+  {
+    "source": "Reset",
+    "target": "Resetten"
+  },
+  {
+    "source": "errors",
+    "target": "fouten"
+  },
+  {
+    "source": "Testing",
+    "target": "Testen"
+  },
+  {
+    "source": "Tests",
+    "target": "Tests"
+  },
+  {
+    "source": "Output",
+    "target": "Uitvoer"
+  },
+  {
+    "source": "Output:",
+    "target": "Uitvoer:"
+  },
+  {
+    "source": "JSON output",
+    "target": "JSON-uitvoer"
+  },
+  {
+    "source": "optional",
+    "target": "optioneel"
+  },
+  {
+    "source": "must",
+    "target": "moet"
+  },
+  {
+    "source": "disabled",
+    "target": "uitgeschakeld"
+  },
+  {
+    "source": "off",
+    "target": "uit"
+  },
+  {
+    "source": "off by default",
+    "target": "standaard uit"
+  },
+  {
+    "source": "disabled by default",
+    "target": "standaard uitgeschakeld"
+  },
+  {
+    "source": "host",
+    "target": "host"
+  },
+  {
+    "source": "node host",
+    "target": "node-host"
+  },
+  {
+    "source": "node",
+    "target": "node"
+  },
+  {
+    "source": "Node",
+    "target": "Node"
+  },
+  {
+    "source": "nodes",
+    "target": "nodes"
+  },
+  {
+    "source": "Nodes",
+    "target": "Nodes"
+  }
+]

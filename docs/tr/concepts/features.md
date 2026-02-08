@@ -1,0 +1,60 @@
+---
+summary: "Kanallar, yönlendirme, medya ve UX genelinde OpenClaw yetenekleri."
+read_when:
+  - OpenClaw’ın neleri desteklediğine dair tam bir liste istiyorsanız
+title: "Özellikler"
+x-i18n:
+  source_path: concepts/features.md
+  source_hash: 1b6aee0bfda75182
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:53:09Z
+---
+
+## Öne çıkanlar
+
+<Columns>
+  <Card title="Kanallar" icon="message-square">
+    Tek bir Gateway ile WhatsApp, Telegram, Discord ve iMessage.
+  </Card>
+  <Card title="Eklentiler" icon="plug">
+    Uzantılarla Mattermost ve daha fazlasını ekleyin.
+  </Card>
+  <Card title="Yönlendirme" icon="route">
+    İzole oturumlarla çoklu ajan yönlendirmesi.
+  </Card>
+  <Card title="Medya" icon="image">
+    Görseller, ses ve belgeler; giriş ve çıkış.
+  </Card>
+  <Card title="Uygulamalar ve UI" icon="monitor">
+    Web Control UI ve macOS yardımcı uygulaması.
+  </Card>
+  <Card title="Mobil düğümler" icon="smartphone">
+    Canvas desteğiyle iOS ve Android düğümleri.
+  </Card>
+</Columns>
+
+## Tam liste
+
+- WhatsApp Web (Baileys) üzerinden WhatsApp entegrasyonu
+- Telegram bot desteği (grammY)
+- Discord bot desteği (channels.discord.js)
+- Mattermost bot desteği (eklenti)
+- local imsg CLI (macOS) üzerinden iMessage entegrasyonu
+- Araç akışıyla RPC modunda Pi için ajan köprüsü
+- Uzun yanıtlar için akış ve parçalara bölme
+- Çalışma alanı veya gönderici başına izole oturumlar için çoklu ajan yönlendirmesi
+- OAuth üzerinden Anthropic ve OpenAI için abonelik kimlik doğrulaması
+- Oturumlar: doğrudan sohbetler paylaşılan `main` içinde toplanır; gruplar izoledir
+- Bahsetmeye dayalı etkinleştirme ile grup sohbeti desteği
+- Görseller, ses ve belgeler için medya desteği
+- İsteğe bağlı sesli not döküm kancası
+- WebChat ve macOS menü çubuğu uygulaması
+- Eşleştirme ve Canvas yüzeyiyle iOS düğümü
+- Eşleştirme, Canvas, sohbet ve kamera ile Android düğümü
+
+<Note>
+Legacy Claude, Codex, Gemini ve Opencode yolları kaldırılmıştır. Pi, tek
+kodlama ajanı yoludur.
+</Note>

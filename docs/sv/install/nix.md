@@ -1,0 +1,103 @@
+---
+summary: "Installera OpenClaw deklarativt med Nix"
+read_when:
+  - Du vill ha reproducerbara installationer med möjlighet till återställning
+  - Du använder redan Nix/NixOS/Home Manager
+  - Du vill att allt ska vara pinnat och hanteras deklarativt
+title: "Nix"
+x-i18n:
+  source_path: install/nix.md
+  source_hash: f1452194cfdd7461
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T08:17:41Z
+---
+
+# Nix-installation
+
+Det rekommenderade sättet att köra OpenClaw med Nix är via **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** — en Home Manager-modul med allt inkluderat.
+
+## Snabbstart
+
+Klistra in detta till din AI-agent (Claude, Cursor, etc.):
+
+```text
+I want to set up nix-openclaw on my Mac.
+Repository: github:openclaw/nix-openclaw
+
+What I need you to do:
+1. Check if Determinate Nix is installed (if not, install it)
+2. Create a local flake at ~/code/openclaw-local using templates/agent-first/flake.nix
+3. Help me create a Telegram bot (@BotFather) and get my chat ID (@userinfobot)
+4. Set up secrets (bot token, Anthropic key) - plain files at ~/.secrets/ is fine
+5. Fill in the template placeholders and run home-manager switch
+6. Verify: launchd running, bot responds to messages
+
+Reference the nix-openclaw README for module options.
+```
+
+> **📦 Fullständig guide: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
+>
+> Repo:t nix-openclaw är den primära källan för Nix-installation. Den här sidan är bara en snabb översikt.
+
+## Vad du får
+
+- Gateway + macOS-app + verktyg (whisper, spotify, kameror) — allt pinnat
+- Launchd-tjänst som överlever omstarter
+- Plugin-system med deklarativ konfig
+- Omedelbar återställning: `home-manager switch --rollback`
+
+---
+
+## Körbeteende i Nix-läge
+
+När `OPENCLAW_NIX_MODE=1` är satt (automatiskt med nix-openclaw):
+
+OpenClaw stöder ett **Nix-läge** som gör konfigurationen deterministisk och inaktiverar flöden för automatisk installation.
+Aktivera det genom att exportera:
+
+```bash
+OPENCLAW_NIX_MODE=1
+```
+
+På macOS ärver GUI-appen inte automatiskt shell-miljövariabler. Du kan
+också aktivera Nix-läge via defaults:
+
+```bash
+defaults write bot.molt.mac openclaw.nixMode -bool true
+```
+
+### Konfig- och tillståndssökvägar
+
+OpenClaw läser JSON5-konfig från `OPENCLAW_CONFIG_PATH` och lagrar föränderlig data i `OPENCLAW_STATE_DIR`.
+
+- `OPENCLAW_STATE_DIR` (standard: `~/.openclaw`)
+- `OPENCLAW_CONFIG_PATH` (standard: `$OPENCLAW_STATE_DIR/openclaw.json`)
+
+När du kör under Nix ska dessa sättas explicit till Nix-hanterade platser så att körningstillstånd och konfig
+hålls borta från den oföränderliga store:n.
+
+### Körbeteende i Nix-läge
+
+- Flöden för automatisk installation och självmutation är inaktiverade
+- Saknade beroenden visar Nix-specifika åtgärdsmeddelanden
+- UI visar en skrivskyddad Nix-lägesbanner när den finns
+
+## Paketeringsnotering (macOS)
+
+Paketeringsflödet för macOS förväntar sig en stabil Info.plist-mall på:
+
+```
+apps/macos/Sources/OpenClaw/Resources/Info.plist
+```
+
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) kopierar denna mall in i app-paketet och patchar dynamiska fält
+(bundle-ID, version/build, Git SHA, Sparkle-nycklar). Detta håller plist-filen deterministisk för SwiftPM-
+paketering och Nix-byggen (som inte förlitar sig på en full Xcode-verktygskedja).
+
+## Relaterat
+
+- [nix-openclaw](https://github.com/openclaw/nix-openclaw) — fullständig konfigureringsguide
+- [Guide](/start/wizard) — icke-Nix CLI-konfigurering
+- [Docker](/install/docker) — containeriserad konfigurering

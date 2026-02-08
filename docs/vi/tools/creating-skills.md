@@ -1,0 +1,61 @@
+---
+title: "Tạo Skills"
+x-i18n:
+  source_path: tools/creating-skills.md
+  source_hash: ad801da34fe361ff
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:40:21Z
+---
+
+# Tạo Skills Tùy chỉnh 🛠
+
+OpenClaw được thiết kế để dễ dàng mở rộng. "Skills" là cách chính để thêm các khả năng mới cho trợ lý của bạn.
+
+## Skill là gì?
+
+Một skill là một thư mục chứa tệp `SKILL.md` (cung cấp hướng dẫn và định nghĩa công cụ cho LLM) và có thể kèm theo một số script hoặc tài nguyên.
+
+## Từng bước: Skill đầu tiên của bạn
+
+### 1. Tạo thư mục
+
+Skills nằm trong workspace của bạn, thường là `~/.openclaw/workspace/skills/`. Tạo một thư mục mới cho skill của bạn:
+
+```bash
+mkdir -p ~/.openclaw/workspace/skills/hello-world
+```
+
+### 2. Định nghĩa `SKILL.md`
+
+Tạo tệp `SKILL.md` trong thư mục đó. Tệp này sử dụng frontmatter YAML cho metadata và Markdown cho hướng dẫn.
+
+```markdown
+---
+name: hello_world
+description: A simple skill that says hello.
+---
+
+# Hello World Skill
+
+When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
+```
+
+### 3. Thêm công cụ (Tùy chọn)
+
+Bạn có thể định nghĩa các công cụ tùy chỉnh trong frontmatter hoặc hướng dẫn tác tử sử dụng các công cụ hệ thống hiện có (như `bash` hoặc `browser`).
+
+### 4. Làm mới OpenClaw
+
+Yêu cầu tác tử của bạn "refresh skills" hoặc khởi động lại gateway. OpenClaw sẽ phát hiện thư mục mới và lập chỉ mục `SKILL.md`.
+
+## Thực hành tốt nhất
+
+- **Ngắn gọn**: Hướng dẫn mô hình về _làm gì_, không phải cách trở thành một AI.
+- **An toàn là trên hết**: Nếu skill của bạn sử dụng `bash`, hãy đảm bảo các prompt không cho phép chèn lệnh tùy ý từ dữ liệu người dùng không đáng tin cậy.
+- **Kiểm thử cục bộ**: Sử dụng `openclaw agent --message "use my new skill"` để kiểm thử.
+
+## Skills dùng chung
+
+Bạn cũng có thể duyệt và đóng góp skills tại [ClawHub](https://clawhub.com).

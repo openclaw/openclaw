@@ -1,0 +1,66 @@
+---
+summary: "سير عمل Bun (تجريبي): التثبيت والمطبات مقارنةً بـ pnpm"
+read_when:
+  - "تريد أسرع دورة تطوير محلية (bun + watch)"
+  - "واجهت مشكلات في التثبيت/التصحيح/نصوص دورة الحياة في Bun"
+title: "Bun (تجريبي)"
+x-i18n:
+  source_path: install/bun.md
+  source_hash: eb3f4c222b6bae49
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:21Z
+---
+
+# Bun (experimental)
+
+الهدف: تشغيل هذا المستودع باستخدام **Bun** (اختياري، غير موصى به لـ WhatsApp/Telegram)
+من دون الانحراف عن سير عمل pnpm.
+
+⚠️ **غير موصى به لبيئة تشغيل Gateway** (أخطاء WhatsApp/Telegram). استخدم Node للإنتاج.
+
+## الحالة
+
+- Bun هو بيئة تشغيل محلية اختيارية لتشغيل TypeScript مباشرةً (`bun run …`، `bun --watch …`).
+- `pnpm` هو الافتراضي لعمليات البناء ويظل مدعومًا بالكامل (ويُستخدم بواسطة بعض أدوات التوثيق).
+- لا يمكن لـ Bun استخدام `pnpm-lock.yaml` وسيتجاهله.
+
+## التثبيت
+
+الافتراضي:
+
+```sh
+bun install
+```
+
+ملاحظة: يتم تجاهل `bun.lock`/`bun.lockb` عبر gitignore، لذا لا يحدث أي تغيّر في المستودع في كلتا الحالتين. إذا كنت تريد _عدم كتابة أي ملفات قفل_:
+
+```sh
+bun install --no-save
+```
+
+## البناء / الاختبار (Bun)
+
+```sh
+bun run build
+bun run vitest run
+```
+
+## نصوص دورة حياة Bun (محجوبة افتراضيًا)
+
+قد يحجب Bun نصوص دورة حياة التبعيات ما لم يتم الوثوق بها صراحةً (`bun pm untrusted` / `bun pm trust`).
+بالنسبة لهذا المستودع، النصوص الشائعة التي تُحجب ليست مطلوبة:
+
+- `@whiskeysockets/baileys` `preinstall`: يتحقق من أن الإصدار الرئيسي لـ Node >= 20 (نحن نشغّل Node 22+).
+- `protobufjs` `postinstall`: يُصدر تحذيرات حول مخططات إصدارات غير متوافقة (من دون مخرجات بناء).
+
+إذا واجهت مشكلة تشغيل حقيقية تتطلب هذه النصوص، فقم بالوثوق بها صراحةً:
+
+```sh
+bun pm trust @whiskeysockets/baileys protobufjs
+```
+
+## محاذير
+
+- لا تزال بعض النصوص تُضمّن pnpm بشكل ثابت (مثل `docs:build`، `ui:*`، `protocol:check`). شغّل هذه عبر pnpm في الوقت الحالي.

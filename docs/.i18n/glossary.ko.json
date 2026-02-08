@@ -1,0 +1,242 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway(게이트웨이)"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills 설정"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills 설정"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "시작하기"
+  },
+  {
+    "source": "Getting started",
+    "target": "시작하기"
+  },
+  {
+    "source": "Quick start",
+    "target": "빠른 시작"
+  },
+  {
+    "source": "Quick Start",
+    "target": "빠른 시작"
+  },
+  {
+    "source": "Docs directory",
+    "target": "문서 디렉토리"
+  },
+  {
+    "source": "Credits",
+    "target": "크레딧"
+  },
+  {
+    "source": "Features",
+    "target": "기능"
+  },
+  {
+    "source": "DMs",
+    "target": "다이렉트 메시지"
+  },
+  {
+    "source": "DM",
+    "target": "다이렉트 메시지"
+  },
+  {
+    "source": "sandbox",
+    "target": "샌드박스"
+  },
+  {
+    "source": "Sandbox",
+    "target": "샌드박스"
+  },
+  {
+    "source": "sandboxing",
+    "target": "샌드박스화"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "샌드박스화"
+  },
+  {
+    "source": "sandboxed",
+    "target": "샌드박스화된"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "샌드박스화된"
+  },
+  {
+    "source": "Companion apps",
+    "target": "컴패니언 앱"
+  },
+  {
+    "source": "expected keys",
+    "target": "예상되는 키"
+  },
+  {
+    "source": "block streaming",
+    "target": "블록 스트리밍"
+  },
+  {
+    "source": "Block streaming",
+    "target": "블록 스트리밍"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "디바이스 검색 + 전송"
+  },
+  {
+    "source": "Discovery",
+    "target": "디바이스 검색"
+  },
+  {
+    "source": "Network model",
+    "target": "네트워크 모델"
+  },
+  {
+    "source": "for full details",
+    "target": "자세한 내용은 다음을 참고하십시오"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "처음 60초"
+  },
+  {
+    "source": "agent",
+    "target": "에이전트"
+  },
+  {
+    "source": "channel",
+    "target": "채널"
+  },
+  {
+    "source": "session",
+    "target": "세션"
+  },
+  {
+    "source": "provider",
+    "target": "프로바이더"
+  },
+  {
+    "source": "model",
+    "target": "모델"
+  },
+  {
+    "source": "tool",
+    "target": "도구"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "문제 해결"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "문제 해결"
+  },
+  {
+    "source": "FAQ",
+    "target": "자주 묻는 질문"
+  },
+  {
+    "source": "onboarding",
+    "target": "온보딩"
+  },
+  {
+    "source": "Onboarding",
+    "target": "온보딩"
+  },
+  {
+    "source": "wizard",
+    "target": "마법사"
+  },
+  {
+    "source": "environment variables",
+    "target": "환경 변수"
+  },
+  {
+    "source": "environment variable",
+    "target": "환경 변수"
+  },
+  {
+    "source": "env vars",
+    "target": "환경 변수"
+  },
+  {
+    "source": "env var",
+    "target": "환경 변수"
+  },
+  {
+    "source": "Configuration",
+    "target": "구성"
+  },
+  {
+    "source": "Config",
+    "target": "설정"
+  },
+  {
+    "source": "Setup",
+    "target": "설정"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  }
+]

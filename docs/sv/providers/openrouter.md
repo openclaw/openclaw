@@ -1,0 +1,44 @@
+---
+summary: "Använd OpenRouters enhetliga API för att få åtkomst till många modeller i OpenClaw"
+read_when:
+  - Du vill ha en enda API-nyckel för många LLM:er
+  - Du vill köra modeller via OpenRouter i OpenClaw
+title: "OpenRouter"
+x-i18n:
+  source_path: providers/openrouter.md
+  source_hash: b7e29fc9c456c64d
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T08:18:12Z
+---
+
+# OpenRouter
+
+OpenRouter tillhandahåller ett **enhetligt API** som routar förfrågningar till många modeller bakom en enda
+endpoint och API-nyckel. Det är OpenAI-kompatibelt, så de flesta OpenAI-SDK:er fungerar genom att byta bas-URL.
+
+## CLI-konfigurering
+
+```bash
+openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+```
+
+## Konfigutdrag
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
+    },
+  },
+}
+```
+
+## Noteringar
+
+- Modellreferenser är `openrouter/<provider>/<model>`.
+- För fler modell-/leverantörsalternativ, se [/concepts/model-providers](/concepts/model-providers).
+- OpenRouter använder en Bearer-token med din API-nyckel under huven.

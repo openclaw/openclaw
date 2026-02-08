@@ -1,0 +1,88 @@
+---
+summary: "メニューバーのステータスロジックと、ユーザーに表示される内容"
+read_when:
+  - mac メニュー UI またはステータスロジックを調整する場合
+title: "メニューバー"
+x-i18n:
+  source_path: platforms/mac/menu-bar.md
+  source_hash: 8eb73c0e671a76aa
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:22:43Z
+---
+
+# メニューバーのステータスロジック
+
+## 表示される内容
+
+- 現在のエージェントの作業状態を、メニューバーのアイコンおよびメニュー先頭のステータス行に表示します。
+- 作業がアクティブな間はヘルスステータスを非表示にし、すべてのセッションがアイドルになると再表示します。
+- メニュー内の「Nodes」ブロックには **デバイス** のみ（`node.list` によってペアリングされたノード）を一覧表示し、クライアント／プレゼンスのエントリーは表示しません。
+- プロバイダーの使用量スナップショットが利用可能な場合、Context の下に「Usage」セクションが表示されます。
+
+## 状態モデル
+
+- セッション: イベントは `runId`（実行単位）に加えて、ペイロード内の `sessionKey` とともに到着します。「メイン」セッションはキー `main` です。存在しない場合は、最も最近更新されたセッションにフォールバックします。
+- 優先度: 常にメインが優先されます。メインがアクティブな場合、その状態を即座に表示します。メインがアイドルの場合は、直近でアクティブだった非メインのセッションを表示します。アクティビティの途中で切り替えることはせず、現在のセッションがアイドルになるか、メインがアクティブになったときにのみ切り替えます。
+- アクティビティ種別:
+  - `job`: 高レベルのコマンド実行（`state: started|streaming|done|error`）。
+  - `tool`: `phase: start|result`（`toolName` および `meta/args` を含む）。
+
+## IconState enum（Swift）
+
+- `idle`
+- `workingMain(ActivityKind)`
+- `workingOther(ActivityKind)`
+- `overridden(ActivityKind)`（デバッグ用オーバーライド）
+
+### ActivityKind → グリフ
+
+- `exec` → 💻
+- `read` → 📄
+- `write` → ✍️
+- `edit` → 📝
+- `attach` → 📎
+- default → 🛠️
+
+### 視覚的マッピング
+
+- `idle`: 通常のクリッター。
+- `workingMain`: グリフ付きバッジ、フルのティント、脚の「作業中」アニメーション。
+- `workingOther`: グリフ付きバッジ、抑えめのティント、走り回りなし。
+- `overridden`: アクティビティに関係なく、選択されたグリフ／ティントを使用します。
+
+## ステータス行のテキスト（メニュー）
+
+- 作業がアクティブな間: `<Session role> · <activity label>`
+  - 例: `Main · exec: pnpm test`、`Other · read: apps/macos/Sources/OpenClaw/AppState.swift`。
+- アイドル時: ヘルスサマリーにフォールバックします。
+
+## イベント取り込み
+
+- ソース: コントロールチャンネルの `agent` イベント（`ControlChannel.handleAgentEvent`）。
+- 解析されるフィールド:
+  - 開始／停止用の `stream: "job"` と `data.state`。
+  - `stream: "tool"`（`data.phase`、`name`、任意の `meta`/`args`）。
+- ラベル:
+  - `exec`: `args.command` の先頭行。
+  - `read`/`write`: 短縮されたパス。
+  - `edit`: `meta`/diff 件数から推定した変更種別を含むパス。
+  - フォールバック: ツール名。
+
+## デバッグ用オーバーライド
+
+- 設定 ▸ デバッグ ▸ 「Icon override」ピッカー:
+  - `System (auto)`（デフォルト）
+  - `Working: main`（ツール種別ごと）
+  - `Working: other`（ツール種別ごと）
+  - `Idle`
+- `@AppStorage("iconOverride")` により保存され、`IconState.overridden` にマッピングされます。
+
+## テストチェックリスト
+
+- メインセッションのジョブをトリガー: アイコンが即座に切り替わり、ステータス行にメインのラベルが表示されることを確認します。
+- メインがアイドルの間に非メインセッションのジョブをトリガー: アイコン／ステータスが非メインを表示し、完了まで安定していることを確認します。
+- 他がアクティブな状態でメインを開始: アイコンが即座にメインへ切り替わることを確認します。
+- 急速なツールのバースト: バッジがちらつかないことを確認します（ツール結果に対する TTL の猶予）。
+- すべてのセッションがアイドルになったら、ヘルス行が再表示されることを確認します。

@@ -1,0 +1,66 @@
+---
+summary: "دورة حياة Gateway على macOS ‏(launchd)"
+read_when:
+  - دمج تطبيق mac مع دورة حياة Gateway
+title: "دورة حياة Gateway"
+x-i18n:
+  source_path: platforms/mac/child-process.md
+  source_hash: 9b910f574b723bc1
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T10:48:31Z
+---
+
+# دورة حياة Gateway على macOS
+
+يدير تطبيق macOS **Gateway عبر launchd** افتراضيًا ولا يقوم بتشغيل Gateway كعملية تابعة. يحاول أولًا الارتباط بـ Gateway يعمل بالفعل على المنفذ المُهيّأ؛ وإذا لم يكن أيٌّ منها متاحًا، يفعّل خدمة launchd عبر CLI الخارجي `openclaw` (من دون وقت تشغيل مضمّن). يوفّر ذلك بدءًا تلقائيًا موثوقًا عند تسجيل الدخول وإعادة تشغيل عند الأعطال.
+
+وضع العملية التابعة (تشغيل Gateway مباشرةً بواسطة التطبيق) **غير مستخدم** حاليًا. إذا كنت بحاجة إلى اقتران أوثق بواجهة المستخدم، شغّل Gateway يدويًا في الطرفية.
+
+## السلوك الافتراضي (launchd)
+
+- يثبّت التطبيق LaunchAgent لكل مستخدم بالوسم `bot.molt.gateway`
+  (أو `bot.molt.<profile>` عند استخدام `--profile`/`OPENCLAW_PROFILE`؛ ويتم دعم `com.openclaw.*` القديم).
+- عند تمكين الوضع المحلي، يضمن التطبيق تحميل LaunchAgent
+  ويبدأ Gateway عند الحاجة.
+- تُكتب السجلات إلى مسار سجل Gateway الخاص بـ launchd (مرئي في إعدادات التصحيح).
+
+أوامر شائعة:
+
+```bash
+launchctl kickstart -k gui/$UID/bot.molt.gateway
+launchctl bootout gui/$UID/bot.molt.gateway
+```
+
+استبدل الوسم بـ `bot.molt.<profile>` عند تشغيل ملف تعريف مُسمّى.
+
+## إصدارات التطوير غير الموقّعة
+
+`scripts/restart-mac.sh --no-sign` مخصّص للبناءات المحلية السريعة عندما لا تتوفر مفاتيح التوقيع. ولمنع launchd من الإشارة إلى ثنائي relay غير موقّع، فإنه:
+
+- يكتب `~/.openclaw/disable-launchagent`.
+
+تقوم التشغيلات الموقّعة لـ `scripts/restart-mac.sh` بمسح هذا التجاوز إذا كان المُعلِّم موجودًا. لإعادة الضبط يدويًا:
+
+```bash
+rm ~/.openclaw/disable-launchagent
+```
+
+## وضع الارتباط فقط
+
+لإجبار تطبيق macOS على **عدم تثبيت أو إدارة launchd مطلقًا**، شغّله باستخدام
+`--attach-only` (أو `--no-launchd`). يضبط هذا `~/.openclaw/disable-launchagent`،
+بحيث يقتصر التطبيق على الارتباط بـ Gateway يعمل بالفعل. يمكنك تبديل السلوك نفسه في إعدادات التصحيح.
+
+## الوضع البعيد
+
+لا يبدأ الوضع البعيد Gateway محليًا مطلقًا. يستخدم التطبيق نفق SSH إلى المضيف البعيد ويتصل عبر ذلك النفق.
+
+## لماذا نفضّل launchd
+
+- بدء تلقائي عند تسجيل الدخول.
+- دلالات KeepAlive وإعادة التشغيل المدمجة.
+- سجلات وإشراف متوقّعان.
+
+إذا لزم وجود وضع عملية تابعة حقيقي مرة أخرى، فينبغي توثيقه كَوضع منفصل وصريح مخصّص للتطوير فقط.

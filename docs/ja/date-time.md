@@ -1,0 +1,134 @@
+---
+summary: "エンベロープ、プロンプト、ツール、コネクター全体における日付と時刻の取り扱い"
+read_when:
+  - モデルまたはユーザーに表示されるタイムスタンプの扱いを変更する場合
+  - メッセージやシステムプロンプト出力における時刻フォーマットをデバッグする場合
+title: "日付と時刻"
+x-i18n:
+  source_path: date-time.md
+  source_hash: 753af5946a006215
+  provider: openai
+  model: gpt-5.2-chat-latest
+  workflow: v1
+  generated_at: 2026-02-08T09:21:42Z
+---
+
+# 日付 & 時刻
+
+OpenClaw は、**転送用タイムスタンプにはホストローカル時刻**を、**システムプロンプト内ではユーザーのタイムゾーンのみ**を既定で使用します。
+プロバイダーのタイムスタンプは保持され、ツールが本来のセマンティクスを維持できるようになっています（現在時刻は `session_status` から取得できます）。
+
+## メッセージエンベロープ（既定はローカル）
+
+受信メッセージは、分精度のタイムスタンプ付きでラップされます：
+
+```
+[Provider ... 2026-01-05 16:26 PST] message text
+```
+
+このエンベロープのタイムスタンプは、プロバイダーのタイムゾーンに関係なく、**既定ではホストローカル**です。
+
+この挙動は上書きできます：
+
+```json5
+{
+  agents: {
+    defaults: {
+      envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimestamp: "on", // "on" | "off"
+      envelopeElapsed: "on", // "on" | "off"
+    },
+  },
+}
+```
+
+- `envelopeTimezone: "utc"` は UTC を使用します。
+- `envelopeTimezone: "local"` はホストのタイムゾーンを使用します。
+- `envelopeTimezone: "user"` は `agents.defaults.userTimezone` を使用します（未設定時はホストのタイムゾーンにフォールバックします）。
+- 明示的な IANA タイムゾーン（例：`"America/Chicago"`）を指定すると、固定ゾーンになります。
+- `envelopeTimestamp: "off"` はエンベロープヘッダーから絶対タイムスタンプを削除します。
+- `envelopeElapsed: "off"` は経過時間サフィックス（`+2m` 形式）を削除します。
+
+### 例
+
+**ローカル（既定）：**
+
+```
+[WhatsApp +1555 2026-01-18 00:19 PST] hello
+```
+
+**ユーザーのタイムゾーン：**
+
+```
+[WhatsApp +1555 2026-01-18 00:19 CST] hello
+```
+
+**経過時間を有効化：**
+
+```
+[WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
+```
+
+## システムプロンプト：現在の日付と時刻
+
+ユーザーのタイムゾーンが判明している場合、システムプロンプトには
+**現在の日付と時刻**の専用セクションが含まれ、**タイムゾーンのみ**（時計や時刻形式は含めません）が表示されます。
+これにより、プロンプトキャッシュの安定性が保たれます：
+
+```
+Time zone: America/Chicago
+```
+
+エージェントが現在時刻を必要とする場合は、`session_status` ツールを使用してください。ステータスカードにはタイムスタンプ行が含まれます。
+
+## システムイベント行（既定はローカル）
+
+エージェントコンテキストに挿入されるキュー済みのシステムイベントには、
+メッセージエンベロープと同じタイムゾーン選択（既定：ホストローカル）でタイムスタンプが前置されます。
+
+```
+System: [2026-01-12 12:19:17 PST] Model switched.
+```
+
+### ユーザーのタイムゾーン + 形式の設定
+
+```json5
+{
+  agents: {
+    defaults: {
+      userTimezone: "America/Chicago",
+      timeFormat: "auto", // auto | 12 | 24
+    },
+  },
+}
+```
+
+- `userTimezone` は、プロンプトコンテキスト用の**ユーザーローカルタイムゾーン**を設定します。
+- `timeFormat` は、プロンプト内の**12 時間/24 時間表示**を制御します。`auto` は OS の設定に従います。
+
+## 時刻形式の検出（自動）
+
+`timeFormat: "auto"` の場合、OpenClaw は OS の設定（macOS/Windows）を検査し、
+ロケール形式にフォールバックします。検出された値は、システムコールの繰り返しを避けるため、
+**プロセスごとにキャッシュ**されます。
+
+## ツールペイロード + コネクター（生のプロバイダー時刻 + 正規化フィールド）
+
+チャンネルツールは **プロバイダーネイティブのタイムスタンプ**を返し、一貫性のために正規化フィールドを追加します：
+
+- `timestampMs`：エポックミリ秒（UTC）
+- `timestampUtc`：ISO 8601 の UTC 文字列
+
+生のプロバイダーフィールドは保持され、情報が失われることはありません。
+
+- Slack：API 由来のエポック風文字列
+- Discord：UTC の ISO タイムスタンプ
+- Telegram/WhatsApp：プロバイダー固有の数値/ISO タイムスタンプ
+
+ローカル時刻が必要な場合は、既知のタイムゾーンを用いて下流で変換してください。
+
+## 関連ドキュメント
+
+- [System Prompt](/concepts/system-prompt)
+- [Timezones](/concepts/timezone)
+- [Messages](/concepts/messages)
