@@ -15,6 +15,38 @@ import {
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
+    id: "channels.telegram.token->botToken",
+    describe: "Rename channels.telegram.token to botToken",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      const telegram = getRecord(channels?.telegram);
+      if (!telegram) {
+        return;
+      }
+      // Top-level telegram config
+      if (typeof telegram.token === "string" && telegram.botToken === undefined) {
+        telegram.botToken = telegram.token;
+        delete telegram.token;
+        changes.push("Moved channels.telegram.token → channels.telegram.botToken.");
+      }
+      // Per-account configs
+      const accounts = getRecord(telegram.accounts);
+      if (accounts) {
+        for (const [accountId, account] of Object.entries(accounts)) {
+          const acc = getRecord(account);
+          if (!acc) {
+            continue;
+          }
+          if (typeof acc.token === "string" && acc.botToken === undefined) {
+            acc.botToken = acc.token;
+            delete acc.token;
+            changes.push(`Moved channels.telegram.accounts["${accountId}"].token → botToken.`);
+          }
+        }
+      }
+    },
+  },
+  {
     id: "auth.anthropic-claude-cli-mode-oauth",
     describe: "Switch anthropic:claude-cli auth profile mode to oauth",
     apply: (raw, changes) => {

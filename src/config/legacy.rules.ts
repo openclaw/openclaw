@@ -128,4 +128,9 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
+  {
+    path: ["channels", "telegram", "token"],
+    message:
+      "channels.telegram.token was renamed to channels.telegram.botToken (auto-migrated on load).",
+  },
 ];
