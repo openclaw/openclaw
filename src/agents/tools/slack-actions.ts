@@ -25,6 +25,28 @@ const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage",
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
+function isAlreadyReactedError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const record = err as {
+    data?: { error?: unknown };
+    error?: unknown;
+    message?: unknown;
+  };
+  const dataError = record.data?.error;
+  if (typeof dataError === "string" && dataError.toLowerCase() === "already_reacted") {
+    return true;
+  }
+  if (typeof record.error === "string" && record.error.toLowerCase() === "already_reacted") {
+    return true;
+  }
+  if (typeof record.message === "string") {
+    return record.message.toLowerCase().includes("already_reacted");
+  }
+  return false;
+}
+
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
@@ -148,10 +170,16 @@ export async function handleSlackAction(
           : await removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
-      if (writeOpts) {
-        await reactSlackMessage(channelId, messageId, emoji, writeOpts);
-      } else {
-        await reactSlackMessage(channelId, messageId, emoji);
+      try {
+        if (writeOpts) {
+          await reactSlackMessage(channelId, messageId, emoji, writeOpts);
+        } else {
+          await reactSlackMessage(channelId, messageId, emoji);
+        }
+      } catch (err) {
+        if (!isAlreadyReactedError(err)) {
+          throw err;
+        }
       }
       return jsonResult({ ok: true, added: emoji });
     }

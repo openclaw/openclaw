@@ -47,6 +47,21 @@ describe("handleSlackAction", () => {
     expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
   });
 
+  it("treats already_reacted as success", async () => {
+    reactSlackMessage.mockRejectedValueOnce({ data: { error: "already_reacted" } });
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const result = await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C1",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(result.details).toEqual({ ok: true, added: "✅" });
+  });
+
   it("strips channel: prefix for channelId params", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await handleSlackAction(
