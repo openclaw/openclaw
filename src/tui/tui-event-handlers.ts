@@ -1,6 +1,7 @@
 import type { TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
@@ -140,6 +141,17 @@ export function createEventHandlers(context: EventHandlerContext) {
           : "";
 
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+
+      if (isSilentReplyText(finalText)) {
+        chatLog.dropAssistant(evt.runId);
+        noteFinalizedRun(evt.runId);
+        state.activeChatRunId = null;
+        setActivityStatus("idle");
+        void refreshSessionInfo?.();
+        tui.requestRender();
+        return;
+      }
+
       chatLog.finalizeAssistant(finalText, evt.runId);
       noteFinalizedRun(evt.runId);
       state.activeChatRunId = null;
