@@ -365,12 +365,66 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     .join("\n");
 }
 
+function safeParseTtsPrefs(raw: string): TtsUserPrefs {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+  const obj = parsed as Record<string, unknown>;
+  const tts = obj.tts;
+  if (tts === undefined) {
+    return {};
+  }
+  if (typeof tts !== "object" || tts === null || Array.isArray(tts)) {
+    return {};
+  }
+
+  // Validate each nested field instead of trusting the entire object
+  const ttsObj = tts as Record<string, unknown>;
+  const result: TtsUserPrefs["tts"] = {};
+
+  // auto: must be a valid TtsAutoMode
+  const auto = normalizeTtsAutoMode(ttsObj.auto);
+  if (auto !== undefined) {
+    result.auto = auto;
+  }
+
+  // enabled: must be a boolean
+  if (typeof ttsObj.enabled === "boolean") {
+    result.enabled = ttsObj.enabled;
+  }
+
+  // provider: must be a known TtsProvider
+  if (
+    typeof ttsObj.provider === "string" &&
+    TTS_PROVIDERS.includes(ttsObj.provider as TtsProvider)
+  ) {
+    result.provider = ttsObj.provider as TtsProvider;
+  }
+
+  // maxLength: must be a positive finite number
+  if (
+    typeof ttsObj.maxLength === "number" &&
+    Number.isFinite(ttsObj.maxLength) &&
+    ttsObj.maxLength > 0
+  ) {
+    result.maxLength = ttsObj.maxLength;
+  }
+
+  // summarize: must be a boolean
+  if (typeof ttsObj.summarize === "boolean") {
+    result.summarize = ttsObj.summarize;
+  }
+
+  return Object.keys(result).length > 0 ? { tts: result } : {};
+}
+
 function readPrefs(prefsPath: string): TtsUserPrefs {
   try {
     if (!existsSync(prefsPath)) {
       return {};
     }
-    return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
+    return safeParseTtsPrefs(readFileSync(prefsPath, "utf8"));
   } catch {
     return {};
   }
