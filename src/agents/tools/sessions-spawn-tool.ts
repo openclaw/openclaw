@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -307,7 +307,7 @@ export function createSessionsSpawnTool(opts?: {
 
       // Prepend injected content to the system prompt if present
       const childSystemPrompt = injectedContent
-        ? `${baseSystemPrompt}\n${injectedContent}`
+        ? `${injectedContent}\n${baseSystemPrompt}`
         : baseSystemPrompt;
 
       const childIdem = crypto.randomUUID();

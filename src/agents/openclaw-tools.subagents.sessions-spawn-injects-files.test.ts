@@ -8,9 +8,7 @@ vi.mock("../gateway/call.js", () => ({
 
 const readFileMock = vi.fn();
 vi.mock("node:fs/promises", () => ({
-  default: {
-    readFile: (...args: unknown[]) => readFileMock(...args),
-  },
+  readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
 // Cross-platform test paths - use path.join to ensure correct separators
