@@ -1,4 +1,5 @@
 import type { Server as HttpServer } from "node:http";
+import path from "node:path";
 import { WebSocketServer } from "ws";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -43,6 +44,7 @@ export async function createGatewayRuntimeState(params: {
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
   canvasHostEnabled: boolean;
+  defaultWorkspaceDir: string;
   allowCanvasHostInTests?: boolean;
   logCanvas: { info: (msg: string) => void; warn: (msg: string) => void };
   log: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -91,7 +93,7 @@ export async function createGatewayRuntimeState(params: {
     try {
       const handler = await createCanvasHostHandler({
         runtime: params.canvasRuntime,
-        rootDir: params.cfg.canvasHost?.root,
+        rootDir: params.cfg.canvasHost?.root ?? path.join(params.defaultWorkspaceDir, "canvas"),
         basePath: CANVAS_HOST_PATH,
         allowInTests: params.allowCanvasHostInTests,
         liveReload: params.cfg.canvasHost?.liveReload,

@@ -38,7 +38,7 @@ export type DiscoveryConfig = {
 
 export type CanvasHostConfig = {
   enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
+  /** Directory to serve (default: <workspace>/canvas, e.g. ~/clawd/canvas). */
   root?: string;
   /** HTTP port to listen on (default: 18793). */
   port?: number;
