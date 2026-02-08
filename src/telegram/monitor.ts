@@ -171,9 +171,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      // Track the stop promise so we can await it in finally block.
+      // This prevents race conditions where a new polling loop starts
+      // before the old runner has fully stopped (causing 409 conflicts
+      // and duplicate message delivery).
+      const stopState: { promise: Promise<void> | null } = { promise: null };
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
-          void runner.stop();
+          stopState.promise = runner.stop();
         }
       };
       opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -207,6 +212,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+        // Ensure runner is fully stopped before allowing a new one to start.
+        // Without this await, config hot-reload can start a new polling loop
+        // while the old one is still running, causing getUpdates conflicts.
+        if (stopState.promise) {
+          await stopState.promise.catch(() => {
+            // Ignore stop errors - runner may already be stopped
+          });
+        }
       }
     }
   } finally {
