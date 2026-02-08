@@ -208,6 +208,9 @@ export async function agentCommand(
         sessionId,
         updatedAt: Date.now(),
         skillsSnapshot,
+        // Clear per-session overrides when starting a new session so they
+        // do not carry over from the previous session (#10107).
+        ...(isNewSession ? { modelOverride: undefined, providerOverride: undefined } : {}),
       };
       sessionStore[sessionKey] = next;
       await updateSessionStore(storePath, (store) => {
