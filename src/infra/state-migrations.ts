@@ -180,22 +180,37 @@ function pickLatestLegacyDirectEntry(
   return best;
 }
 
-function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
+export function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
   const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
   if (!sessionId) {
     return null;
   }
+  // 1. Strip absolute paths (e.g. /Users/foo/.openclaw/sessions/...)
+  // 2. Strip extension (.jsonl)
+  const cleanId = path.basename(sessionId, ".jsonl");
+
   const updatedAt =
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
       : Date.now();
-  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+
+  const normalized = {
+    ...(entry as unknown as SessionEntry),
+    sessionId: cleanId,
+    updatedAt,
+  };
+
+  // Remove redundant field
+  if ("sessionFile" in normalized) {
+    delete (normalized as unknown as Record<string, unknown>).sessionFile;
+  }
+
   const rec = normalized as unknown as Record<string, unknown>;
   if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
     rec.groupChannel = rec.room;
   }
   delete rec.room;
-  return normalized;
+  return normalized satisfies SessionEntry;
 }
 
 function resolveUpdatedAt(entry: SessionEntryLike): number {
