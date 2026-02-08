@@ -20,7 +20,9 @@ SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
+LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+NO_CLEAN=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -82,13 +84,16 @@ for arg in "$@"; do
     --wait|-w) WAIT_FOR_LOCK=1 ;;
     --no-sign) NO_SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
+    --no-clean) NO_CLEAN=1 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--no-clean] [--attach-only|--no-attach-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
+      log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
+      log "  --no-clean Skip cleaning build cache (faster rebuilds)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
       log ""
@@ -157,7 +162,9 @@ stop_launch_agent
 run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
 
 # 2) Rebuild into the same path the packager consumes (.build).
-run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
+if [ "$NO_CLEAN" -eq 0 ]; then
+  run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
+fi
 run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
@@ -191,16 +198,16 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
-  fi
-
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
     APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
     return 0
   fi
 
