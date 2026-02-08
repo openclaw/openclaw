@@ -147,6 +147,71 @@ describe("subscribeEmbeddedPiSession", () => {
     },
   );
 
+  it("suppresses thinking tags with attributes (e.g., <thinking reason=...>)", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 50,
+        breakPreference: "newline",
+      },
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+
+    // Simulate Gemini-style thinking tags with attributes
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: '<thinking reason="deliberate">Hidden reasoning',
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "</thinking>\n\nVisible answer",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+
+    const payloadTexts = onBlockReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(payloadTexts.length).toBeGreaterThan(0);
+    for (const text of payloadTexts) {
+      expect(text).not.toContain("Hidden");
+      expect(text).not.toContain("reason=");
+      expect(text).not.toContain("<thinking");
+    }
+    const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
+    expect(combined).toBe("Visible answer");
+  });
+
   it("emits delta chunks in agent events for streaming assistant text", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {

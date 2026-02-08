@@ -1,6 +1,11 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { extractAssistantText, formatReasoningMessage } from "./pi-embedded-utils.js";
+import {
+  extractAssistantText,
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
+  formatReasoningMessage,
+} from "./pi-embedded-utils.js";
 
 describe("extractAssistantText", () => {
   it("strips Minimax tool invocation XML from text", () => {
@@ -544,5 +549,74 @@ describe("formatReasoningMessage", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
     );
+  });
+});
+
+describe("extractThinkingFromTaggedText", () => {
+  it("extracts thinking from bare tags", () => {
+    expect(extractThinkingFromTaggedText("<thinking>some reasoning</thinking>")).toBe(
+      "some reasoning",
+    );
+  });
+
+  it("extracts thinking from tags with attributes", () => {
+    expect(
+      extractThinkingFromTaggedText('<thinking reason="deliberate">some reasoning</thinking>'),
+    ).toBe("some reasoning");
+  });
+
+  it("handles think tags with attributes", () => {
+    expect(extractThinkingFromTaggedText('<think type="chain-of-thought">reasoning</think>')).toBe(
+      "reasoning",
+    );
+  });
+
+  it("returns empty for unclosed tags", () => {
+    expect(extractThinkingFromTaggedText("<thinking>partial content")).toBe("");
+  });
+
+  it("returns empty for empty input", () => {
+    expect(extractThinkingFromTaggedText("")).toBe("");
+  });
+});
+
+describe("extractThinkingFromTaggedStream", () => {
+  it("extracts from completed bare tags", () => {
+    expect(extractThinkingFromTaggedStream("<thinking>complete</thinking>")).toBe("complete");
+  });
+
+  it("extracts from completed tags with attributes", () => {
+    expect(
+      extractThinkingFromTaggedStream('<thinking reason="step-by-step">complete</thinking>'),
+    ).toBe("complete");
+  });
+
+  it("extracts partial content from unclosed bare tags", () => {
+    expect(extractThinkingFromTaggedStream("<thinking>partial content")).toBe("partial content");
+  });
+
+  it("extracts partial content from unclosed tags with attributes", () => {
+    // This is the regression case - streaming with attributes
+    expect(extractThinkingFromTaggedStream('<thinking reason="deliberate">partial content')).toBe(
+      "partial content",
+    );
+  });
+
+  it("handles think tags with attributes in streaming", () => {
+    expect(extractThinkingFromTaggedStream('<think type="cot">streaming reasoning')).toBe(
+      "streaming reasoning",
+    );
+  });
+
+  it("handles antthinking tags with attributes in streaming", () => {
+    expect(extractThinkingFromTaggedStream('<antthinking foo="bar">reasoning')).toBe("reasoning");
+  });
+
+  it("returns empty for no thinking tags", () => {
+    expect(extractThinkingFromTaggedStream("just regular text")).toBe("");
+  });
+
+  it("returns empty for empty input", () => {
+    expect(extractThinkingFromTaggedStream("")).toBe("");
   });
 });

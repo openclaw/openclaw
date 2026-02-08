@@ -268,8 +268,9 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   if (!trimmedStart.startsWith("<")) {
     return null;
   }
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+  // Match thinking tags with optional attributes (e.g., <thinking reason="...">)
+  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
   if (!openRe.test(trimmedStart)) {
     return null;
   }
@@ -277,7 +278,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
     return null;
   }
 
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
   let inThinking = false;
   let cursor = 0;
   let thinkingStart = 0;
@@ -372,7 +373,8 @@ export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
   }
-  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+  // Match thinking tags with optional attributes (e.g., <thinking reason="...">)
+  const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
@@ -397,8 +399,9 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return closed;
   }
 
-  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+  // Match thinking tags with optional attributes (e.g., <thinking reason="...">)
+  const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+  const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
   const openMatches = [...text.matchAll(openRe)];
   if (openMatches.length === 0) {
     return "";
