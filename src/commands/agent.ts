@@ -451,6 +451,7 @@ export async function agentCommand(
             timeoutMs,
             runId,
             lane: opts.lane,
+            tracePath: opts.tracePath,
             abortSignal: opts.abortSignal,
             extraSystemPrompt: opts.extraSystemPrompt,
             streamParams: opts.streamParams,

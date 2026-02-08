@@ -77,6 +77,8 @@ export type RunEmbeddedPiAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;
+  /** Optional trace path for deterministic tracing. */
+  tracePath?: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

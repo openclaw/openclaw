@@ -50,6 +50,7 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  trace?: string;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -177,6 +178,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    tracePath: opts.trace,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

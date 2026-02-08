@@ -58,6 +58,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { createTraceWriterIfEnabled, hashAgentState, TraceWriter } from "../../tracing/index.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
@@ -514,6 +515,16 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
+      // Initialize trace writer if enabled (optional, zero overhead if disabled).
+      // The trace writer records LLM calls and tool execution for deterministic tracing.
+      const traceWriter = await createTraceWriterIfEnabled({
+        tracePath: params.tracePath,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        initialPrompt: params.prompt,
+      });
+
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
 
@@ -827,6 +838,38 @@ export async function runEmbeddedAttempt(
           );
         }
 
+        // Record LLM call to trace file (when --trace flag is provided).
+        // The traceWriter is a no-op when tracing is disabled, so this has zero overhead.
+        // Wrap in separate try-catch to prevent tracing failures from altering promptError.
+        if (traceWriter) {
+          try {
+            const stateSnapshot = {
+              messages: activeSession.messages.slice(),
+              sessionState: {
+                isStreaming: activeSession.isStreaming,
+              },
+            };
+            const stateHash = hashAgentState(stateSnapshot);
+            traceWriter.recordLlmCall({
+              messages: activeSession.messages.slice(),
+              response: activeSession.messages[activeSession.messages.length - 1] ?? null,
+              model: {
+                provider: params.provider,
+                modelId: params.modelId,
+                api: params.model.api,
+                thinkingLevel: params.thinkLevel,
+              },
+              stateHash,
+            });
+            await traceWriter.flush();
+          } catch (traceErr) {
+            // Log tracing errors locally without affecting run outcome
+            processLogger?.warn?.(
+              `tracing error: ${traceErr instanceof Error ? traceErr.message : String(traceErr)}`,
+            );
+          }
+        }
+
         try {
           await waitForCompactionRetry();
         } catch (err) {
@@ -877,6 +920,34 @@ export async function runEmbeddedAttempt(
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
+
+        // Record run completion to trace (when --trace flag is provided).
+        // Wrap in try-catch to prevent tracing failures from propagating.
+        if (traceWriter) {
+          try {
+            const outcome = aborted ? "aborted" : promptError ? "errored" : "completed";
+            const recordEndParams: any = { outcome };
+            // Only include durationMs if promptStartedAt is a valid number
+            if (typeof promptStartedAt === "number") {
+              recordEndParams.durationMs = Date.now() - promptStartedAt;
+            }
+            if (promptError) {
+              try {
+                recordEndParams.error = describeUnknownError(promptError);
+              } catch (describeErr) {
+                // If describeUnknownError fails, fall back to string representation
+                recordEndParams.error = String(promptError);
+              }
+            }
+            traceWriter.recordEnd(recordEndParams);
+            await traceWriter.flush();
+          } catch (traceErr) {
+            // Swallow tracing errors to prevent propagation from finally block
+            processLogger?.warn?.(
+              `tracing completion error: ${traceErr instanceof Error ? traceErr.message : String(traceErr)}`,
+            );
+          }
+        }
       }
 
       const lastAssistant = messagesSnapshot

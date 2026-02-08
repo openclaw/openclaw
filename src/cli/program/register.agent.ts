@@ -45,6 +45,10 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
     )
+    .option(
+      "--trace <path>",
+      "Record agent execution to a trace file for deterministic tracing (path where trace will be stored)",
+    )
     .addHelpText(
       "after",
       () =>
