@@ -266,14 +266,29 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       // ignore tool result delivery failures
     }
   };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
+  const emitToolOutput = (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    toolCallId?: string,
+    isError?: boolean,
+  ) => {
     if (!params.onToolResult || !output) {
       return;
     }
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
-    const message = `${agg}\n${formatToolOutputBlock(output)}`;
+    // Build enhanced header with tool call ID and error status
+    const headerParts: string[] = [agg];
+    if (toolCallId) {
+      headerParts.push(`[${toolCallId.slice(0, 8)}]`);
+    }
+    if (isError) {
+      headerParts.push("❌ ERROR");
+    }
+    const header = headerParts.join(" ");
+    const message = `${header}\n${formatToolOutputBlock(output)}`;
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
       return;
