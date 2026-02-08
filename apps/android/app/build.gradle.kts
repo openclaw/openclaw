@@ -114,6 +114,7 @@ dependencies {
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation("dnsjava:dnsjava:3.6.4")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
   testImplementation("junit:junit:4.13.2")
   testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

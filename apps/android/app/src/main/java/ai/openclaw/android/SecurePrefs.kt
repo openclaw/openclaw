@@ -20,6 +20,7 @@ class SecurePrefs(context: Context) {
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
     private const val voiceWakeModeKey = "voiceWake.mode"
+    private const val keystoreFallbackChoiceKey = "identity.keystoreFallback"
   }
 
   private val appContext = context.applicationContext
@@ -89,6 +90,10 @@ class SecurePrefs(context: Context) {
 
   private val _talkEnabled = MutableStateFlow(prefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
+
+  private val _keystoreFallbackChoice =
+    MutableStateFlow(loadKeystoreFallbackChoice())
+  val keystoreFallbackChoice: StateFlow<KeystoreFallbackChoice> = _keystoreFallbackChoice
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -239,6 +244,11 @@ class SecurePrefs(context: Context) {
     _talkEnabled.value = value
   }
 
+  fun setKeystoreFallbackChoice(choice: KeystoreFallbackChoice) {
+    prefs.edit { putString(keystoreFallbackChoiceKey, choice.rawValue) }
+    _keystoreFallbackChoice.value = choice
+  }
+
   private fun loadVoiceWakeMode(): VoiceWakeMode {
     val raw = prefs.getString(voiceWakeModeKey, null)
     val resolved = VoiceWakeMode.fromRawValue(raw)
@@ -271,4 +281,26 @@ class SecurePrefs(context: Context) {
     }
   }
 
+  private fun loadKeystoreFallbackChoice(): KeystoreFallbackChoice {
+    val raw = prefs.getString(keystoreFallbackChoiceKey, null)?.trim().orEmpty()
+    return KeystoreFallbackChoice.fromRawValue(raw)
+  }
+
+}
+
+enum class KeystoreFallbackChoice(val rawValue: String) {
+  Unset("unset"),
+  Allow("allow"),
+  Deny("deny"),
+  ;
+
+  companion object {
+    fun fromRawValue(raw: String): KeystoreFallbackChoice {
+      return when (raw.lowercase()) {
+        "allow" -> Allow
+        "deny" -> Deny
+        else -> Unset
+      }
+    }
+  }
 }

@@ -58,6 +58,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.concurrent.atomic.AtomicLong
 
+data class KeystoreFallbackPrompt(
+  val title: String,
+  val message: String,
+  val detail: String,
+)
+
 class NodeRuntime(context: Context) {
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -111,7 +117,10 @@ class NodeRuntime(context: Context) {
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
-  private val identityStore = DeviceIdentityStore(appContext)
+  private val identityStore = DeviceIdentityStore(appContext, prefs)
+
+  private val _keystoreFallbackPrompt = MutableStateFlow<KeystoreFallbackPrompt?>(null)
+  val keystoreFallbackPrompt: StateFlow<KeystoreFallbackPrompt?> = _keystoreFallbackPrompt.asStateFlow()
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -156,6 +165,7 @@ class NodeRuntime(context: Context) {
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
+      onIdentityFallbackRequired = ::handleKeystoreFallbackRequired,
       onConnected = { name, remote, mainSessionKey ->
         operatorConnected = true
         operatorStatusText = "Connected"
@@ -192,6 +202,7 @@ class NodeRuntime(context: Context) {
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
+      onIdentityFallbackRequired = ::handleKeystoreFallbackRequired,
       onConnected = { _, _, _ ->
         nodeConnected = true
         nodeStatusText = "Connected"
@@ -611,6 +622,40 @@ class NodeRuntime(context: Context) {
     connectedEndpoint = null
     operatorSession.disconnect()
     nodeSession.disconnect()
+  }
+
+  fun acceptKeystoreFallback() {
+    prefs.setKeystoreFallbackChoice(KeystoreFallbackChoice.Allow)
+    _keystoreFallbackPrompt.value = null
+    refreshGatewayConnection()
+  }
+
+  fun declineKeystoreFallback() {
+    prefs.setKeystoreFallbackChoice(KeystoreFallbackChoice.Deny)
+    _keystoreFallbackPrompt.value = null
+    _statusText.value = "Gateway error: AndroidKeyStore unavailable"
+  }
+
+  private fun handleKeystoreFallbackRequired(err: DeviceIdentityStore.AndroidKeyStoreUnavailableException) {
+    when (prefs.keystoreFallbackChoice.value) {
+      KeystoreFallbackChoice.Allow -> return
+      KeystoreFallbackChoice.Deny -> {
+        _statusText.value = "Gateway error: AndroidKeyStore unavailable"
+        return
+      }
+      KeystoreFallbackChoice.Unset -> {
+        val detail = err.message ?: "AndroidKeyStore failure"
+        _keystoreFallbackPrompt.value =
+          KeystoreFallbackPrompt(
+            title = "AndroidKeyStore unavailable",
+            message =
+              "OpenClaw could not generate a device identity using AndroidKeyStore on this device.\n\n" +
+                "We can fall back to BouncyCastle (software-based) to continue. " +
+                "This is less secure than hardware-backed keys but should work reliably.",
+            detail = detail,
+          )
+      }
+    }
   }
 
   private fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {

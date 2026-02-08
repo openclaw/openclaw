@@ -6,10 +6,15 @@ import java.io.File
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.Provider
+import java.security.Security
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
+import ai.openclaw.android.KeystoreFallbackChoice
+import ai.openclaw.android.SecurePrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 @Serializable
 data class DeviceIdentity(
@@ -19,7 +24,10 @@ data class DeviceIdentity(
   val createdAtMs: Long,
 )
 
-class DeviceIdentityStore(context: Context) {
+class DeviceIdentityStore(
+  context: Context,
+  private val prefs: SecurePrefs,
+) {
   private val json = Json { ignoreUnknownKeys = true }
   private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
 
@@ -97,7 +105,24 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun generate(): DeviceIdentity {
-    val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+    val choice = prefs.keystoreFallbackChoice.value
+    val keyPair =
+      when (choice) {
+        KeystoreFallbackChoice.Allow -> generateWithBouncyCastle()
+        KeystoreFallbackChoice.Deny -> throw AndroidKeyStoreUnavailableException(
+          "AndroidKeyStore fallback was declined by the user.",
+        )
+        KeystoreFallbackChoice.Unset -> {
+          try {
+            generateWithAndroidKeyStore()
+          } catch (err: Throwable) {
+            throw AndroidKeyStoreUnavailableException(
+              "AndroidKeyStore failed to generate an Ed25519 key: ${err.message ?: "unknown error"}",
+              err,
+            )
+          }
+        }
+      }
     val spki = keyPair.public.encoded
     val rawPublic = stripSpkiPrefix(spki)
     val deviceId = sha256Hex(rawPublic)
@@ -147,4 +172,44 @@ class DeviceIdentityStore(context: Context) {
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
       )
   }
+
+  private fun generateWithAndroidKeyStore(): java.security.KeyPair {
+    val generator = KeyPairGenerator.getInstance("Ed25519", "AndroidKeyStore")
+    return generator.generateKeyPair()
+  }
+
+  private fun generateWithBouncyCastle(): java.security.KeyPair {
+    val provider = ensureBouncyCastleProvider() ?: findEd25519Provider()
+    val generator =
+      if (provider != null) {
+        KeyPairGenerator.getInstance("Ed25519", provider)
+      } else {
+        KeyPairGenerator.getInstance("Ed25519")
+      }
+    return generator.generateKeyPair()
+  }
+
+  private fun findEd25519Provider(): Provider? {
+    return Security.getProviders().firstOrNull { provider ->
+      provider.name != "AndroidKeyStore" &&
+        provider.getService("KeyPairGenerator", "Ed25519") != null
+    }
+  }
+
+  private fun ensureBouncyCastleProvider(): Provider? {
+    val name = BouncyCastleProvider.PROVIDER_NAME
+    val existing = Security.getProvider(name)
+    if (existing is BouncyCastleProvider) {
+      return existing
+    }
+    if (existing != null) {
+      Security.removeProvider(name)
+    }
+    val provider = BouncyCastleProvider()
+    Security.insertProviderAt(provider, 1)
+    return provider
+  }
+
+  class AndroidKeyStoreUnavailableException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
 }

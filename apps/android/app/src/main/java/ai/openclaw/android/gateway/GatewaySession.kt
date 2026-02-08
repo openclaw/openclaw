@@ -1,6 +1,5 @@
 package ai.openclaw.android.gateway
 
-import android.util.Log
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -18,6 +17,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import android.util.Log
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -56,6 +56,8 @@ class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
   private val deviceAuthStore: DeviceAuthStore,
+  private val onIdentityFallbackRequired:
+    ((DeviceIdentityStore.AndroidKeyStoreUnavailableException) -> Unit)? = null,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
@@ -255,9 +257,13 @@ class GatewaySession(
       override fun onOpen(webSocket: WebSocket, response: Response) {
         scope.launch {
           try {
+            Log.i(loggerTag, "ws open remote=$remoteAddress tls=${tls != null}")
             val nonce = awaitConnectNonce()
+            Log.i(loggerTag, "connect nonce=${nonce != null} remote=$remoteAddress")
             sendConnect(nonce)
+            Log.i(loggerTag, "connect sent remote=$remoteAddress")
           } catch (err: Throwable) {
+            Log.w(loggerTag, "connect failed remote=$remoteAddress err=${err.message}", err)
             connectDeferred.completeExceptionally(err)
             closeQuietly()
           }
@@ -269,6 +275,11 @@ class GatewaySession(
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        Log.w(
+          loggerTag,
+          "ws failure remote=$remoteAddress code=${response?.code} msg=${t.message}",
+          t,
+        )
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(t)
         }
@@ -280,6 +291,7 @@ class GatewaySession(
       }
 
       override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        Log.i(loggerTag, "ws closed remote=$remoteAddress code=$code reason=$reason")
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
@@ -292,7 +304,13 @@ class GatewaySession(
     }
 
     private suspend fun sendConnect(connectNonce: String?) {
-      val identity = identityStore.loadOrCreate()
+      val identity =
+        try {
+          identityStore.loadOrCreate()
+        } catch (err: DeviceIdentityStore.AndroidKeyStoreUnavailableException) {
+          onIdentityFallbackRequired?.invoke(err)
+          throw err
+        }
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
       val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
@@ -301,6 +319,7 @@ class GatewaySession(
       val res = request("connect", payload, timeoutMs = 8_000)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
+        Log.w(loggerTag, "connect rejected remote=$remoteAddress err=$msg")
         if (canFallbackToShared) {
           deviceAuthStore.clearToken(identity.deviceId, options.role)
         }

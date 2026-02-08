@@ -52,6 +52,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = runtime.manualPort
   val manualTls: StateFlow<Boolean> = runtime.manualTls
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
+  val keystoreFallbackPrompt: StateFlow<KeystoreFallbackPrompt?> = runtime.keystoreFallbackPrompt
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
   val chatSessionId: StateFlow<String?> = runtime.chatSessionId
@@ -138,6 +139,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun disconnect() {
     runtime.disconnect()
+  }
+
+  fun acceptKeystoreFallback() {
+    runtime.acceptKeystoreFallback()
+  }
+
+  fun declineKeystoreFallback() {
+    runtime.declineKeystoreFallback()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
