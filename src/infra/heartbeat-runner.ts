@@ -65,6 +65,11 @@ type HeartbeatDeps = OutboundSendDeps &
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
 
+// Maximum safe value for setTimeout delay (32-bit signed integer max).
+// Values above this overflow and get set to 1ms, causing immediate firing.
+// See: https://github.com/openclaw/openclaw/issues/8123
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
 }
@@ -888,7 +893,18 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    const rawDelay = Math.max(0, nextDue - now);
+    // Clamp delay to MAX_TIMEOUT_MS to avoid 32-bit signed integer overflow in setTimeout.
+    // For intervals > ~596 hours, this creates a chain of timeouts: the timer fires at
+    // MAX_TIMEOUT_MS, the run() handler skips (now < nextDueMs), and scheduleNext() is
+    // called again with the remaining time. This preserves the configured interval.
+    const delay = Math.min(rawDelay, MAX_TIMEOUT_MS);
+    if (rawDelay > MAX_TIMEOUT_MS) {
+      log.debug("heartbeat: scheduling chunked timeout (interval exceeds MAX_TIMEOUT_MS)", {
+        remainingMs: rawDelay,
+        scheduledMs: delay,
+      });
+    }
     state.timer = setTimeout(() => {
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
