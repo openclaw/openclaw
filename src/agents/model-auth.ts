@@ -303,6 +303,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
     qianfan: "QIANFAN_API_KEY",
+    aisa: "AISA_API_KEY",
     ollama: "OLLAMA_API_KEY",
   };
   const envVar = envMap[normalized];

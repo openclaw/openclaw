@@ -24,6 +24,7 @@ export type AuthChoiceGroupId =
   | "venice"
   | "qwen"
   | "qianfan"
+  | "aisa"
   | "xai";
 
 export type AuthChoiceGroup = {
@@ -100,6 +101,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "aisa",
+    label: "AIsa",
+    hint: "China AI models, production-grade (Qwen, DeepSeek, Kimi, GLM)",
+    choices: ["aisa-api-key"],
+  },
+  {
     value: "copilot",
     label: "Copilot",
     hint: "GitHub + local proxy",
@@ -166,6 +173,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "qianfan-api-key",
     label: "Qianfan API key",
+  });
+  options.push({
+    value: "aisa-api-key",
+    label: "AIsa API key",
+    hint: "China AI models: Qwen (discounted), DeepSeek, Kimi, GLM & more",
   });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({

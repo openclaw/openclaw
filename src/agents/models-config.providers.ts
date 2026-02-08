@@ -80,6 +80,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const AISA_BASE_URL = "https://api.aisa.one/v1";
+export const AISA_DEFAULT_MODEL_ID = "qwen3-plus";
+const AISA_DEFAULT_CONTEXT_WINDOW = 128000;
+const AISA_DEFAULT_MAX_TOKENS = 8192;
+const AISA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -441,6 +452,42 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildAisaProvider(): ProviderConfig {
+  return {
+    baseUrl: AISA_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AISA_DEFAULT_MODEL_ID,
+        name: "Qwen3 Plus",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: AISA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: 200000,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: 1048576,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -541,6 +588,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const aisaKey =
+    resolveEnvApiKeyVarName("aisa") ??
+    resolveApiKeyFromProfiles({ provider: "aisa", store: authStore });
+  if (aisaKey) {
+    providers.aisa = { ...buildAisaProvider(), apiKey: aisaKey };
   }
 
   return providers;

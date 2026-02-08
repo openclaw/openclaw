@@ -4,6 +4,8 @@ export {
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
+  applyAisaConfig,
+  applyAisaProviderConfig,
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -45,6 +47,7 @@ export {
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  setAisaApiKey,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
@@ -70,6 +73,9 @@ export {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
+  AISA_BASE_URL,
+  AISA_DEFAULT_MODEL_ID,
+  AISA_DEFAULT_MODEL_REF,
   DEFAULT_MINIMAX_BASE_URL,
   MOONSHOT_CN_BASE_URL,
   QIANFAN_BASE_URL,
