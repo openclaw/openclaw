@@ -45,6 +45,24 @@ export const TelegramTopicSchema = z
   })
   .strict();
 
+/** Per-group session reset configuration schema. */
+const TelegramGroupSessionResetSchema = z
+  .object({
+    mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+    atHour: z.number().int().min(0).max(23).optional(),
+    idleMinutes: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
+/** Per-group session configuration schema. */
+const TelegramGroupSessionSchema = z
+  .object({
+    reset: TelegramGroupSessionResetSchema,
+  })
+  .strict()
+  .optional();
+
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -56,6 +74,7 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    session: TelegramGroupSessionSchema,
   })
   .strict();
 

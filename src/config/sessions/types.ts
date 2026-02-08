@@ -112,6 +112,8 @@ export type GroupKeyResolution = {
   channel?: string;
   id?: string;
   chatType?: SessionChatType;
+  /** Provider account id for multi-account setups (e.g., Telegram). */
+  accountId?: string;
 };
 
 export type SessionSkillSnapshot = {
