@@ -89,6 +89,27 @@ import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
+/**
+ * Wraps a promise with a timeout, rejecting if it doesn't settle in time.
+ * Clears the timer when the main promise settles to prevent leaks. (Fix for #3092)
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
   historyImagesByIndex: Map<number, ImageContent[]>,
@@ -621,6 +642,19 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      /**
+       * Returns a promise that rejects immediately when the signal aborts.
+       * Used with Promise.race to ensure we don't hang waiting for a stuck prompt.
+       */
+      const rejectOnAbort = (signal: AbortSignal): Promise<never> => {
+        if (signal.aborted) {
+          return Promise.reject(makeAbortError(signal));
+        }
+        return new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(makeAbortError(signal)), { once: true });
+        });
+      };
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -814,11 +848,21 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
-          }
+          //
+          // We race the prompt against the abort signal to ensure cleanup runs even if
+          // the prompt doesn't honor the abort. Late rejections are caught to avoid
+          // unhandled rejection warnings. (Fix for #3092)
+          const promptPromise =
+            imageResult.images.length > 0
+              ? activeSession.prompt(effectivePrompt, { images: imageResult.images })
+              : activeSession.prompt(effectivePrompt);
+
+          // Suppress late rejection (after abort wins the race) to avoid unhandled rejection warning.
+          // The actual error is captured via promptError in the catch block below.
+          void promptPromise.catch(() => {});
+
+          // Race prompt against abort signal - guarantees finally block runs on timeout
+          await Promise.race([abortable(promptPromise), rejectOnAbort(runAbortController.signal)]);
         } catch (err) {
           promptError = err;
         } finally {
@@ -915,7 +959,14 @@ export async function runEmbeddedAttempt(
       // Always tear down the session (and release the lock) before we leave this attempt.
       sessionManager?.flushPendingToolResults?.();
       session?.dispose();
-      await sessionLock.release();
+
+      // Release lock with timeout to prevent hanging if filesystem is unresponsive.
+      // Lock release should be fast; if it hangs, we log and move on. (Fix for #3092)
+      try {
+        await withTimeout(sessionLock.release(), 5000, "session lock release");
+      } catch (err) {
+        log.error(`session lock release failed: ${err}`);
+      }
     }
   } finally {
     restoreSkillEnv?.();
