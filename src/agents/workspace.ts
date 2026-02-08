@@ -27,6 +27,7 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+export const DEFAULT_CONTACTS_FILENAME = "CONTACTS.md";
 
 function stripFrontMatter(content: string): string {
   if (!content.startsWith("---")) {
@@ -64,7 +65,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | typeof DEFAULT_CONTACTS_FILENAME;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -272,6 +274,16 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   ];
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
+
+  const contactsPath = path.join(resolvedDir, DEFAULT_CONTACTS_FILENAME);
+  try {
+    await fs.access(contactsPath);
+    entries.push({ name: DEFAULT_CONTACTS_FILENAME, filePath: contactsPath });
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+    }
+  }
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
