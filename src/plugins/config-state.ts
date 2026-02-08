@@ -4,6 +4,7 @@ import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
+  workspaceEnabled: boolean;
   allow: string[];
   deny: string[];
   loadPaths: string[];
@@ -64,6 +65,7 @@ export const normalizePluginsConfig = (
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
   return {
     enabled: config?.enabled !== false,
+    workspaceEnabled: config?.workspace?.enabled === true,
     allow: normalizeList(config?.allow),
     deny: normalizeList(config?.deny),
     loadPaths: normalizeList(config?.load?.paths),
@@ -94,6 +96,9 @@ const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
     return true;
   }
   if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (typeof plugins.workspace?.enabled === "boolean") {
     return true;
   }
   if (plugins.slots && Object.keys(plugins.slots).length > 0) {
@@ -171,6 +176,12 @@ export function resolveEnableState(
   if (config.allow.length > 0 && !config.allow.includes(id)) {
     return { enabled: false, reason: "not in allowlist" };
   }
+  if (origin === "workspace" && !config.workspaceEnabled) {
+    return {
+      enabled: false,
+      reason: "workspace plugins disabled (set plugins.workspace.enabled=true)",
+    };
+  }
   if (config.slots.memory === id) {
     return { enabled: true };
   }
@@ -187,7 +198,7 @@ export function resolveEnableState(
   if (origin === "bundled") {
     return { enabled: false, reason: "bundled (disabled by default)" };
   }
-  return { enabled: true };
+  return { enabled: false, reason: "disabled by default (set plugins.entries.<id>.enabled=true)" };
 }
 
 export function resolveMemorySlotDecision(params: {

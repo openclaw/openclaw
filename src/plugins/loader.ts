@@ -166,6 +166,26 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
+function isPathWithin(parentDir: string, targetPath: string): boolean {
+  const relative = path.relative(path.resolve(parentDir), path.resolve(targetPath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function resolveCandidateOrigin(candidate: {
+  origin: PluginRecord["origin"];
+  source: string;
+  workspaceDir?: string;
+}): PluginRecord["origin"] {
+  if (!candidate.workspaceDir) {
+    return candidate.origin;
+  }
+  const workspaceExtensionsDir = path.join(candidate.workspaceDir, ".openclaw", "extensions");
+  if (isPathWithin(workspaceExtensionsDir, candidate.source)) {
+    return "workspace";
+  }
+  return candidate.origin;
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const cfg = options.config ?? {};
   const logger = options.logger ?? defaultLogger();
@@ -228,6 +248,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   let memorySlotMatched = false;
 
   for (const candidate of discovery.candidates) {
+    const candidateOrigin = resolveCandidateOrigin(candidate);
     const manifestRecord = manifestByRoot.get(candidate.rootDir);
     if (!manifestRecord) {
       continue;
@@ -241,7 +262,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         description: manifestRecord.description,
         version: manifestRecord.version,
         source: candidate.source,
-        origin: candidate.origin,
+        origin: candidateOrigin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
         configSchema: Boolean(manifestRecord.configSchema),
@@ -252,7 +273,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    const enableState = resolveEnableState(pluginId, candidate.origin, normalized);
+    const enableState = resolveEnableState(pluginId, candidateOrigin, normalized);
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
       id: pluginId,
@@ -260,7 +281,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       description: manifestRecord.description,
       version: manifestRecord.version,
       source: candidate.source,
-      origin: candidate.origin,
+      origin: candidateOrigin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
       configSchema: Boolean(manifestRecord.configSchema),
@@ -273,7 +294,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "disabled";
       record.error = enableState.reason;
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       continue;
     }
 
@@ -281,7 +302,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = "missing config schema";
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -299,7 +320,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -353,7 +374,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "disabled";
       record.error = memoryDecision.reason;
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       continue;
     }
 
@@ -372,7 +393,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -384,7 +405,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (validateOnly) {
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       continue;
     }
 
@@ -393,7 +414,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = "plugin export missing register/activate";
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -419,7 +440,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       }
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
     } catch (err) {
       logger.error(
         `[plugins] ${record.id} failed during register from ${record.source}: ${String(err)}`,
@@ -427,7 +448,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
+      seenIds.set(pluginId, candidateOrigin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,

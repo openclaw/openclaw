@@ -81,6 +81,26 @@ function deriveIdHint(params: {
   return `${unscoped}/${base}`;
 }
 
+function isPathWithin(parentDir: string, targetPath: string): boolean {
+  const relative = path.relative(path.resolve(parentDir), path.resolve(targetPath));
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function resolveCandidateOrigin(params: {
+  origin: PluginOrigin;
+  source: string;
+  workspaceDir?: string;
+}): PluginOrigin {
+  if (!params.workspaceDir) {
+    return params.origin;
+  }
+  const workspaceExtensionsDir = path.join(params.workspaceDir, ".openclaw", "extensions");
+  if (isPathWithin(workspaceExtensionsDir, params.source)) {
+    return "workspace";
+  }
+  return params.origin;
+}
+
 function addCandidate(params: {
   candidates: PluginCandidate[];
   seen: Set<string>;
@@ -98,11 +118,16 @@ function addCandidate(params: {
   }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
+  const origin = resolveCandidateOrigin({
+    origin: params.origin,
+    source: resolved,
+    workspaceDir: params.workspaceDir,
+  });
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
     rootDir: path.resolve(params.rootDir),
-    origin: params.origin,
+    origin,
     workspaceDir: params.workspaceDir,
     packageName: manifest?.name?.trim() || undefined,
     packageVersion: manifest?.version?.trim() || undefined,

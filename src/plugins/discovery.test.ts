@@ -154,4 +154,21 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+
+  it("classifies workspace extension paths as workspace origin", async () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
+    fs.mkdirSync(workspaceExt, { recursive: true });
+    const pluginFile = path.join(workspaceExt, "ws-only.ts");
+    fs.writeFileSync(pluginFile, "export default function () {}", "utf-8");
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      const { discoverOpenClawPlugins } = await import("./discovery.js");
+      return discoverOpenClawPlugins({ workspaceDir, extraPaths: [pluginFile] });
+    });
+
+    const wsCandidate = candidates.find((c) => c.idHint === "ws-only");
+    expect(wsCandidate?.origin).toBe("workspace");
+  });
 });

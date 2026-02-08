@@ -559,6 +559,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        workspace: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         slots: z
           .object({
             memory: z.string().optional(),
