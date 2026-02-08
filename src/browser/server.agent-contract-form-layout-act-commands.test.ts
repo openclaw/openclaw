@@ -1,6 +1,11 @@
 import { type AddressInfo, createServer } from "node:net";
+import { homedir } from "node:os";
+import path from "node:path";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Use home directory for test paths to satisfy path validation
+const testDir = path.join(homedir(), ".openclaw-test");
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -28,7 +33,7 @@ const pwMocks = vi.hoisted(() => ({
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
+    path: path.join(homedir(), ".openclaw-test", "report.pdf"),
   })),
   dragViaPlaywright: vi.fn(async () => {}),
   evaluateViaPlaywright: vi.fn(async () => "ok"),
@@ -56,7 +61,7 @@ const pwMocks = vi.hoisted(() => ({
   waitForDownloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
+    path: path.join(homedir(), ".openclaw-test", "report.pdf"),
   })),
   waitForViaPlaywright: vi.fn(async () => {}),
 }));
@@ -115,13 +120,13 @@ vi.mock("./chrome.js", () => ({
     return {
       pid: 123,
       exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: "/tmp/openclaw",
+      userDataDir: path.join(homedir(), ".openclaw-test"),
       cdpPort: profile.cdpPort,
       startedAt: Date.now(),
       proc,
     };
   }),
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
+  resolveOpenClawUserDataDir: vi.fn(() => path.join(homedir(), ".openclaw-test")),
   stopOpenClawChrome: vi.fn(async () => {
     reachable = false;
   }),
@@ -143,7 +148,9 @@ vi.mock("./pw-ai.js", () => pwMocks);
 
 vi.mock("../media/store.js", () => ({
   ensureMediaDir: vi.fn(async () => {}),
-  saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
+  saveMediaBuffer: vi.fn(async () => ({
+    path: path.join(homedir(), ".openclaw-test", "fake.png"),
+  })),
 }));
 
 vi.mock("./screenshot.js", () => ({
@@ -395,31 +402,31 @@ describe("browser control server", () => {
     const base = await startServerAndBase();
 
     const upload = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/a.txt"],
+      paths: [`${testDir}/a.txt`],
       timeoutMs: 1234,
     });
     expect(upload).toMatchObject({ ok: true });
     expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
-      paths: ["/tmp/a.txt"],
+      paths: [`${testDir}/a.txt`],
       timeoutMs: 1234,
     });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/b.txt"],
+      paths: [`${testDir}/b.txt`],
       ref: "e12",
     });
     expect(uploadWithRef).toMatchObject({ ok: true });
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/c.txt"],
+      paths: [`${testDir}/c.txt`],
       inputRef: "e99",
     });
     expect(uploadWithInputRef).toMatchObject({ ok: true });
 
     const uploadWithElement = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["/tmp/d.txt"],
+      paths: [`${testDir}/d.txt`],
       element: "input[type=file]",
     });
     expect(uploadWithElement).toMatchObject({ ok: true });
@@ -431,14 +438,14 @@ describe("browser control server", () => {
     expect(dialog).toMatchObject({ ok: true });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
-      path: "/tmp/report.pdf",
+      path: `${testDir}/report.pdf`,
       timeoutMs: 1111,
     });
     expect(waitDownload).toMatchObject({ ok: true });
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
-      path: "/tmp/report.pdf",
+      path: `${testDir}/report.pdf`,
     });
     expect(download).toMatchObject({ ok: true });
 

@@ -14,7 +14,15 @@ import {
   resolveProfileContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import {
+  jsonError,
+  toBoolean,
+  toNumber,
+  toStringArray,
+  toStringOrEmpty,
+  validateBrowserFilePath,
+  validateBrowserFilePaths,
+} from "./utils.js";
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -347,6 +355,11 @@ export function registerBrowserAgentActRoutes(
     if (!paths.length) {
       return jsonError(res, 400, "paths are required");
     }
+    // Validate file paths to prevent path traversal (CWE-22)
+    const pathError = validateBrowserFilePaths(paths);
+    if (pathError) {
+      return jsonError(res, 400, pathError);
+    }
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "file chooser hook");
@@ -426,6 +439,13 @@ export function registerBrowserAgentActRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const out = toStringOrEmpty(body.path) || undefined;
     const timeoutMs = toNumber(body.timeoutMs);
+    // Validate download path to prevent path traversal (CWE-22)
+    if (out) {
+      const pathError = validateBrowserFilePath(out);
+      if (pathError) {
+        return jsonError(res, 400, pathError);
+      }
+    }
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "wait for download");
@@ -459,6 +479,11 @@ export function registerBrowserAgentActRoutes(
     }
     if (!out) {
       return jsonError(res, 400, "path is required");
+    }
+    // Validate download path to prevent path traversal (CWE-22)
+    const pathError = validateBrowserFilePath(out);
+    if (pathError) {
+      return jsonError(res, 400, pathError);
     }
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
