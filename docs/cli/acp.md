@@ -133,7 +133,7 @@ To reuse a known session, pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.
-- `--reset-session`: mint a fresh session id for that key (same key, new transcript).
+- `--reset-session`: mint a fresh session id for that key (same key, new transcript). The reset happens asynchronously after the session is created, ensuring minimal latency during the ACP handshake. The reset completes before the first prompt is sent.
 
 If your ACP client supports metadata, you can override per session:
 

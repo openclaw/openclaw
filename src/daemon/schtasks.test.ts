@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSchtasksQuery, readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
+import {
+  buildPowerShellWrapper,
+  parseSchtasksQuery,
+  quotePowerShellArg,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+} from "./schtasks.js";
 
 describe("schtasks runtime parsing", () => {
   it("parses status and last run info", () => {
@@ -244,5 +250,114 @@ describe("readScheduledTaskCommand", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("quotePowerShellArg", () => {
+  it("wraps value in single quotes", () => {
+    expect(quotePowerShellArg("node")).toBe("'node'");
+  });
+
+  it("escapes single quotes by doubling them", () => {
+    expect(quotePowerShellArg("can't")).toBe("'can''t'");
+    expect(quotePowerShellArg("it's")).toBe("'it''s'");
+  });
+
+  it("handles strings with spaces", () => {
+    expect(quotePowerShellArg("Program Files")).toBe("'Program Files'");
+  });
+
+  it("handles paths with special characters", () => {
+    expect(quotePowerShellArg("C:\\Users\\John's Folder")).toBe("'C:\\Users\\John''s Folder'");
+  });
+});
+
+describe("buildPowerShellWrapper", () => {
+  it("builds basic PowerShell script with command", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js"],
+    });
+    expect(script).toContain("Start-Process -FilePath 'node'");
+    expect(script).toContain("-ArgumentList @('gateway.js')");
+    expect(script).toContain("-WindowStyle Hidden");
+    expect(script).toContain("-Wait");
+  });
+
+  it("includes description as comment", () => {
+    const script = buildPowerShellWrapper({
+      description: "OpenClaw Node Host",
+      programArguments: ["node", "gateway.js"],
+    });
+    expect(script).toContain("# OpenClaw Node Host");
+  });
+
+  it("sets working directory", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js"],
+      workingDirectory: "C:\\Projects\\openclaw",
+    });
+    expect(script).toContain("Set-Location 'C:\\Projects\\openclaw'");
+  });
+
+  it("sets environment variables", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js"],
+      environment: {
+        NODE_ENV: "production",
+        PORT: "18789",
+      },
+    });
+    expect(script).toContain("$env:NODE_ENV = 'production'");
+    expect(script).toContain("$env:PORT = '18789'");
+  });
+
+  it("handles command with no arguments", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["notepad.exe"],
+    });
+    expect(script).toContain("Start-Process -FilePath 'notepad.exe'");
+    expect(script).not.toContain("-ArgumentList");
+    expect(script).toContain("-WindowStyle Hidden");
+  });
+
+  it("handles command with multiple arguments", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js", "--port", "18789", "--verbose"],
+    });
+    expect(script).toContain("-ArgumentList @('gateway.js', '--port', '18789', '--verbose')");
+  });
+
+  it("builds complete script with all components", () => {
+    const script = buildPowerShellWrapper({
+      description: "OpenClaw Node Host (v2026.2.3-1)",
+      programArguments: ["node", "gateway.js", "--port", "18789"],
+      workingDirectory: "C:\\Projects\\openclaw",
+      environment: {
+        NODE_ENV: "production",
+        OPENCLAW_PORT: "18789",
+      },
+    });
+    expect(script).toContain("# OpenClaw Node Host (v2026.2.3-1)");
+    expect(script).toContain("Set-Location 'C:\\Projects\\openclaw'");
+    expect(script).toContain("$env:NODE_ENV = 'production'");
+    expect(script).toContain("$env:OPENCLAW_PORT = '18789'");
+    expect(script).toContain("Start-Process -FilePath 'node'");
+    expect(script).toContain("-ArgumentList @('gateway.js', '--port', '18789')");
+    expect(script).toContain("-WindowStyle Hidden");
+  });
+
+  it("escapes single quotes in arguments", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js", "--name", "John's Gateway"],
+    });
+    expect(script).toContain("'John''s Gateway'");
+  });
+
+  it("uses CRLF line endings", () => {
+    const script = buildPowerShellWrapper({
+      programArguments: ["node", "gateway.js"],
+    });
+    expect(script).toContain("\r\n");
+    expect(script.endsWith("\r\n")).toBe(true);
   });
 });

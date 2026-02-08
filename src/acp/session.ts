@@ -8,6 +8,7 @@ export type AcpSessionStore = {
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
+  setPendingReset: (sessionId: string, resetPromise: Promise<void> | null) => void;
   clearAllSessionsForTest: () => void;
 };
 
@@ -24,6 +25,7 @@ export function createInMemorySessionStore(): AcpSessionStore {
       createdAt: Date.now(),
       abortController: null,
       activeRunId: null,
+      pendingReset: null,
     };
     sessions.set(sessionId, session);
     return session;
@@ -80,6 +82,14 @@ export function createInMemorySessionStore(): AcpSessionStore {
     runIdToSessionId.clear();
   };
 
+  const setPendingReset: AcpSessionStore["setPendingReset"] = (sessionId, resetPromise) => {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.pendingReset = resetPromise;
+  };
+
   return {
     createSession,
     getSession,
@@ -87,6 +97,7 @@ export function createInMemorySessionStore(): AcpSessionStore {
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
+    setPendingReset,
     clearAllSessionsForTest,
   };
 }

@@ -22,4 +22,29 @@ describe("acp session manager", () => {
     expect(cancelled).toBe(true);
     expect(store.getSessionByRunId("run-1")).toBeUndefined();
   });
+
+  it("tracks pending session reset promises", async () => {
+    const session = store.createSession({
+      sessionKey: "acp:test",
+      cwd: "/tmp",
+    });
+
+    let resetCompleted = false;
+    const resetPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resetCompleted = true;
+        resolve();
+      }, 10);
+    });
+
+    store.setPendingReset(session.sessionId, resetPromise);
+    expect(session.pendingReset).toBe(resetPromise);
+
+    // Verify the reset hasn't completed yet
+    expect(resetCompleted).toBe(false);
+
+    // Wait for the reset to complete
+    await session.pendingReset;
+    expect(resetCompleted).toBe(true);
+  });
 });

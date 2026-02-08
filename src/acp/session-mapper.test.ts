@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { parseSessionMeta, resolveSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveSessionKey, startResetIfNeeded } from "./session-mapper.js";
 
 function createGateway(resolveLabelKey = "agent:main:label"): {
   gateway: GatewayClient;
@@ -11,6 +11,9 @@ function createGateway(resolveLabelKey = "agent:main:label"): {
       return { ok: true, key: resolveLabelKey };
     }
     if (method === "sessions.resolve" && "key" in params) {
+      return { ok: true, key: params.key as string };
+    }
+    if (method === "sessions.reset") {
       return { ok: true, key: params.key as string };
     }
     return { ok: true };
@@ -52,5 +55,56 @@ describe("acp session mapper", () => {
 
     expect(key).toBe("agent:main:override");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("startResetIfNeeded returns null when reset not needed", () => {
+    const { gateway } = createGateway();
+    const meta = parseSessionMeta({});
+
+    const resetPromise = startResetIfNeeded({
+      meta,
+      sessionKey: "agent:main:main",
+      gateway,
+      opts: {},
+    });
+
+    expect(resetPromise).toBeNull();
+  });
+
+  it("startResetIfNeeded returns promise when resetSession is true", async () => {
+    const { gateway, request } = createGateway();
+    const meta = parseSessionMeta({ resetSession: true });
+
+    const resetPromise = startResetIfNeeded({
+      meta,
+      sessionKey: "agent:main:main",
+      gateway,
+      opts: {},
+    });
+
+    expect(resetPromise).not.toBeNull();
+    expect(resetPromise).toBeInstanceOf(Promise);
+
+    // Wait for the reset to complete
+    await resetPromise;
+
+    // Verify the reset was called
+    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "agent:main:main" });
+  });
+
+  it("startResetIfNeeded returns promise when opts.resetSession is true", async () => {
+    const { gateway, request } = createGateway();
+    const meta = parseSessionMeta({});
+
+    const resetPromise = startResetIfNeeded({
+      meta,
+      sessionKey: "agent:main:main",
+      gateway,
+      opts: { resetSession: true },
+    });
+
+    expect(resetPromise).not.toBeNull();
+    await resetPromise;
+    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "agent:main:main" });
   });
 });

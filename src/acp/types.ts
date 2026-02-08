@@ -8,6 +8,7 @@ export type AcpSession = {
   createdAt: number;
   abortController: AbortController | null;
   activeRunId: string | null;
+  pendingReset: Promise<void> | null;
 };
 
 export type AcpServerOptions = {
