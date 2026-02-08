@@ -84,6 +84,14 @@ import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./u
 declare global {
   interface Window {
     __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
+    __OPENCLAW_INSTANCE_NAME__?: string | null;
+  }
+}
+
+function applyInstanceNameToTitle(): void {
+  const instanceName = window.__OPENCLAW_INSTANCE_NAME__;
+  if (typeof instanceName === "string" && instanceName.trim()) {
+    document.title = `${instanceName.trim()} - OpenClaw Control`;
   }
 }
 
@@ -349,6 +357,7 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    applyInstanceNameToTitle();
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 

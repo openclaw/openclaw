@@ -366,6 +366,7 @@ export const OpenClawSchema = z
       .optional(),
     gateway: z
       .object({
+        instanceName: z.string().max(50).optional(),
         port: z.number().int().positive().optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
         bind: z
