@@ -61,6 +61,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
+// Keys that could enable prototype pollution attacks (CWE-1321)
+const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
 export function deepMerge(target: unknown, source: unknown): unknown {
   if (Array.isArray(target) && Array.isArray(source)) {
@@ -69,6 +72,10 @@ export function deepMerge(target: unknown, source: unknown): unknown {
   if (isPlainObject(target) && isPlainObject(source)) {
     const result: Record<string, unknown> = { ...target };
     for (const key of Object.keys(source)) {
+      // Skip dangerous keys that could pollute Object.prototype
+      if (BLOCKED_KEYS.has(key)) {
+        continue;
+      }
       result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
     }
     return result;

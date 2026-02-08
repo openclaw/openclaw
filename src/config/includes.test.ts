@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -357,5 +358,59 @@ describe("real-world config patterns", () => {
       channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
       agents: { defaults: { sandbox: { mode: "all" } } },
     });
+  });
+});
+
+describe("VULN-164: deepMerge prototype pollution protection", () => {
+  // CWE-1321: Improperly Controlled Modification of Object Prototype Attributes
+  // These tests verify that deepMerge blocks dangerous keys that could pollute Object.prototype
+
+  it("blocks __proto__ key during merge", () => {
+    const target = { a: 1 };
+    // JSON.parse creates an object where __proto__ is an own property, not the prototype
+    const malicious = JSON.parse('{"__proto__": {"polluted": true}}');
+    const result = deepMerge(target, malicious);
+
+    // Result should only contain the target key, __proto__ should be stripped
+    expect(result).toEqual({ a: 1 });
+    // Verify no prototype pollution occurred
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it("blocks constructor key during merge", () => {
+    const target = { a: 1 };
+    const malicious = { constructor: { prototype: { polluted: true } } };
+    const result = deepMerge(target, malicious);
+
+    expect(result).toEqual({ a: 1 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it("blocks prototype key during merge", () => {
+    const target = { a: 1 };
+    const malicious = { prototype: { polluted: true } };
+    const result = deepMerge(target, malicious);
+
+    expect(result).toEqual({ a: 1 });
+  });
+
+  it("blocks nested __proto__ in recursive merge", () => {
+    const target = { nested: { a: 1 } };
+    const malicious = { nested: JSON.parse('{"__proto__": {"polluted": true}}') };
+    const result = deepMerge(target, malicious);
+
+    expect(result).toEqual({ nested: { a: 1 } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it("allows legitimate keys that are not blocked", () => {
+    const target = { a: 1 };
+    const source = { b: 2, nested: { c: 3 } };
+    const result = deepMerge(target, source);
+
+    expect(result).toEqual({ a: 1, b: 2, nested: { c: 3 } });
   });
 });
