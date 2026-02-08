@@ -30,7 +30,34 @@ vi.mock("./qmd-manager.js", () => ({
 
 vi.mock("./manager.js", () => ({
   MemoryIndexManager: {
-    get: vi.fn(async () => null),
+    get: vi.fn(async () => ({
+      search: vi.fn(async () => [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 1,
+          snippet: "fallback",
+          source: "memory",
+        },
+      ]),
+      readFile: vi.fn(async () => ({ text: "", path: "MEMORY.md" })),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "openai",
+        model: "text-embedding-3-small",
+        requestedProvider: "openai",
+        files: 0,
+        chunks: 0,
+        dirty: false,
+        workspaceDir: "/tmp",
+        dbPath: "/tmp/index.sqlite",
+      })),
+      sync: vi.fn(async () => {}),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      probeVectorAvailability: vi.fn(async () => true),
+      close: vi.fn(async () => {}),
+    })),
   },
 }));
 
@@ -61,5 +88,30 @@ describe("getMemorySearchManager caching", () => {
     expect(first.manager).toBe(second.manager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(QmdMemoryManager.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts failed qmd wrapper so next call retries qmd", async () => {
+    const retryAgentId = "retry-agent";
+    const cfg = {
+      memory: { backend: "qmd", qmd: {} },
+      agents: { list: [{ id: retryAgentId, default: true, workspace: "/tmp/workspace" }] },
+    } as const;
+
+    mockPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    const first = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    expect(first.manager).toBeTruthy();
+    if (!first.manager) {
+      throw new Error("manager missing");
+    }
+
+    const fallbackResults = await first.manager.search("hello");
+    expect(fallbackResults).toHaveLength(1);
+    expect(fallbackResults[0]?.path).toBe("MEMORY.md");
+
+    const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
+    expect(second.manager).toBeTruthy();
+    expect(second.manager).not.toBe(first.manager);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(QmdMemoryManager.create).toHaveBeenCalledTimes(2);
   });
 });

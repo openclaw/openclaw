@@ -28,6 +28,7 @@ import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-c
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
+const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 
 type QmdQueryResult = {
   docid?: string;
@@ -145,7 +146,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {
-      await this.runUpdate("boot", true);
+      const bootRun = this.runUpdate("boot", true);
+      if (this.qmd.update.waitForBootSync) {
+        await bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      } else {
+        void bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      }
     }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
@@ -172,7 +182,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = new Set<string>();
     try {
-      const result = await this.runQmd(["collection", "list", "--json"]);
+      const result = await this.runQmd(["collection", "list", "--json"], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
       const parsed = JSON.parse(result.stdout) as unknown;
       if (Array.isArray(parsed)) {
         for (const entry of parsed) {
@@ -195,15 +207,20 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
-        await this.runQmd([
-          "collection",
-          "add",
-          collection.path,
-          "--name",
-          collection.name,
-          "--mask",
-          collection.pattern,
-        ]);
+        await this.runQmd(
+          [
+            "collection",
+            "add",
+            collection.path,
+            "--name",
+            collection.name,
+            "--mask",
+            collection.pattern,
+          ],
+          {
+            timeoutMs: this.qmd.update.commandTimeoutMs,
+          },
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Idempotency: qmd exits non-zero if the collection name already exists.
@@ -229,7 +246,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!trimmed) {
       return [];
     }
-    await this.pendingUpdate?.catch(() => undefined);
+    await this.waitForPendingUpdateBeforeSearch();
     const limit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
@@ -376,7 +393,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runUpdate(reason: string, force?: boolean): Promise<void> {
-    if (this.pendingUpdate && !force) {
+    if (this.pendingUpdate) {
       return this.pendingUpdate;
     }
     if (this.shouldSkipUpdate(force)) {
@@ -386,7 +403,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.sessionExporter) {
         await this.exportSessions();
       }
-      await this.runQmd(["update"], { timeoutMs: 120_000 });
+      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
       const embedIntervalMs = this.qmd.update.embedIntervalMs;
       const shouldEmbed =
         Boolean(force) ||
@@ -394,7 +411,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
       if (shouldEmbed) {
         try {
-          await this.runQmd(["embed"], { timeoutMs: 120_000 });
+          await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
           this.lastEmbedAt = Date.now();
         } catch (err) {
           log.warn(`qmd embed failed (${reason}): ${String(err)}`);
@@ -806,5 +823,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return Date.now() - this.lastUpdateAt < debounceMs;
+  }
+
+  private async waitForPendingUpdateBeforeSearch(): Promise<void> {
+    const pending = this.pendingUpdate;
+    if (!pending) {
+      return;
+    }
+    await Promise.race([
+      pending.catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
+    ]);
   }
 }

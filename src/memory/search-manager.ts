@@ -89,6 +89,8 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.lastError = err instanceof Error ? err.message : String(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
         await this.deps.primary.close?.().catch(() => {});
+        // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
+        this.onClose?.();
       }
     }
     const fallback = await this.ensureFallback();

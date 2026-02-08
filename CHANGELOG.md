@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
 - Gateway/CLI: when `gateway.bind=lan`, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
+- Memory/QMD: run boot refresh in background by default, add configurable QMD maintenance timeouts, and retry QMD after fallback failures. (#9690, #9705)
 - Media understanding: recognize `.caf` audio attachments for transcription. (#10982) Thanks @succ985.
 - Telegram: auto-inject DM topic threadId in message tool + subagent announce. (#7235) Thanks @Lukavyi.
 - Security: require auth for Gateway canvas host and A2UI assets. (#9518) Thanks @coygeek.
