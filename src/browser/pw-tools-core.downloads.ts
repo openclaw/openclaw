@@ -19,8 +19,29 @@ import {
 
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
-  const safeName = fileName.trim() ? fileName.trim() : "download.bin";
-  return path.join("/tmp/openclaw/downloads", `${id}-${safeName}`);
+  const safeName = sanitizeSuggestedFileName(fileName);
+  const baseDir = "/tmp/openclaw/downloads";
+  const outPath = path.join(baseDir, `${id}-${safeName}`);
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedOut = path.resolve(outPath);
+  const relative = path.relative(resolvedBase, resolvedOut);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return path.join(baseDir, `${id}-download.bin`);
+  }
+  return outPath;
+}
+
+function sanitizeSuggestedFileName(fileName: string): string {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return "download.bin";
+  }
+  const baseName = path.basename(trimmed);
+  const cleaned = baseName.replace(/[\\/]/g, "_");
+  if (!cleaned || cleaned === "." || cleaned === "..") {
+    return "download.bin";
+  }
+  return cleaned;
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
