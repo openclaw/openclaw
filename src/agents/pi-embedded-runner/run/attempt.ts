@@ -476,7 +476,7 @@ export async function runEmbeddedAttempt(
       const allCustomTools = [...customTools, ...clientToolDefs];
 
       ({ session } = await createAgentSession({
-        cwd: resolvedWorkspace,
+        cwd: effectiveWorkspace,
         agentDir,
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
