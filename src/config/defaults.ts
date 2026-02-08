@@ -215,7 +215,6 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         }
 
         const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
-        // Clamp maxTokens to contextWindow to prevent invalid configurations
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
         const maxTokens = Math.min(rawMaxTokens, contextWindow);
         if (raw.maxTokens !== maxTokens) {
