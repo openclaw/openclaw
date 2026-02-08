@@ -30,10 +30,12 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         defaults.memorySearch = legacyMemorySearch;
         changes.push("Moved memorySearch → agents.defaults.memorySearch.");
       } else {
-        mergeMissing(existing, legacyMemorySearch);
-        defaults.memorySearch = existing;
+        // agents.defaults stays authoritative; legacy top-level config only fills gaps.
+        const merged = structuredClone(existing);
+        mergeMissing(merged, legacyMemorySearch);
+        defaults.memorySearch = merged;
         changes.push(
-          "Merged memorySearch → agents.defaults.memorySearch (preserved explicit agents.defaults overrides).",
+          "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
         );
       }
 
