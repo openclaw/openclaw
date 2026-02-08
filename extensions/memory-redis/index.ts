@@ -33,6 +33,8 @@ type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   createdAt: number;
+  role?: "user" | "assistant"; // Who said this (for context during retrieval)
+  embeddingModel?: string; // Model used for embedding (enables re-embedding with new models)
 };
 
 type MemorySearchResult = {
@@ -119,6 +121,8 @@ class RedisMemoryDB {
             "$.category": { type: "TAG", AS: "category" },
             "$.importance": { type: "NUMERIC", AS: "importance" },
             "$.createdAt": { type: "NUMERIC", AS: "createdAt" },
+            "$.role": { type: "TAG", AS: "role" },
+            "$.embeddingModel": { type: "TAG", AS: "embeddingModel" },
             "$.vector": {
               type: "VECTOR",
               AS: "vector",
@@ -151,6 +155,8 @@ class RedisMemoryDB {
       ...entry,
       id: randomUUID(),
       createdAt: Date.now(),
+      role: entry.role,
+      embeddingModel: entry.embeddingModel,
     };
 
     const key = `${this.keyPrefix}:${fullEntry.id}`;
@@ -176,7 +182,16 @@ class RedisMemoryDB {
       PARAMS: { BLOB: vectorBuffer },
       SORTBY: { BY: "score", DIRECTION: "ASC" }, // Lower distance = better match
       DIALECT: 2,
-      RETURN: ["id", "text", "category", "importance", "createdAt", "score"],
+      RETURN: [
+        "id",
+        "text",
+        "category",
+        "importance",
+        "createdAt",
+        "role",
+        "embeddingModel",
+        "score",
+      ],
     });
 
     const mapped: MemorySearchResult[] = [];
@@ -211,6 +226,10 @@ class RedisMemoryDB {
               ? parseInt(data.createdAt, 10)
               : 0;
 
+        const roleVal = typeof data.role === "string" ? data.role : undefined;
+        const embeddingModelVal =
+          typeof data.embeddingModel === "string" ? data.embeddingModel : undefined;
+
         mapped.push({
           entry: {
             id: idVal,
@@ -219,6 +238,8 @@ class RedisMemoryDB {
             importance: importanceVal,
             category: categoryVal as MemoryCategory,
             createdAt: createdAtVal,
+            role: roleVal as "user" | "assistant" | undefined,
+            embeddingModel: embeddingModelVal,
           },
           score,
         });
@@ -247,6 +268,65 @@ class RedisMemoryDB {
 
     const info = await this.client!.ft.info(this.indexName);
     return typeof info.numDocs === "number" ? info.numDocs : 0;
+  }
+
+  /**
+   * Full-text search using RediSearch.
+   * Searches the text field for keyword matches.
+   */
+  async textSearch(query: string, limit = 5): Promise<MemorySearchResult[]> {
+    await this.ensureInitialized();
+
+    // Escape special RediSearch characters in the query
+    const escapedQuery = query.replace(/[\\@!{}()|[\]"':;,.<>~*?^$+-]/g, "\\$&");
+
+    // Full-text search query on the text field
+    const results = await this.client!.ft.search(this.indexName, `@text:${escapedQuery}*`, {
+      LIMIT: { from: 0, size: limit },
+      RETURN: ["id", "text", "category", "importance", "createdAt", "role", "embeddingModel"],
+    });
+
+    const mapped: MemorySearchResult[] = [];
+
+    for (const doc of results.documents) {
+      const data = doc.value as Record<string, unknown>;
+
+      const idVal = typeof data.id === "string" ? data.id : "";
+      const textVal = typeof data.text === "string" ? data.text : "";
+      const importanceVal =
+        typeof data.importance === "number"
+          ? data.importance
+          : typeof data.importance === "string"
+            ? parseFloat(data.importance)
+            : 0;
+      const categoryVal = typeof data.category === "string" ? data.category : "other";
+      const createdAtVal =
+        typeof data.createdAt === "number"
+          ? data.createdAt
+          : typeof data.createdAt === "string"
+            ? parseInt(data.createdAt, 10)
+            : 0;
+
+      const roleVal = typeof data.role === "string" ? data.role : undefined;
+      const embeddingModelVal =
+        typeof data.embeddingModel === "string" ? data.embeddingModel : undefined;
+
+      mapped.push({
+        entry: {
+          id: idVal,
+          text: textVal,
+          vector: [],
+          importance: importanceVal,
+          category: categoryVal as MemoryCategory,
+          createdAt: createdAtVal,
+          role: roleVal as "user" | "assistant" | undefined,
+          embeddingModel: embeddingModelVal,
+        },
+        score: 1.0, // Text search doesn't return similarity scores, use 1.0 for matches
+      });
+    }
+
+    return mapped;
   }
 
   async disconnect(): Promise<void> {
@@ -433,28 +513,68 @@ const memoryRedisPlugin = {
         name: "memory_recall",
         label: "Memory Recall",
         description:
-          "Search through long-term memories stored in Redis. Use when you need context about user preferences, past decisions, or previously discussed topics.",
+          "Search through long-term memories stored in Redis. Use when you need context about user preferences, past decisions, or previously discussed topics. Supports vector (semantic), text (keyword), or hybrid search modes.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
+          mode: Type.Optional(
+            stringEnum(["vector", "text", "hybrid"] as const, {
+              description:
+                "Search mode: 'vector' for semantic similarity (default), 'text' for keyword matching, 'hybrid' for combined results",
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit = 5 } = params as { query: string; limit?: number };
+          const {
+            query,
+            limit = 5,
+            mode = "vector",
+          } = params as { query: string; limit?: number; mode?: "vector" | "text" | "hybrid" };
 
-          const vector = await embeddings.embed(query);
-          const results = await db.search(vector, limit, 0.1);
+          let results: MemorySearchResult[];
+
+          if (mode === "text") {
+            // Full-text keyword search
+            results = await db.textSearch(query, limit);
+          } else if (mode === "hybrid") {
+            // Hybrid: combine vector and text results, deduplicate by ID
+            const vector = await embeddings.embed(query);
+            const [vectorResults, textResults] = await Promise.all([
+              db.search(vector, limit, 0.1),
+              db.textSearch(query, limit),
+            ]);
+
+            // Merge results, preferring vector scores for duplicates
+            const seen = new Map<string, MemorySearchResult>();
+            for (const r of vectorResults) {
+              seen.set(r.entry.id, r);
+            }
+            for (const r of textResults) {
+              if (!seen.has(r.entry.id)) {
+                // Text-only matches get a lower score boost
+                seen.set(r.entry.id, { ...r, score: r.score * 0.8 });
+              }
+            }
+
+            // Sort by score descending, take top limit
+            results = [...seen.values()].toSorted((a, b) => b.score - a.score).slice(0, limit);
+          } else {
+            // Default: vector semantic search
+            const vector = await embeddings.embed(query);
+            results = await db.search(vector, limit, 0.1);
+          }
 
           if (results.length === 0) {
             return {
               content: [{ type: "text", text: "No relevant memories found." }],
-              details: { count: 0 },
+              details: { count: 0, mode },
             };
           }
 
           const text = results
             .map(
               (r, i) =>
-                `${i + 1}. [${r.entry.category}] ${r.entry.text} (${(r.score * 100).toFixed(0)}%)`,
+                `${i + 1}. [${r.entry.category}]${r.entry.role ? ` (${r.entry.role})` : ""} ${r.entry.text} (${(r.score * 100).toFixed(0)}%)`,
             )
             .join("\n");
 
@@ -463,12 +583,19 @@ const memoryRedisPlugin = {
             text: r.entry.text,
             category: r.entry.category,
             importance: r.entry.importance,
+            role: r.entry.role,
+            embeddingModel: r.entry.embeddingModel,
             score: r.score,
           }));
 
           return {
-            content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
-            details: { count: results.length, memories: sanitizedResults },
+            content: [
+              {
+                type: "text",
+                text: `Found ${results.length} memories (${mode} search):\n\n${text}`,
+              },
+            ],
+            details: { count: results.length, mode, memories: sanitizedResults },
           };
         },
       },
@@ -524,11 +651,17 @@ const memoryRedisPlugin = {
             vector,
             importance,
             category,
+            role: "user", // Tool-based storage is typically user-requested
+            embeddingModel: embeddings.getProviderInfo(),
           });
 
           return {
             content: [{ type: "text", text: `Stored in Redis: "${text.slice(0, 100)}..."` }],
-            details: { action: "created", id: entry.id },
+            details: {
+              action: "created",
+              id: entry.id,
+              embeddingModel: embeddings.getProviderInfo(),
+            },
           };
         },
       },
@@ -623,17 +756,46 @@ const memoryRedisPlugin = {
 
         memory
           .command("search")
-          .description("Search memories")
+          .description("Search memories (vector, text, or hybrid)")
           .argument("<query>", "Search query")
           .option("--limit <n>", "Max results", "5")
+          .option("--mode <mode>", "Search mode: vector, text, or hybrid", "vector")
           .action(async (query, opts) => {
-            const vector = await embeddings.embed(query);
-            const results = await db.search(vector, parseInt(opts.limit), 0.3);
+            const limit = parseInt(opts.limit);
+            const mode = opts.mode as "vector" | "text" | "hybrid";
+
+            let results: MemorySearchResult[];
+
+            if (mode === "text") {
+              results = await db.textSearch(query, limit);
+            } else if (mode === "hybrid") {
+              const vector = await embeddings.embed(query);
+              const [vectorResults, textResults] = await Promise.all([
+                db.search(vector, limit, 0.3),
+                db.textSearch(query, limit),
+              ]);
+              const seen = new Map<string, MemorySearchResult>();
+              for (const r of vectorResults) {
+                seen.set(r.entry.id, r);
+              }
+              for (const r of textResults) {
+                if (!seen.has(r.entry.id)) {
+                  seen.set(r.entry.id, { ...r, score: r.score * 0.8 });
+                }
+              }
+              results = [...seen.values()].toSorted((a, b) => b.score - a.score).slice(0, limit);
+            } else {
+              const vector = await embeddings.embed(query);
+              results = await db.search(vector, limit, 0.3);
+            }
+
             const output = results.map((r) => ({
               id: r.entry.id,
               text: r.entry.text,
               category: r.entry.category,
               importance: r.entry.importance,
+              role: r.entry.role,
+              embeddingModel: r.entry.embeddingModel,
               score: r.score,
             }));
             console.log(JSON.stringify(output, null, 2));
@@ -700,7 +862,10 @@ IMPORTANT: When the user tells you something about themselves (name, preferences
         }
 
         const memoryContext = results
-          .map((r) => `- [${r.entry.category}] ${r.entry.text}`)
+          .map(
+            (r) =>
+              `- [${r.entry.category}]${r.entry.role ? ` (${r.entry.role})` : ""} ${r.entry.text}`,
+          )
           .join("\n");
 
         api.logger.info?.(`memory-redis: injecting ${results.length} memories into context`);
@@ -722,8 +887,8 @@ IMPORTANT: When the user tells you something about themselves (name, preferences
         }
 
         try {
-          // Extract text content from messages
-          const texts: string[] = [];
+          // Extract text content from messages with role tracking
+          const textsWithRole: { text: string; role: "user" | "assistant" }[] = [];
           for (const msg of event.messages) {
             if (!msg || typeof msg !== "object") {
               continue;
@@ -738,7 +903,7 @@ IMPORTANT: When the user tells you something about themselves (name, preferences
             const content = msgObj.content;
 
             if (typeof content === "string") {
-              texts.push(content);
+              textsWithRole.push({ text: content, role });
               continue;
             }
 
@@ -752,23 +917,26 @@ IMPORTANT: When the user tells you something about themselves (name, preferences
                   "text" in block &&
                   typeof (block as Record<string, unknown>).text === "string"
                 ) {
-                  texts.push((block as Record<string, unknown>).text as string);
+                  textsWithRole.push({
+                    text: (block as Record<string, unknown>).text as string,
+                    role,
+                  });
                 }
               }
             }
           }
 
-          // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
+          // Filter for capturable content (keeping role association)
+          const toCapture = textsWithRole.filter((item) => item.text && shouldCapture(item.text));
           if (toCapture.length === 0) {
             return;
           }
 
           // Store each capturable piece (limit to 3 per conversation)
           let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await embeddings.embed(text);
+          for (const item of toCapture.slice(0, 3)) {
+            const category = detectCategory(item.text);
+            const vector = await embeddings.embed(item.text);
 
             // Check for duplicates
             const existing = await db.search(vector, 1, 0.95);
@@ -777,10 +945,12 @@ IMPORTANT: When the user tells you something about themselves (name, preferences
             }
 
             await db.store({
-              text,
+              text: item.text,
               vector,
               importance: 0.7,
               category,
+              role: item.role,
+              embeddingModel: embeddings.getProviderInfo(),
             });
             stored++;
           }

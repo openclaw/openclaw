@@ -222,7 +222,10 @@ ollama pull nomic-embed-text
 
 The plugin registers these tools for the AI agent:
 
-- **memory_recall** - Search memories by semantic similarity
+- **memory_recall** - Search memories with multiple modes:
+  - `vector` (default): Semantic similarity search using embeddings
+  - `text`: Full-text keyword search
+  - `hybrid`: Combines vector and text search for best recall
 - **memory_store** - Store new memories with category and importance
 - **memory_forget** - Delete memories (GDPR-compliant)
 
@@ -232,8 +235,14 @@ The plugin registers these tools for the AI agent:
 # List memory count
 openclaw redis-memory list
 
-# Search memories
+# Search memories (vector search - default)
 openclaw redis-memory search "user preferences"
+
+# Search with keyword matching
+openclaw redis-memory search "dark mode" --mode text
+
+# Hybrid search (vector + text combined)
+openclaw redis-memory search "preferences" --mode hybrid --limit 10
 
 # Show statistics
 openclaw redis-memory stats
@@ -246,7 +255,13 @@ openclaw redis-memory delete <uuid>
 
 ### Storage
 
-Memories are stored as JSON documents in Redis with vector embeddings:
+Memories are stored as JSON documents in Redis with vector embeddings. **Raw text is always preserved** alongside the vector embedding, enabling:
+
+- Full-text search (in addition to vector similarity search)
+- Re-embedding with new/better models in the future
+- Debugging and inspecting stored memories
+
+Each memory also tracks **who said it** (user or assistant) and **which embedding model** was used:
 
 ```json
 {
@@ -255,9 +270,17 @@ Memories are stored as JSON documents in Redis with vector embeddings:
   "vector": [0.1, 0.2, ...],
   "importance": 0.7,
   "category": "preference",
+  "role": "user",
+  "embeddingModel": "openai/text-embedding-3-small",
   "createdAt": 1706889600000
 }
 ```
+
+This design ensures you can:
+
+- Filter memories by role (e.g., "what did the user tell me?" vs "what did I conclude?")
+- Migrate to a new embedding model by re-embedding all stored text
+- Use hybrid search (vector + full-text) for better recall
 
 ### Vector Search
 
