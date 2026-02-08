@@ -1,0 +1,119 @@
+/**
+ * Delivery target resolution for isolated agent turns.
+ */
+
+import type { ChannelId } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
+import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
+import {
+  loadSessionStore,
+  resolveAgentMainSessionKey,
+  resolveStorePath,
+} from "../../config/sessions.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  resolveOutboundTarget,
+  resolveSessionDeliveryTarget,
+} from "../../infra/outbound/targets.js";
+
+export type DeliveryTargetResult = {
+  channel: Exclude<OutboundChannel, "none">;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+  mode: "explicit" | "implicit";
+  error?: Error;
+};
+
+/**
+ * Resolve the delivery target for an isolated agent turn.
+ *
+ * Uses the session's last channel/recipient if "last" is specified,
+ * or falls back to the configured default channel.
+ */
+export async function resolveDeliveryTarget(
+  cfg: OpenClawConfig,
+  agentId: string,
+  payload: {
+    channel?: "last" | ChannelId;
+    to?: string;
+  },
+): Promise<DeliveryTargetResult> {
+  const requestedChannel = typeof payload.channel === "string" ? payload.channel : "last";
+  const explicitTo = typeof payload.to === "string" ? payload.to : undefined;
+  const allowMismatchedLastTo = requestedChannel === "last";
+
+  const sessionCfg = cfg.session;
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const main = store[mainSessionKey];
+
+  const preliminary = resolveSessionDeliveryTarget({
+    entry: main,
+    requestedChannel,
+    explicitTo,
+    allowMismatchedLastTo,
+  });
+
+  let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  if (!preliminary.channel) {
+    try {
+      const selection = await resolveMessageChannelSelection({ cfg });
+      fallbackChannel = selection.channel;
+    } catch {
+      fallbackChannel = preliminary.lastChannel ?? DEFAULT_CHAT_CHANNEL;
+    }
+  }
+
+  const resolved = fallbackChannel
+    ? resolveSessionDeliveryTarget({
+        entry: main,
+        requestedChannel,
+        explicitTo,
+        fallbackChannel,
+        allowMismatchedLastTo,
+        mode: preliminary.mode,
+      })
+    : preliminary;
+
+  const channel = resolved.channel ?? fallbackChannel ?? DEFAULT_CHAT_CHANNEL;
+  const mode = resolved.mode as "explicit" | "implicit";
+  const toCandidate = resolved.to;
+
+  // Only carry threadId when delivering to the same recipient as the session's
+  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
+  // supergroup topic) from being sent to a different target (e.g. a private
+  // chat) where they would cause API errors.
+  const threadId =
+    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+      ? resolved.threadId
+      : undefined;
+
+  if (!toCandidate) {
+    return {
+      channel,
+      to: undefined,
+      accountId: resolved.accountId,
+      threadId,
+      mode,
+    };
+  }
+
+  const docked = resolveOutboundTarget({
+    channel,
+    to: toCandidate,
+    cfg,
+    accountId: resolved.accountId,
+    mode,
+  });
+  return {
+    channel,
+    to: docked.ok ? docked.to : undefined,
+    accountId: resolved.accountId,
+    threadId,
+    mode,
+    error: docked.ok ? undefined : docked.error,
+  };
+}
