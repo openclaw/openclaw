@@ -592,6 +592,20 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
   - Railway 배포 검증 완료
 - [x] **I031 — UCP Phase 1 구현 기록** (`e58291c`)
 - [x] **STATUS 업데이트** (`1982d09`)
+- [x] **UCP Phase 2 구현 + 배포** (`de06981`, `881bfe3`)
+  - `POST /ucp/v1/checkout-sessions` 체크아웃 세션 생성 — ✅ 200
+  - `GET /ucp/v1/checkout-sessions/{id}` 세션 조회 — ✅ 200
+  - `PATCH /ucp/v1/checkout-sessions/{id}` 세션 수정 — ✅ 200
+  - `POST /ucp/v1/checkout-sessions/{id}/pay` 결제 실행 — ✅ 200 (Mock Payment)
+  - `DELETE /ucp/v1/checkout-sessions/{id}` 세션 취소 — ✅ 200
+  - `GET /ucp/v1/orders` 주문 목록 — ✅ 200
+  - `GET /ucp/v1/orders/{id}` 주문 상세 — ✅ 200
+  - `PATCH /ucp/v1/orders/{id}/status` 상태 업데이트 — ✅ 200
+  - DB: ucp_orders + ucp_events 테이블 (마이그레이션 010)
+  - Discovery 매니페스트: checkout/discount/fulfillment capabilities + mock_payment handler
+  - E2E 검증: 체크아웃→결제→주문 전체 플로우 PASS (900,000 VND)
+- [x] **I032 — UCP Phase 2 구현 기록** (`3b5ce76`)
+- [x] **STATUS 업데이트** (`3b5ce76`)
 
 ### UCP 엔드포인트 (2026-02-08 추가)
 | 엔드포인트 | 설명 | 인증 |
@@ -602,18 +616,18 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 | `POST /ucp/v1/products/search` | 자연어 검색 | 없음 (공개) |
 
 ### UCP 다음 단계
-- [ ] **Phase 2**: Checkout + Payment Handler + 재고 동기화 (1주)
+- [x] ~~**Phase 2**: Checkout + Payment Handler + 재고 동기화~~ → ✅ 완료 (2026-02-08)
 - [ ] **Phase 3**: Merchant Center + Business Agent + Direct Offers (1~2주)
 
 ---
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `f154d8e feat(ucp): add product feed generator and structured data endpoints (02-08)`
 - `3b5ce76 docs: I032 UCP Phase 2 implementation record + STATUS update (02-08)`
 - `881bfe3 fix(ucp): fix order status update — JSONB mutation + shipping type (02-08)`
 - `de06981 feat(ucp): Phase 2 — checkout, payment, orders, events (02-08)`
 - `1982d09 docs(STATUS): add UCP Phase 1 to development overview — architecture, integrations, doc index, next steps (02-08)`
-- `e58291c docs(I031): UCP Phase 1 implementation record — task-by-task details, schema mapping, deployment verification (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
