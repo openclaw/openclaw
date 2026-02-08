@@ -9,6 +9,7 @@ import type {
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getHeadersWithAuth } from "./cdp.helpers.js";
+import { DEFAULT_BROWSER_DOWNLOAD_PATH, enableBrowserDownloads } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 
 export type BrowserConsoleMessage = {
@@ -341,6 +342,23 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
             cached = null;
           }
         });
+
+        // Enable browser downloads via CDP - required for downloads to work in headless
+        // mode or when connecting via CDP. This is best-effort; some browsers may not
+        // support this CDP method (e.g., extension relay).
+        // Fixes #8268: Browser downloads don't work
+        if (wsUrl) {
+          try {
+            await enableBrowserDownloads({
+              wsUrl,
+              downloadPath: DEFAULT_BROWSER_DOWNLOAD_PATH,
+              eventsEnabled: false,
+            });
+          } catch {
+            // Best-effort: some browsers may not support Browser.setDownloadBehavior
+          }
+        }
+
         return connected;
       } catch (err) {
         lastErr = err;

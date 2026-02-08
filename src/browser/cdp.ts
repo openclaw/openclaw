@@ -1,6 +1,44 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { appendCdpPath, fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
 
 export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
+
+/**
+ * Default download directory for browser downloads.
+ * Uses a subdirectory in the OS temp folder.
+ */
+export const DEFAULT_BROWSER_DOWNLOAD_PATH = path.join(os.tmpdir(), "openclaw-downloads");
+
+/**
+ * Enables browser downloads via CDP Browser.setDownloadBehavior.
+ * This is required for downloads to work in headless mode or when connecting via CDP.
+ *
+ * @param opts.wsUrl - WebSocket URL for the browser debug connection
+ * @param opts.downloadPath - Directory to save downloads (default: temp folder)
+ * @param opts.eventsEnabled - Whether to enable download progress events
+ *
+ * @see https://chromedevtools.github.io/devtools-protocol/tot/Browser/#method-setDownloadBehavior
+ */
+export async function enableBrowserDownloads(opts: {
+  wsUrl: string;
+  downloadPath?: string;
+  eventsEnabled?: boolean;
+}): Promise<void> {
+  const downloadPath = opts.downloadPath ?? DEFAULT_BROWSER_DOWNLOAD_PATH;
+
+  // Ensure download directory exists
+  await fs.mkdir(downloadPath, { recursive: true });
+
+  await withCdpSocket(opts.wsUrl, async (send) => {
+    await send("Browser.setDownloadBehavior", {
+      behavior: "allow",
+      downloadPath,
+      eventsEnabled: opts.eventsEnabled ?? false,
+    });
+  });
+}
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
