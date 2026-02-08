@@ -118,6 +118,215 @@
 - **Review mode (PR link only):** read `gh pr view/diff`; **do not** switch branches; **do not** change code.
 - **Landing mode:** create an integration branch from `main`, bring in PR commits (**prefer rebase** for linear history; **merge allowed** when complexity/conflicts make it safer), apply fixes, add changelog (+ thanks + PR #), run full gate **locally before committing** (`pnpm build && pnpm check && pnpm test`), commit, merge back to `main`, then `git switch main` (never stay on a topic branch after landing). Important: contributor needs to be in git graph after this!
 
+## Custom API Endpoints
+
+支持通过环境变量配置自定义 API 端点，用于兼容 Anthropic Messages API 的第三方服务。
+
+### ANTHROPIC_BASE_URL
+
+```bash
+export ANTHROPIC_BASE_URL="http://your-custom-endpoint:8045"
+export ANTHROPIC_API_KEY="your-api-key"
+pnpm openclaw agent --message "Hello" --local
+```
+
+**实现位置**: `src/agents/model-compat.ts`
+
+**调用链路**:
+```
+CLI/Gateway → model-auth.ts (认证) → pi-embedded-runner → normalizeModelCompat() → @mariozechner/pi-ai → Anthropic SDK
+```
+
+**关键逻辑** (`normalizeModelCompat` 函数):
+1. 检测 `model.provider === "anthropic"`
+2. 读取 `process.env.ANTHROPIC_BASE_URL`
+3. 当环境变量设置且 model.baseUrl 为空或为默认值时，注入自定义 baseUrl
+4. 显式配置的自定义 baseUrl（非默认值）不会被覆盖
+
+**测试**: `src/agents/model-compat.test.ts` 包含 6 个测试用例覆盖各种场景。
+
+**扩展其他 Provider**: 参考 `resolveAnthropicBaseUrl()` 模式，在 `normalizeModelCompat()` 中添加类似逻辑。
+
+## Docker 部署
+
+项目支持 Docker 部署，适合迁移到服务器或 Mac Mini 长期运行。
+
+### 快速部署
+
+```bash
+# 1. 构建镜像
+docker build -t openclaw:local .
+
+# 2. 创建 .env 配置文件
+cat > .env << 'EOF'
+OPENCLAW_IMAGE=openclaw:local
+OPENCLAW_CONFIG_DIR=/path/to/.openclaw
+OPENCLAW_WORKSPACE_DIR=/path/to/.openclaw/workspace
+OPENCLAW_GATEWAY_PORT=18789
+OPENCLAW_GATEWAY_BIND=lan
+
+# Gateway 认证 token（必须设置，否则无法访问 Web UI）
+OPENCLAW_GATEWAY_TOKEN=your-random-token-here
+
+# 自定义 Anthropic 端点（可选）
+ANTHROPIC_BASE_URL=http://your-custom-endpoint:8045
+ANTHROPIC_API_KEY=your-api-key
+EOF
+
+# 3. 启动服务
+docker-compose up -d openclaw-gateway
+
+# 4. 查看日志
+docker-compose logs -f openclaw-gateway
+```
+
+### 访问 Web UI
+
+必须带 token 访问：`http://localhost:18789/?token=your-random-token-here`
+
+### 生成随机 Token
+
+```bash
+openssl rand -hex 16
+```
+
+### 迁移到其他机器
+
+```bash
+# 导出镜像
+docker save openclaw:local | gzip > openclaw-local.tar.gz
+
+# 复制到目标机器
+scp openclaw-local.tar.gz .env docker-compose.yml target-host:~/openclaw/
+
+# 在目标机器上加载并启动
+ssh target-host
+docker load < ~/openclaw/openclaw-local.tar.gz
+cd ~/openclaw
+docker-compose up -d openclaw-gateway
+```
+
+### 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| `Dockerfile` | 镜像构建配置 |
+| `docker-compose.yml` | 服务编排配置 |
+| `.env` | 环境变量配置（不要提交到 Git） |
+| `~/.openclaw/` | 用户配置目录（需要挂载到容器） |
+
+### 注意事项
+
+- `OPENCLAW_GATEWAY_TOKEN` 必须设置，否则 Web UI 无法访问
+- `OPENCLAW_CONFIG_DIR` 需要指向宿主机的 `~/.openclaw` 目录
+- Docker 容器内 Telegram 需要网络访问，确保容器可以访问外网
+- Docker 容器内使用代理时，不能用 `127.0.0.1`，需用 `host.docker.internal` 或外部代理地址
+- `.env` 文件包含敏感信息，已在 `.gitignore` 中排除
+
+## macOS App 部署
+
+### 构建和启动
+
+```bash
+# 构建项目
+pnpm build
+
+# 打包 macOS App
+pnpm mac:package
+
+# 启动 App
+open dist/OpenClaw.app
+
+# 或移动到 Applications
+mv dist/OpenClaw.app /Applications/
+open /Applications/OpenClaw.app
+```
+
+### 运行模式
+
+| 模式 | 说明 | 使用场景 |
+|------|------|----------|
+| **Local** | 连接本地 Gateway，自动启用 launchd 服务 | 单机使用 |
+| **Remote over SSH** | 通过 SSH 隧道连接远程主机 | 远程 Mac Mini |
+| **Remote Direct** | 直接连接网关 URL (ws/wss) | 配合 Tailscale |
+
+### LaunchAgent 管理
+
+```bash
+# App 使用的服务名
+launchctl kickstart -k gui/$UID/bot.molt.gateway  # 重启
+launchctl bootout gui/$UID/bot.molt.gateway       # 停止
+
+# CLI 方式
+openclaw gateway install   # 安装服务
+openclaw gateway stop      # 停止服务
+```
+
+### 开机自启
+
+1. 系统设置 → 通用 → 登录项
+2. 添加 `/Applications/OpenClaw.app`
+
+## Mac Mini 远程部署
+
+参考文档：https://docs.openclaw.ai/platforms/mac/remote
+
+### 远程主机配置
+
+```bash
+# 1. 克隆并构建
+git clone https://github.com/y1y2u3u4/openclaw.git
+cd openclaw && pnpm install && pnpm build
+
+# 2. 全局链接 CLI
+pnpm link --global
+
+# 3. 确保 PATH 包含 openclaw（非交互式 shell）
+echo "/Users/$(whoami)/Library/pnpm" | sudo tee -a /etc/paths
+# 或创建符号链接
+sudo ln -s $(which openclaw) /usr/local/bin/openclaw
+
+# 4. 开启 SSH
+sudo systemsetup -setremotelogin on
+
+# 5. 配置环境变量
+cat >> ~/.zshrc << 'EOF'
+export ANTHROPIC_BASE_URL="http://your-custom-endpoint:8045"
+export ANTHROPIC_API_KEY="your-api-key"
+EOF
+
+# 6. 启动 Gateway
+openclaw gateway run --bind loopback --port 18789
+```
+
+### 本地连接远程
+
+在 OpenClaw macOS App 的 **Settings → General** 中配置：
+
+| 设置项 | 值 |
+|--------|-----|
+| OpenClaw runs | `Remote over SSH` |
+| Transport | `SSH tunnel`（推荐） |
+| SSH target | `user@mac-mini-ip` 或 Tailscale IP `user@100.x.x.x` |
+
+### Tailscale 集成（推荐）
+
+```bash
+# 在远程主机上暴露网关
+tailscale serve https / http://localhost:18789
+```
+
+然后使用 Direct 模式连接：`wss://mac-mini.tail-xxx.ts.net`
+
+### Docker vs macOS App
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| **macOS App** | 原生性能，菜单栏集成，权限管理 | 需要 GUI 环境 |
+| **Docker** | 隔离性好，易迁移 | 无 macOS 专属功能，网络复杂 |
+
+**推荐**：有显示器/VNC 时用 macOS App；纯 headless 用 Docker。
+
 ## Security & Configuration Tips
 
 - Web provider stores creds at `~/.openclaw/credentials/`; rerun `openclaw login` if logged out.
@@ -129,6 +338,35 @@
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+
+## Lessons Learned
+
+### [2026-02-03] Docker Gateway Token Mismatch 错误
+- **问题**: 访问 `http://localhost:18789/chat` 报 "gateway token mismatch" 错误
+- **原因**: Gateway token 有两个来源：1) 配置文件 `~/.openclaw/openclaw.json` 的 `gateway.auth.token`；2) 环境变量 `OPENCLAW_GATEWAY_TOKEN`。两者必须一致，且访问 URL 必须带 token 参数
+- **解决**:
+  1. 从配置文件读取现有 token：`cat ~/.openclaw/openclaw.json | grep -o '"token": "[^"]*"' | head -1`
+  2. 更新 `.env` 使用相同的 token
+  3. 访问时必须带 token：`http://localhost:18789/?token=YOUR_TOKEN`
+
+### [2026-02-03] Docker 容器内 Telegram 连接失败
+- **问题**: Docker 容器启动后 Telegram 报 "fetch failed" 错误
+- **原因**: 配置文件中设置了代理 `http://127.0.0.1:1082`，但容器内 `127.0.0.1` 指向容器自身，无法访问宿主机代理
+- **解决**: 使用 `host.docker.internal:1082` 替代 `127.0.0.1:1082`，或移除代理设置
+
+### [2026-02-03] ANTHROPIC_BASE_URL 不生效
+- **问题**: 设置 `ANTHROPIC_BASE_URL` 环境变量后，请求仍发送到官方端点
+- **原因**: pi-ai 库返回的 Anthropic 模型已有默认 `baseUrl: "https://api.anthropic.com"`，原逻辑 `!model.baseUrl` 条件为 false
+- **解决**: 修改 `src/agents/model-compat.ts`，当 `baseUrl` 为默认值时也允许环境变量覆盖
+
+### [2026-02-03] Fork 同步上游更新
+- **问题**: 如何保持 fork 与上游仓库同步，同时保留自定义修改
+- **解决**:
+  ```bash
+  git remote add upstream https://github.com/openclaw/openclaw.git
+  git fetch upstream && git rebase upstream/main
+  git push origin main --force-with-lease
+  ```
 
 ## Agent-Specific Notes
 
