@@ -22,6 +22,7 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   channels?: Record<
     string,
     {
@@ -30,6 +31,7 @@ export type DiscordGuildEntryResolved = {
       skills?: string[];
       enabled?: boolean;
       users?: Array<string | number>;
+      roles?: Array<string | number>;
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
@@ -43,6 +45,7 @@ export type DiscordChannelConfigResolved = {
   skills?: string[];
   enabled?: boolean;
   users?: Array<string | number>;
+  roles?: Array<string | number>;
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
@@ -181,6 +184,20 @@ export function resolveDiscordOwnerAllowFrom(params: {
   return [match.matchKey];
 }
 
+export function resolveDiscordRoleAllowed(params: {
+  allowList?: Array<string | number>;
+  memberRoleIds: string[];
+}) {
+  const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
+  if (!allowList) {
+    return true;
+  }
+  if (allowList.allowAll) {
+    return true;
+  }
+  return params.memberRoleIds.some((roleId) => allowList.ids.has(roleId));
+}
+
 export function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
   allowFrom?: Array<string | number>;
@@ -269,6 +286,7 @@ function resolveDiscordChannelConfigEntry(
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,
+    roles: entry.roles,
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,

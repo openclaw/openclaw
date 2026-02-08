@@ -26,6 +26,7 @@ export type ResolveAgentRouteInput = {
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
   teamId?: string | null;
+  memberRoleIds?: string[];
 };
 
 export type ResolvedAgentRoute = {
@@ -40,6 +41,7 @@ export type ResolvedAgentRoute = {
   matchedBy:
     | "binding.peer"
     | "binding.peer.parent"
+    | "binding.guild+roles"
     | "binding.guild"
     | "binding.team"
     | "binding.account"
@@ -164,12 +166,24 @@ function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId:
   return id === teamId;
 }
 
+function matchesRoles(
+  match: { roles?: string[] | undefined } | undefined,
+  memberRoleIds: string[],
+): boolean {
+  const roles = match?.roles;
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return false;
+  }
+  return memberRoleIds.some((id) => roles.includes(id));
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
+  const memberRoleIds = input.memberRoleIds ?? [];
 
   const bindings = listBindings(input.cfg).filter((binding) => {
     if (!binding || typeof binding !== "object") {
@@ -215,6 +229,15 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
+  if (guildId && memberRoleIds.length > 0) {
+    const guildRolesMatch = bindings.find(
+      (b) => matchesGuild(b.match, guildId) && matchesRoles(b.match, memberRoleIds),
+    );
+    if (guildRolesMatch) {
+      return choose(guildRolesMatch.agentId, "binding.guild+roles");
+    }
+  }
+
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
   const parentPeer = input.parentPeer
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
@@ -227,7 +250,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   }
 
   if (guildId) {
-    const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId));
+    const hasRoles = (b: (typeof bindings)[number]) =>
+      Array.isArray(b.match?.roles) && b.match.roles.length > 0;
+    const guildMatch = bindings.find((b) => matchesGuild(b.match, guildId) && !hasRoles(b));
     if (guildMatch) {
       return choose(guildMatch.agentId, "binding.guild");
     }

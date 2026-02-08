@@ -77,5 +77,6 @@ export type AgentBinding = {
     peer?: { kind: "dm" | "group" | "channel"; id: string };
     guildId?: string;
     teamId?: string;
+    roles?: string[];
   };
 };

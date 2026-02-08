@@ -18,6 +18,7 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
+import { resolveDiscordRoleAllowed, resolveDiscordUserAllowed } from "./monitor/allow-list.js";
 import { DiscordMessageListener } from "./monitor/listeners.js";
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
@@ -729,5 +730,125 @@ describe("discord media payload", () => {
     expect(payload.MediaType).toBe("image/png");
     expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
     expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
+  });
+});
+
+describe("resolveDiscordRoleAllowed", () => {
+  it("returns true when no roles configured (no restriction)", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        memberRoleIds: ["999"],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when role ID matches", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["123"],
+        memberRoleIds: ["123"],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when role ID does not match", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["123"],
+        memberRoleIds: ["456"],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when wildcard is present", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["*"],
+        memberRoleIds: ["999"],
+      }),
+    ).toBe(true);
+  });
+
+  it("matches prefixed format role:123", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["role:123"],
+        memberRoleIds: ["123"],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when one of multiple role IDs matches", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["123"],
+        memberRoleIds: ["456", "123", "789"],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when memberRoleIds is empty", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: ["123"],
+        memberRoleIds: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when allowList is empty array (no restriction)", () => {
+    expect(
+      resolveDiscordRoleAllowed({
+        allowList: [],
+        memberRoleIds: ["123"],
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("users + roles OR logic", () => {
+  it("allows when user matches users list but not roles", () => {
+    const userOk = resolveDiscordUserAllowed({
+      allowList: ["123"],
+      userId: "123",
+    });
+    const roleOk = resolveDiscordRoleAllowed({
+      allowList: ["456"],
+      memberRoleIds: ["789"],
+    });
+    expect(userOk).toBe(true);
+    expect(roleOk).toBe(false);
+    // OR logic: true || false → allowed
+    expect(userOk || roleOk).toBe(true);
+  });
+
+  it("allows when user matches roles but not users list", () => {
+    const userOk = resolveDiscordUserAllowed({
+      allowList: ["123"],
+      userId: "456",
+    });
+    const roleOk = resolveDiscordRoleAllowed({
+      allowList: ["789"],
+      memberRoleIds: ["789"],
+    });
+    expect(userOk).toBe(false);
+    expect(roleOk).toBe(true);
+    // OR logic: false || true → allowed
+    expect(userOk || roleOk).toBe(true);
+  });
+
+  it("blocks when user matches neither users nor roles", () => {
+    const userOk = resolveDiscordUserAllowed({
+      allowList: ["123"],
+      userId: "456",
+    });
+    const roleOk = resolveDiscordRoleAllowed({
+      allowList: ["789"],
+      memberRoleIds: ["999"],
+    });
+    expect(userOk).toBe(false);
+    expect(roleOk).toBe(false);
+    // OR logic: false || false → blocked
+    expect(userOk || roleOk).toBe(false);
   });
 });
