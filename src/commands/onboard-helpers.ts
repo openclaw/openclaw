@@ -11,6 +11,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { pickPrimaryLanIPv4 } from "../gateway/net.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
@@ -449,6 +450,9 @@ export function resolveControlUiLinks(params: {
     }
     if (bind === "tailnet" && tailnetIPv4) {
       return tailnetIPv4 ?? "127.0.0.1";
+    }
+    if (bind === "lan") {
+      return pickPrimaryLanIPv4() ?? "127.0.0.1";
     }
     return "127.0.0.1";
   })();

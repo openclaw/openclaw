@@ -4,6 +4,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import { pickPrimaryLanIPv4 } from "../../gateway/net.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { formatCliCommand } from "../command-format.js";
 
@@ -60,6 +61,9 @@ export function pickProbeHostForBind(
   }
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
+  }
+  if (bindMode === "lan") {
+    return pickPrimaryLanIPv4() ?? "127.0.0.1";
   }
   return "127.0.0.1";
 }
