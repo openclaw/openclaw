@@ -6,6 +6,7 @@ import {
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+import { validateBrowserEvalCode } from "./validate-browser-eval.js";
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
@@ -226,6 +227,10 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+
+  // Validate code for dangerous patterns before evaluation
+  validateBrowserEvalCode(fnText);
+
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -336,6 +341,8 @@ export async function waitForViaPlaywright(opts: {
   if (opts.fn) {
     const fn = String(opts.fn).trim();
     if (fn) {
+      // Validate code for dangerous patterns before evaluation
+      validateBrowserEvalCode(fn);
       await page.waitForFunction(fn, { timeout });
     }
   }
