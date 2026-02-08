@@ -1,4 +1,4 @@
-import type { WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -147,7 +147,11 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & { mediaUrl?: string; threadTs?: string } = {},
+  opts: SlackActionClientOpts & {
+    mediaUrl?: string;
+    threadTs?: string;
+    blocks?: (Block | KnownBlock)[];
+  } = {},
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
@@ -155,6 +159,7 @@ export async function sendSlackMessage(
     mediaUrl: opts.mediaUrl,
     client: opts.client,
     threadTs: opts.threadTs,
+    blocks: opts.blocks,
   });
 }
 
@@ -260,4 +265,52 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+export type SlackSearchResult = {
+  matches: Array<{
+    ts?: string;
+    text?: string;
+    user?: string;
+    channel?: { id?: string; name?: string };
+    permalink?: string;
+  }>;
+  total: number;
+  pagination: {
+    count: number;
+    page: number;
+    pages: number;
+  };
+};
+
+export async function searchSlackMessages(
+  query: string,
+  opts: SlackActionClientOpts & {
+    sort?: "timestamp" | "score";
+    sortDir?: "asc" | "desc";
+    count?: number;
+    page?: number;
+  } = {},
+): Promise<SlackSearchResult> {
+  const client = await getClient(opts);
+  const result = await client.search.messages({
+    query,
+    sort: opts.sort ?? "timestamp",
+    sort_dir: opts.sortDir ?? "desc",
+    count: opts.count ?? 20,
+    page: opts.page ?? 1,
+  });
+  const matches = (result.messages?.matches ?? []) as SlackSearchResult["matches"];
+  const pagination = result.messages?.pagination as
+    | { count?: number; page?: number; pages?: number }
+    | undefined;
+  return {
+    matches,
+    total: result.messages?.total ?? matches.length,
+    pagination: {
+      count: pagination?.count ?? matches.length,
+      page: pagination?.page ?? 1,
+      pages: pagination?.pages ?? 1,
+    },
+  };
 }

@@ -13,12 +13,19 @@ import {
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
+  searchSlackMessages,
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
-import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
+import {
+  createActionGate,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringParam,
+} from "./common.js";
 
 const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 
@@ -175,10 +182,14 @@ export async function handleSlackAction(
           to,
           context,
         );
+        // Parse blocks if provided (Block Kit JSON)
+        const blocksParam = params.blocks;
+        const blocks = Array.isArray(blocksParam) ? blocksParam : undefined;
         const result = await sendSlackMessage(to, content, {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
+          blocks,
         });
 
         // Keep "first" mode consistent even when the agent explicitly provided
@@ -307,6 +318,37 @@ export async function handleSlackAction(
     }
     const emojis = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (action === "searchMessages") {
+    // Search requires a user token - bot tokens cannot use search API
+    const searchToken = account.config.userToken?.trim();
+    if (!searchToken) {
+      throw new Error(
+        "Slack search requires a user token. Set channels.slack.accounts.<account>.userToken with a user OAuth token.",
+      );
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const sort = readStringParam(params, "sort") as "timestamp" | "score" | undefined;
+    const sortDir = readStringParam(params, "sortDir") as "asc" | "desc" | undefined;
+    const count = readNumberParam(params, "count", { integer: true });
+    const page = readNumberParam(params, "page", { integer: true });
+    const result = await searchSlackMessages(query, {
+      token: searchToken,
+      sort: sort ?? "timestamp",
+      sortDir: sortDir ?? "desc",
+      count: count ?? 20,
+      page: page ?? 1,
+    });
+    const normalizedMatches = result.matches.map((match) =>
+      withNormalizedTimestamp(match as Record<string, unknown>, match.ts),
+    );
+    return jsonResult({
+      ok: true,
+      matches: normalizedMatches,
+      total: result.total,
+      pagination: result.pagination,
+    });
   }
 
   throw new Error(`Unknown action: ${action}`);

@@ -54,6 +54,9 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       if (isActionEnabled("emojiList")) {
         actions.add("emoji-list");
       }
+      if (isActionEnabled("search")) {
+        actions.add("search");
+      }
       return Array.from(actions);
     },
     extractToolSend: ({ args }): ChannelToolSend | null => {
@@ -86,6 +89,9 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         const mediaUrl = readStringParam(params, "media", { trim: false });
         const threadId = readStringParam(params, "threadId");
         const replyTo = readStringParam(params, "replyTo");
+        // Parse blocks parameter (Block Kit JSON for interactive messages)
+        const blocksParam = params.blocks;
+        const blocks = Array.isArray(blocksParam) ? blocksParam : undefined;
         return await handleSlackAction(
           {
             action: "sendMessage",
@@ -94,6 +100,7 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
             mediaUrl: mediaUrl ?? undefined,
             accountId: accountId ?? undefined,
             threadTs: threadId ?? replyTo ?? undefined,
+            blocks,
           },
           cfg,
           toolContext,
@@ -212,6 +219,26 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       if (action === "emoji-list") {
         return await handleSlackAction(
           { action: "emojiList", accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      if (action === "search") {
+        const query = readStringParam(params, "query", { required: true });
+        const sort = readStringParam(params, "sort") as "timestamp" | "score" | undefined;
+        const sortDir = readStringParam(params, "sortDir") as "asc" | "desc" | undefined;
+        const count = readNumberParam(params, "count", { integer: true });
+        const page = readNumberParam(params, "page", { integer: true });
+        return await handleSlackAction(
+          {
+            action: "searchMessages",
+            query,
+            sort,
+            sortDir,
+            count,
+            page,
+            accountId: accountId ?? undefined,
+          },
           cfg,
         );
       }

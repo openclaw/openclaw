@@ -13,6 +13,11 @@ const reactSlackMessage = vi.fn(async () => ({}));
 const readSlackMessages = vi.fn(async () => ({}));
 const removeOwnSlackReactions = vi.fn(async () => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async () => ({}));
+const searchSlackMessages = vi.fn(async () => ({
+  matches: [],
+  total: 0,
+  pagination: { count: 0, page: 1, pages: 1 },
+}));
 const sendSlackMessage = vi.fn(async () => ({}));
 const unpinSlackMessage = vi.fn(async () => ({}));
 
@@ -28,6 +33,7 @@ vi.mock("../../slack/actions.js", () => ({
   readSlackMessages: (...args: unknown[]) => readSlackMessages(...args),
   removeOwnSlackReactions: (...args: unknown[]) => removeOwnSlackReactions(...args),
   removeSlackReaction: (...args: unknown[]) => removeSlackReaction(...args),
+  searchSlackMessages: (...args: unknown[]) => searchSlackMessages(...args),
   sendSlackMessage: (...args: unknown[]) => sendSlackMessage(...args),
   unpinSlackMessage: (...args: unknown[]) => unpinSlackMessage(...args),
 }));
@@ -391,18 +397,18 @@ describe("handleSlackAction", () => {
 
   it("uses user token for reads when available", async () => {
     const cfg = {
-      channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
+      channels: { slack: { botToken: "<BOT_TOKEN>", userToken: "<USER_TOKEN>" } },
     } as OpenClawConfig;
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
     const [, opts] = readSlackMessages.mock.calls[0] ?? [];
-    expect(opts?.token).toBe("xoxp-1");
+    expect(opts?.token).toBe("<USER_TOKEN>");
   });
 
   it("falls back to bot token for reads when user token missing", async () => {
     const cfg = {
-      channels: { slack: { botToken: "xoxb-1" } },
+      channels: { slack: { botToken: "<BOT_TOKEN>" } },
     } as OpenClawConfig;
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
@@ -413,7 +419,7 @@ describe("handleSlackAction", () => {
 
   it("uses bot token for writes when userTokenReadOnly is true", async () => {
     const cfg = {
-      channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
+      channels: { slack: { botToken: "<BOT_TOKEN>", userToken: "<USER_TOKEN>" } },
     } as OpenClawConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
@@ -424,12 +430,91 @@ describe("handleSlackAction", () => {
   it("allows user token writes when bot token is missing", async () => {
     const cfg = {
       channels: {
-        slack: { userToken: "xoxp-1", userTokenReadOnly: false },
+        slack: { userToken: "<USER_TOKEN>", userTokenReadOnly: false },
       },
     } as OpenClawConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
     const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
-    expect(opts?.token).toBe("xoxp-1");
+    expect(opts?.token).toBe("<USER_TOKEN>");
+  });
+
+  it("searches messages with user token", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "<BOT_TOKEN>", userToken: "<USER_TOKEN>" } },
+    } as OpenClawConfig;
+    searchSlackMessages.mockClear();
+    searchSlackMessages.mockResolvedValueOnce({
+      matches: [{ ts: "1234567890.123", text: "hello", user: "U1" }],
+      total: 1,
+      pagination: { count: 1, page: 1, pages: 1 },
+    });
+
+    const result = await handleSlackAction({ action: "searchMessages", query: "hello" }, cfg);
+
+    expect(searchSlackMessages).toHaveBeenCalledWith("hello", {
+      token: "<USER_TOKEN>",
+      sort: "timestamp",
+      sortDir: "desc",
+      count: 20,
+      page: 1,
+    });
+    expect(result.details).toMatchObject({ ok: true, total: 1 });
+  });
+
+  it("rejects search without user token", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "<BOT_TOKEN>" } },
+    } as OpenClawConfig;
+
+    await expect(
+      handleSlackAction({ action: "searchMessages", query: "hello" }, cfg),
+    ).rejects.toThrow(/user token/);
+  });
+
+  it("passes blocks to sendSlackMessage", async () => {
+    const cfg = { channels: { slack: { botToken: "<BOT_TOKEN>" } } } as OpenClawConfig;
+    sendSlackMessage.mockClear();
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "Hello" } }];
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C1", content: "Fallback", blocks },
+      cfg,
+    );
+
+    const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
+    expect(opts?.blocks).toEqual(blocks);
+  });
+
+  it("passes search options correctly", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "<BOT_TOKEN>", userToken: "<USER_TOKEN>" } },
+    } as OpenClawConfig;
+    searchSlackMessages.mockClear();
+    searchSlackMessages.mockResolvedValueOnce({
+      matches: [],
+      total: 0,
+      pagination: { count: 0, page: 2, pages: 5 },
+    });
+
+    await handleSlackAction(
+      {
+        action: "searchMessages",
+        query: "from:@user test",
+        sort: "score",
+        sortDir: "asc",
+        count: 50,
+        page: 2,
+      },
+      cfg,
+    );
+
+    expect(searchSlackMessages).toHaveBeenCalledWith("from:@user test", {
+      token: "<USER_TOKEN>",
+      sort: "score",
+      sortDir: "asc",
+      count: 50,
+      page: 2,
+    });
   });
 });
