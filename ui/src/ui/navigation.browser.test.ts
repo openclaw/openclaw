@@ -181,4 +181,13 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
+
+  it("hydrates token from URL hash and strips it", async () => {
+    const app = mountApp("/ui/overview#token=abc123");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("abc123");
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.hash).toBe("");
+  });
 });

@@ -109,6 +109,7 @@ async function submitVoyageBatch(params: {
           completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
           request_params: {
             model: params.client.model,
+            input_type: "document",
           },
           metadata: {
             source: "clawdbot-memory",

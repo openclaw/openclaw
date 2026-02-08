@@ -3,6 +3,11 @@ name: Workflow Sanity
 on:
   pull_request:
   push:
+    branches: [main]
+
+concurrency:
+  group: workflow-sanity-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   no-tabs:

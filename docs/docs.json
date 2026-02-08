@@ -99,6 +99,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/qianfan",
+      "destination": "/providers/qianfan"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1006,7 +1010,47 @@
                   "providers/opencode",
                   "providers/glm",
                   "providers/zai",
-                  "providers/synthetic"
+                  "providers/synthetic",
+                  "providers/qianfan"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Platforms",
+            "groups": [
+              {
+                "group": "Platforms overview",
+                "pages": [
+                  "platforms/index",
+                  "platforms/macos",
+                  "platforms/linux",
+                  "platforms/windows",
+                  "platforms/android",
+                  "platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS companion app",
+                "pages": [
+                  "platforms/mac/dev-setup",
+                  "platforms/mac/menu-bar",
+                  "platforms/mac/voicewake",
+                  "platforms/mac/voice-overlay",
+                  "platforms/mac/webchat",
+                  "platforms/mac/canvas",
+                  "platforms/mac/child-process",
+                  "platforms/mac/health",
+                  "platforms/mac/icon",
+                  "platforms/mac/logging",
+                  "platforms/mac/permissions",
+                  "platforms/mac/remote",
+                  "platforms/mac/signing",
+                  "platforms/mac/release",
+                  "platforms/mac/bundled-gateway",
+                  "platforms/mac/xpc",
+                  "platforms/mac/skills",
+                  "platforms/mac/peekaboo"
                 ]
               }
             ]
