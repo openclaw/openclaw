@@ -204,7 +204,13 @@ export function buildEmbeddedRunPayloads(params: {
     // Check if this is a recoverable/internal tool error that shouldn't be shown to users
     // when there's already a user-facing reply (the model should have retried).
     const errorLower = (params.lastToolError.error ?? "").toLowerCase();
+    const toolNameLower = (params.lastToolError.toolName ?? "").toLowerCase();
+    const isExecTool = toolNameLower === "exec" || toolNameLower === "bash";
+    // Exec/bash non-zero exit codes are internal errors (e.g., grep no matches) that
+    // the model should handle, not surface to users.
+    const isExecExitCodeError = isExecTool && errorLower.includes("exited with code");
     const isRecoverableError =
+      isExecExitCodeError ||
       errorLower.includes("required") ||
       errorLower.includes("missing") ||
       errorLower.includes("invalid") ||

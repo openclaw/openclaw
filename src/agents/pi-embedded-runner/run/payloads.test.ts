@@ -171,10 +171,41 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "plain",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("code 1");
+    // Exec exit code errors are now suppressed as internal/recoverable errors
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("suppresses exec exit code errors (grep no matches, etc.)", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+      sessionKey: "session:telegram",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+    });
+
+    // Exec/bash exit code errors should not be sent to the user
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("suppresses bash exit code errors", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "bash", error: "Command exited with code 127" },
+      sessionKey: "session:telegram",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses recoverable tool errors containing 'required'", () => {
