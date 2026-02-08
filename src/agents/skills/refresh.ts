@@ -29,6 +29,11 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
+  /(^|[\\/])\.venv([\\/]|$)/,
+  /(^|[\\/])__pycache__([\\/]|$)/,
+  /(^|[\\/])browser_data([\\/]|$)/,
+  // Ignore specific high-churn subdirectories in .openclaw, but NOT .openclaw/skills
+  /(^|[\\/])\.openclaw[\\/](media|logs|cache)([\\/]|$)/,
 ];
 
 function bumpVersion(current: number): number {
