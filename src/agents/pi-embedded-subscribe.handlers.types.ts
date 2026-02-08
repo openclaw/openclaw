@@ -18,6 +18,8 @@ export type ToolErrorSummary = {
   toolName: string;
   meta?: string;
   error?: string;
+  /** Best-effort timestamp captured at the tool-result event boundary (UTC ms). */
+  occurredAtMs?: number;
 };
 
 export type EmbeddedPiSubscribeState = {
