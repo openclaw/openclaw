@@ -287,23 +287,15 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedKeys = new Set<string>();
-  const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
       continue;
     }
     const key = modelKey(parsed.provider, parsed.model);
-    const providerKey = normalizeProviderId(parsed.provider);
-    if (isCliProvider(parsed.provider, params.cfg)) {
-      allowedKeys.add(key);
-    } else if (catalogKeys.has(key)) {
-      allowedKeys.add(key);
-    } else if (configuredProviders[providerKey] != null) {
-      // Explicitly configured providers should be allowlist-able even when
-      // they don't exist in the curated model catalog.
-      allowedKeys.add(key);
-    }
+    // Models explicitly listed in agents.defaults.models should always be allowed.
+    // This enables custom providers (like zai) without requiring catalog entries.
+    allowedKeys.add(key);
   }
 
   if (defaultKey) {
