@@ -178,6 +178,7 @@ actor TalkModeRuntime {
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         self.recognitionRequest?.shouldReportPartialResults = true
+        self.recognitionRequest?.taskHint = .dictation
         guard let request = self.recognitionRequest else { return }
 
         if self.audioEngine == nil {
