@@ -36,7 +36,12 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -521,5 +526,10 @@ export async function runReplyAgent(params: {
   } finally {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+    // Ensure followup queue is drained even if an exception was thrown.
+    // Normal return paths call finalizeWithFollowup which drains the queue,
+    // but exceptions skip that - this ensures queued messages aren't lost.
+    // (Fix for #5951)
+    scheduleFollowupDrain(queueKey, runFollowupTurn);
   }
 }
