@@ -121,6 +121,7 @@ Prerequisites:
 
 - Install dependency: `pnpm add @google-cloud/secret-manager`
 - Configure ADC (Application Default Credentials)
+- Set `project` in config (required — Secret Manager doesn't support automatic project discovery)
 
 Create a secret:
 

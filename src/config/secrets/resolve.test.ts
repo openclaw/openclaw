@@ -322,6 +322,20 @@ describe("detectUnresolvedSecretRefs", () => {
   });
 });
 
+describe("sync loadConfig detection", () => {
+  it("detectUnresolvedSecretRefs finds refs for sync path error", () => {
+    // This is what the sync loadConfig() uses to detect unresolved $secret{} refs
+    // and throw SecretsProviderError before returning invalid config
+    const config = {
+      models: { providers: { openai: { apiKey: "$secret{KEY}" } } },
+      secrets: { provider: "env", prefix: "$secret{IGNORED}" },
+    };
+    const refs = detectUnresolvedSecretRefs(config);
+    // Should find the ref in models but NOT in the secrets block
+    expect(refs).toEqual(["$secret{KEY}"]);
+  });
+});
+
 describe("GCP provider", () => {
   it("creates a GCP provider with the correct name", async () => {
     const { createGcpSecretsProvider } = await import("./gcp.js");
