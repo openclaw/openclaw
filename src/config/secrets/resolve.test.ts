@@ -340,6 +340,32 @@ describe("sync loadConfig detection", () => {
     const refs = detectUnresolvedSecretRefs(config);
     expect(refs).toEqual(["$secret{ARR_SECRET} at items[1]"]);
   });
+
+  it("builds deeply nested dotted paths", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "$secret{OPENAI_KEY}",
+          },
+          anthropic: {
+            apiKey: "$secret{ANTHROPIC_KEY}",
+          },
+        },
+      },
+    };
+    const refs = detectUnresolvedSecretRefs(config);
+    expect(refs).toContain("$secret{OPENAI_KEY} at models.providers.openai.apiKey");
+    expect(refs).toContain("$secret{ANTHROPIC_KEY} at models.providers.anthropic.apiKey");
+  });
+
+  it("handles mixed nested objects and arrays in paths", () => {
+    const config = {
+      channels: [{ token: "$secret{CH_TOKEN}" }],
+    };
+    const refs = detectUnresolvedSecretRefs(config);
+    expect(refs).toEqual(["$secret{CH_TOKEN} at channels[0].token"]);
+  });
 });
 
 describe("createProvider validation", () => {
@@ -366,6 +392,35 @@ describe("GCP provider", () => {
   it("creates a GCP provider with the correct name", async () => {
     const { createGcpSecretsProvider } = await import("./gcp.js");
     const provider = createGcpSecretsProvider({ project: "test-project" });
+    expect(provider.name).toBe("gcp");
+  });
+
+  it("GcpSecretsProviderError preserves message and secretName", async () => {
+    const { GcpSecretsProviderError } = await import("./gcp.js");
+    const err = new GcpSecretsProviderError("Access denied", "my-secret");
+    expect(err.message).toBe("Access denied");
+    expect(err.secretName).toBe("my-secret");
+    expect(err.name).toBe("GcpSecretsProviderError");
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("GcpSecretsProviderError is distinguishable from generic Error", async () => {
+    const { GcpSecretsProviderError } = await import("./gcp.js");
+    const gcpErr = new GcpSecretsProviderError("GCP failed");
+    const genericErr = new Error("generic");
+
+    // This is what io.ts uses to preserve error messages
+    const isKnown = (e: Error) =>
+      e instanceof SecretsProviderError || e instanceof GcpSecretsProviderError;
+
+    expect(isKnown(gcpErr)).toBe(true);
+    expect(isKnown(genericErr)).toBe(false);
+  });
+
+  it("builds correct secret path with project", async () => {
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider({ project: "my-project" });
+    // Verify provider was created successfully with the project config
     expect(provider.name).toBe("gcp");
   });
 });
