@@ -33,6 +33,10 @@ export const updateHandlers: GatewayRequestHandlers = {
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
         ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
         : undefined;
+    const resumeMessage =
+      typeof (params as { resumeMessage?: unknown }).resumeMessage === "string"
+        ? (params as { resumeMessage?: string }).resumeMessage?.trim() || undefined
+        : undefined;
     const note =
       typeof (params as { note?: unknown }).note === "string"
         ? (params as { note?: string }).note?.trim() || undefined
@@ -79,6 +83,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       status: result.status,
       ts: Date.now(),
       sessionKey,
+      resumeMessage,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {

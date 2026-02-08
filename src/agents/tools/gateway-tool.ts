@@ -53,6 +53,11 @@ const GatewayToolSchema = Type.Object({
   baseHash: Type.Optional(Type.String()),
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
+  resumeMessage: Type.Optional(
+    Type.String({
+      description: "Context to inject into the session after restart to help the agent resume.",
+    }),
+  ),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
 });
@@ -69,7 +74,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing.",
+      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. When triggering a restart, use resumeMessage to provide context that will be re-injected when you wake up (e.g., 'Just applied the config change—confirm it worked for the user.'). This prevents the session from going silent after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -82,6 +87,10 @@ export function createGatewayTool(opts?: {
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
+        const resumeMessage =
+          typeof params.resumeMessage === "string" && params.resumeMessage.trim()
+            ? params.resumeMessage.trim()
+            : undefined;
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -128,6 +137,7 @@ export function createGatewayTool(opts?: {
           sessionKey,
           deliveryContext,
           threadId,
+          resumeMessage,
           message: note ?? reason ?? null,
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
@@ -183,6 +193,10 @@ export function createGatewayTool(opts?: {
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
+        const resumeMessage =
+          typeof params.resumeMessage === "string" && params.resumeMessage.trim()
+            ? params.resumeMessage.trim()
+            : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
@@ -193,6 +207,7 @@ export function createGatewayTool(opts?: {
           raw,
           baseHash,
           sessionKey,
+          resumeMessage,
           note,
           restartDelayMs,
         });
@@ -209,6 +224,10 @@ export function createGatewayTool(opts?: {
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
+        const resumeMessage =
+          typeof params.resumeMessage === "string" && params.resumeMessage.trim()
+            ? params.resumeMessage.trim()
+            : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
@@ -219,6 +238,7 @@ export function createGatewayTool(opts?: {
           raw,
           baseHash,
           sessionKey,
+          resumeMessage,
           note,
           restartDelayMs,
         });
@@ -229,6 +249,10 @@ export function createGatewayTool(opts?: {
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
+        const resumeMessage =
+          typeof params.resumeMessage === "string" && params.resumeMessage.trim()
+            ? params.resumeMessage.trim()
+            : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
@@ -241,6 +265,7 @@ export function createGatewayTool(opts?: {
         };
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
+          resumeMessage,
           note,
           restartDelayMs,
           timeoutMs: timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS,

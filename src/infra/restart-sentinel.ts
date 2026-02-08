@@ -40,6 +40,8 @@ export type RestartSentinelPayload = {
   };
   /** Thread ID for reply threading (e.g., Slack thread_ts). */
   threadId?: string;
+  /** Context to inject into the session after restart to help the agent resume. */
+  resumeMessage?: string;
   message?: string | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
@@ -109,7 +111,12 @@ export async function consumeRestartSentinel(
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
-  return `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
+  let msg = "";
+  if (payload.resumeMessage) {
+    msg += `Resume Context: ${payload.resumeMessage}\n\n`;
+  }
+  msg += `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
+  return msg;
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {

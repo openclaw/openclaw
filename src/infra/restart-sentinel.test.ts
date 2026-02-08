@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   consumeRestartSentinel,
+  formatRestartSentinelMessage,
   readRestartSentinel,
   resolveRestartSentinelPath,
   trimLogTail,
@@ -66,5 +67,23 @@ describe("restart sentinel", () => {
     const trimmed = trimLogTail(text, 8000);
     expect(trimmed?.length).toBeLessThanOrEqual(8001);
     expect(trimmed?.startsWith("…")).toBe(true);
+  });
+
+  it("supports resumeMessage in sentinel", async () => {
+    const payload = {
+      kind: "restart" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      sessionKey: "agent:main:discord:dm:12345",
+      resumeMessage: "I was just checking the weather.",
+    };
+    await writeRestartSentinel(payload);
+
+    const consumed = await consumeRestartSentinel();
+    expect(consumed?.payload.resumeMessage).toBe("I was just checking the weather.");
+
+    const formatted = formatRestartSentinelMessage(consumed!.payload);
+    expect(formatted).toContain("Resume Context: I was just checking the weather.");
+    expect(formatted).toContain("GatewayRestart:");
   });
 });

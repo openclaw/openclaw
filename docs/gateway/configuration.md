@@ -59,6 +59,7 @@ Params:
 - `baseHash` (optional) — config hash from `config.get` (required when a config already exists)
 - `sessionKey` (optional) — last active session key for the wake-up ping
 - `note` (optional) — note to include in the restart sentinel
+- `resumeMessage` (optional) — context to inject into the session after restart (helps the agent resume where it left off)
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example (via `gateway call`):
@@ -69,6 +70,7 @@ openclaw gateway call config.apply --params '{
   "raw": "{\\n  agents: { defaults: { workspace: \\"~/.openclaw/workspace\\" } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "resumeMessage": "Config applied, back in a flash! ⚡️",
   "restartDelayMs": 1000
 }'
 ```
@@ -90,6 +92,7 @@ Params:
 - `baseHash` (required) — config hash from `config.get`
 - `sessionKey` (optional) — last active session key for the wake-up ping
 - `note` (optional) — note to include in the restart sentinel
+- `resumeMessage` (optional) — custom message to send upon resume
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example:
@@ -100,6 +103,7 @@ openclaw gateway call config.patch --params '{
   "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
   "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "resumeMessage": "Tweaking the gears... ⚙️",
   "restartDelayMs": 1000
 }'
 ```
