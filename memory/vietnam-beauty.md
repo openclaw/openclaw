@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `e362dff fix(api): sync stale in-memory AI jobs with DB VideoJob status (02-08)`
 - `dd02dda docs: update STATUS with D027~D029 sales strategy docs (02-08)`
 - `4c4b1d9 docs: D029 global expansion roadmap (02-08)`
 - `c5663d3 docs: D028 Americas market entry strategy (02-08)`
 - `d174e97 docs: D027 Vietnam market sales strategy (02-08)`
-- `54dfadd docs: update D020 with UCP pipeline steps (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
