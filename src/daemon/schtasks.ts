@@ -251,9 +251,7 @@ export async function installScheduledTask({
     quotedScript,
   ];
   const taskUser = resolveTaskUser(env);
-  let create = await execSchtasks(
-    taskUser ? [...baseArgs, "/RU", taskUser, "/NP", "/IT"] : baseArgs,
-  );
+  let create = await execSchtasks(taskUser ? [...baseArgs, "/RU", taskUser, "/NP"] : baseArgs);
   if (create.code !== 0 && taskUser) {
     create = await execSchtasks(baseArgs);
   }
