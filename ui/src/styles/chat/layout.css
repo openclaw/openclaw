@@ -755,8 +755,14 @@
 }
 
 .chat-controls__model {
-  min-width: 170px;
-  max-width: 320px;
+  min-width: 100px;
+  max-width: 180px;
+}
+
+.chat-controls__model select {
+  padding: 6px 10px;
+  font-size: 13px;
+  max-width: 180px;
 }
 
 .chat-controls__thinking {
