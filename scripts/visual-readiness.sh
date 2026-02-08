@@ -33,16 +33,16 @@ if ! command -v peekaboo >/dev/null 2>&1; then
   say_block ""
   say_block "If Peekaboo is installed but screenshots fail, grant permissions:"
   say_block "  1) System Settings -> Privacy & Security -> Screen Recording"
-  say_block "     - enable: Terminal (or iTerm)"
-  say_block "     - quit and reopen Terminal"
+  say_block "     - enable: Terminal (or iTerm) AND Peekaboo"
+  say_block "     - quit & reopen Terminal after toggling (permission is per-app instance)"
   say_block "  2) System Settings -> Privacy & Security -> Accessibility"
-  say_block "     - enable: Terminal (or iTerm)"
-  say_block "     - quit and reopen Terminal"
+  say_block "     - enable: Terminal (or iTerm) AND Peekaboo"
+  say_block "     - quit & reopen Terminal after toggling"
   say_block ""
   say_block "Once enabled, this script can:"
-  say_block "- capture the frontmost OpenClaw dashboard/control UI screenshot"
-  say_block "- generate an annotated UI map (stable element IDs)"
-  say_block "- list apps/windows/menubar extras for debugging"
+  say_block "- capture the frontmost OpenClaw dashboard/control UI screenshot (PNG)"
+  say_block "- generate an annotated UI map (element IDs like B1/T2) for stable targeting"
+  say_block "- print permission status checks (what's missing)"
   exit 2
 fi
 
