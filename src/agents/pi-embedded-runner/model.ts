@@ -29,6 +29,42 @@ const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 
+function resolveGoogleAntigravityForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "google-antigravity" && normalizedProvider !== "google-gemini-cli") {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  const lower = trimmedModelId.toLowerCase();
+
+  // Only handle known-missing IDs that we want to support as forward-compat.
+  const isTarget = lower === "gemini-3-pro-image";
+  if (!isTarget) {
+    return undefined;
+  }
+
+  const templateIds = ["gemini-3-pro-high", "gemini-3-pro-preview", "gemini-3-pro"];
+
+  for (const templateId of templateIds) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return undefined;
+}
+
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
@@ -198,6 +234,14 @@ export function resolveModel(
     );
     if (anthropicForwardCompat) {
       return { model: anthropicForwardCompat, authStorage, modelRegistry };
+    }
+    const googleForwardCompat = resolveGoogleAntigravityForwardCompatModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
+    if (googleForwardCompat) {
+      return { model: googleForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
