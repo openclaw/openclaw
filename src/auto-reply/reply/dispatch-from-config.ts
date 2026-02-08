@@ -5,6 +5,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -195,6 +196,37 @@ export async function dispatchReplyFromConfig(params: {
       .catch((err) => {
         logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
       });
+  }
+
+  // Trigger internal message:received hook for extensions (e.g., memory systems)
+  {
+    const content =
+      typeof ctx.BodyForCommands === "string"
+        ? ctx.BodyForCommands
+        : typeof ctx.RawBody === "string"
+          ? ctx.RawBody
+          : typeof ctx.Body === "string"
+            ? ctx.Body
+            : "";
+    const hookEvent = createInternalHookEvent("message", "received", ctx.SessionKey ?? "", {
+      text: content,
+      channel: (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase(),
+      chatType: ctx.ChatType,
+      from: ctx.From,
+      to: ctx.To,
+      senderId: ctx.SenderId,
+      senderName: ctx.SenderName,
+      senderUsername: ctx.SenderUsername,
+      messageId: ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast,
+      threadId: ctx.MessageThreadId,
+      timestamp: ctx.Timestamp,
+      accountId: ctx.AccountId,
+      mediaUrls: ctx.MediaUrls,
+      mediaTypes: ctx.MediaTypes,
+    });
+    void triggerInternalHook(hookEvent).catch((err) => {
+      logVerbose(`dispatch-from-config: message:received hook failed: ${String(err)}`);
+    });
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
