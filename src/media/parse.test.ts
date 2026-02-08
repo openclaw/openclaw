@@ -32,6 +32,24 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("MEDIA:../../etc/passwd");
   });
 
+  it("accepts trusted internal TTS paths", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/tts-abc123/voice-1234.opus");
+    expect(result.mediaUrls).toEqual(["/tmp/tts-abc123/voice-1234.opus"]);
+    expect(result.text).toBe("");
+  });
+
+  it("accepts trusted internal openclaw paths", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/openclaw-xyz789/file.png");
+    expect(result.mediaUrls).toEqual(["/tmp/openclaw-xyz789/file.png"]);
+    expect(result.text).toBe("");
+  });
+
+  it("still rejects other absolute paths", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/evil/file.png");
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe("MEDIA:/tmp/evil/file.png");
+  });
+
   it("captures safe relative media paths", () => {
     const result = splitMediaFromOutput("MEDIA:./screenshots/image.png");
     expect(result.mediaUrls).toEqual(["./screenshots/image.png"]);

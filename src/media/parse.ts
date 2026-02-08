@@ -28,6 +28,11 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return true;
   }
 
+  // Trusted internal tool outputs (TTS, etc.) — not user-controlled input
+  if (candidate.startsWith("/tmp/tts-") || candidate.startsWith("/tmp/openclaw-")) {
+    return true;
+  }
+
   // Local paths: only allow safe relative paths starting with ./ that do not traverse upwards.
   return candidate.startsWith("./") && !candidate.includes("..");
 }
