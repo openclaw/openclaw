@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { BrowserFormField } from "../client-actions-core.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -15,6 +16,44 @@ import {
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+
+/**
+ * Validates file paths for the upload/file-chooser endpoint.
+ *
+ * Rejects absolute paths and directory traversal sequences to prevent
+ * arbitrary file reads through the browser upload API.  Callers that need
+ * sandbox-root–aware validation should resolve the root server-side (not
+ * from the request body) and call {@link validateUploadPathsWithRoot}.
+ */
+export function validateUploadPaths(paths: string[]): void {
+  for (const p of paths) {
+    if (path.isAbsolute(p)) {
+      throw new Error(`Absolute upload paths are not allowed: ${p}`);
+    }
+    const normalized = path.normalize(p);
+    if (normalized.startsWith("..")) {
+      throw new Error(`Upload path contains directory traversal: ${p}`);
+    }
+  }
+}
+
+/**
+ * Validates that every path resolves within the given sandbox root.
+ *
+ * The root **must** come from a trusted server-side source (config, session
+ * state) — never from the request body.  Uses `path.relative()` so that
+ * normalised-prefix attacks are caught.
+ */
+export function validateUploadPathsWithRoot(paths: string[], sandboxRoot: string): void {
+  const root = path.resolve(sandboxRoot);
+  for (const p of paths) {
+    const resolved = path.resolve(root, p);
+    const relative = path.relative(root, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Upload path escapes sandbox: ${p}`);
+    }
+  }
+}
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -348,6 +387,7 @@ export function registerBrowserAgentActRoutes(
       return jsonError(res, 400, "paths are required");
     }
     try {
+      validateUploadPaths(paths);
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "file chooser hook");
       if (!pw) {
