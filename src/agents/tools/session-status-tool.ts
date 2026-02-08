@@ -4,6 +4,12 @@ import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import {
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  normalizeReasoningLevel,
+  normalizeElevatedLevel,
+} from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -439,6 +445,10 @@ export function createSessionStatusTool(opts?: {
         sessionEntry: resolved.entry,
         sessionKey: resolved.key,
         groupActivation,
+        resolvedThink: normalizeThinkLevel(resolved.entry.thinkingLevel),
+        resolvedVerbose: normalizeVerboseLevel(resolved.entry.verboseLevel),
+        resolvedReasoning: normalizeReasoningLevel(resolved.entry.reasoningLevel),
+        resolvedElevated: normalizeElevatedLevel(resolved.entry.elevatedLevel),
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
