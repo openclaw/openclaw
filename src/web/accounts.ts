@@ -20,6 +20,8 @@ export type ResolvedWhatsAppAccount = {
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
+  dmHistoryLimit?: number;
+  groupHistoryLimit?: number;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
@@ -159,6 +161,8 @@ export function resolveWhatsAppAccount(params: {
     allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
     groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
     groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
+    dmHistoryLimit: accountCfg?.dmHistoryLimit ?? rootCfg?.dmHistoryLimit,
+    groupHistoryLimit: accountCfg?.groupHistoryLimit ?? rootCfg?.groupHistoryLimit,
     textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
     chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
     mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,

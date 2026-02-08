@@ -78,6 +78,8 @@ export async function monitorWebChannel(
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
+        dmHistoryLimit: account.dmHistoryLimit,
+        groupHistoryLimit: account.groupHistoryLimit,
         textChunkLimit: account.textChunkLimit,
         chunkMode: account.chunkMode,
         mediaMaxMb: account.mediaMaxMb,

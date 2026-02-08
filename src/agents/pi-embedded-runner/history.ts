@@ -10,7 +10,7 @@ function stripThreadSuffix(value: string): string {
 
 /**
  * Limits conversation history to the last N user turns (and their associated
- * assistant responses). This reduces token usage for long-running DM sessions.
+ * assistant responses). This reduces token usage for long-running sessions.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -36,8 +36,8 @@ export function limitHistoryTurns(
 }
 
 /**
- * Extract provider + user ID from a session key and look up dmHistoryLimit.
- * Supports per-DM overrides and provider defaults.
+ * Extract provider + chat type from a session key and look up persistent session history limit.
+ * Supports per-DM overrides and provider defaults for both DMs and groups.
  */
 export function getDmHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
@@ -56,9 +56,11 @@ export function getDmHistoryLimitFromSessionKey(
   }
 
   const kind = providerParts[1]?.toLowerCase();
-  const userIdRaw = providerParts.slice(2).join(":");
-  const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") {
+  const chatIdRaw = providerParts.slice(2).join(":");
+  const chatId = stripThreadSuffix(chatIdRaw);
+
+  // Only handle DMs and groups - other session types don't use this limit
+  if (kind !== "dm" && kind !== "group") {
     return undefined;
   }
 
@@ -66,23 +68,46 @@ export function getDmHistoryLimitFromSessionKey(
     providerConfig:
       | {
           dmHistoryLimit?: number;
+          groupHistoryLimit?: number;
           dms?: Record<string, { historyLimit?: number }>;
+          groups?: Record<string, { historyLimit?: number }>;
         }
       | undefined,
   ): number | undefined => {
     if (!providerConfig) {
       return undefined;
     }
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
+
+    // Handle DMs
+    if (kind === "dm") {
+      if (chatId && providerConfig.dms?.[chatId]?.historyLimit !== undefined) {
+        return providerConfig.dms[chatId].historyLimit;
+      }
+      return providerConfig.dmHistoryLimit;
     }
-    return providerConfig.dmHistoryLimit;
+
+    // Handle groups
+    if (kind === "group") {
+      if (chatId && providerConfig.groups?.[chatId]?.historyLimit !== undefined) {
+        return providerConfig.groups[chatId].historyLimit;
+      }
+      return providerConfig.groupHistoryLimit;
+    }
+
+    return undefined;
   };
 
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
     providerId: string,
-  ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
+  ):
+    | {
+        dmHistoryLimit?: number;
+        groupHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+        groups?: Record<string, { historyLimit?: number }>;
+      }
+    | undefined => {
     const channels = cfg?.channels;
     if (!channels || typeof channels !== "object") {
       return undefined;
@@ -91,7 +116,12 @@ export function getDmHistoryLimitFromSessionKey(
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return undefined;
     }
-    return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
+    return entry as {
+      dmHistoryLimit?: number;
+      groupHistoryLimit?: number;
+      dms?: Record<string, { historyLimit?: number }>;
+      groups?: Record<string, { historyLimit?: number }>;
+    };
   };
 
   return getLimit(resolveProviderConfig(config, provider));

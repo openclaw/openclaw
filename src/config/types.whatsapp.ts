@@ -55,10 +55,12 @@ export type WhatsAppConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
-  /** Max group messages to keep as history context (0 disables). */
+  /** Max group messages to keep as in-memory history context (0 disables). */
   historyLimit?: number;
-  /** Max DM turns to keep as history context. */
+  /** Max DM turns to keep in persistent session history. */
   dmHistoryLimit?: number;
+  /** Max group turns to keep in persistent session history. */
+  groupHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
@@ -77,6 +79,7 @@ export type WhatsAppConfig = {
     string,
     {
       requireMention?: boolean;
+      historyLimit?: number;
       tools?: GroupToolPolicyConfig;
       toolsBySender?: GroupToolPolicyBySenderConfig;
     }
@@ -128,10 +131,12 @@ export type WhatsAppAccountConfig = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
-  /** Max group messages to keep as history context (0 disables). */
+  /** Max group messages to keep as in-memory history context (0 disables). */
   historyLimit?: number;
-  /** Max DM turns to keep as history context. */
+  /** Max DM turns to keep in persistent session history. */
   dmHistoryLimit?: number;
+  /** Max group turns to keep in persistent session history. */
+  groupHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
@@ -145,6 +150,7 @@ export type WhatsAppAccountConfig = {
     string,
     {
       requireMention?: boolean;
+      historyLimit?: number;
       tools?: GroupToolPolicyConfig;
       toolsBySender?: GroupToolPolicyBySenderConfig;
     }
