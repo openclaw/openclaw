@@ -1888,6 +1888,10 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
 
 `agents.defaults.compaction.reserveTokensFloor` 为 Pi 压缩强制一个最小 `reserveTokens` 值（默认：`20000`）。设为 `0` 禁用此底线。
 
+`agents.defaults.compaction.model` 覆盖压缩摘要使用的模型（格式：`"provider/model"`）。默认使用当前会话的模型。适用于希望使用更便宜或更快的模型进行摘要、同时保持高端模型用于对话的场景。
+
+`agents.defaults.compaction.customInstructions` 向内置压缩摘要提示词追加额外的关注指令。该值以 `Additional focus: <你的文本>` 的形式附加在默认提示词之后——不会替换内置的摘要指令。
+
 `agents.defaults.compaction.memoryFlush` 在自动压缩前运行一个**静默**智能体轮次，指示模型将持久记忆存储到磁盘（例如 `memory/YYYY-MM-DD.md`）。当会话 token 估计值超过压缩限制以下的软阈值时触发。
 
 旧版默认值：

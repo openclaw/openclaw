@@ -25,7 +25,8 @@ import {
   resolveAuthProfileOrder,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { loadModelCatalog } from "../model-catalog.js";
+import { normalizeProviderId, resolveAllowedModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -507,6 +508,27 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
+              const compactionCfg = params.config?.agents?.defaults?.compaction;
+              let compactionProvider = provider;
+              let compactionModelId = modelId;
+              if (compactionCfg?.model && params.config) {
+                const catalog = await loadModelCatalog({ config: params.config });
+                const resolved = resolveAllowedModelRef({
+                  cfg: params.config,
+                  catalog,
+                  raw: compactionCfg.model,
+                  defaultProvider: provider,
+                  defaultModel: modelId,
+                });
+                if ("error" in resolved) {
+                  log.warn(
+                    `compaction model override invalid: ${resolved.error}; falling back to session model`,
+                  );
+                } else {
+                  compactionProvider = resolved.ref.provider;
+                  compactionModelId = resolved.ref.model;
+                }
+              }
               const compactResult = await compactEmbeddedPiSessionDirect({
                 sessionId: params.sessionId,
                 sessionKey: params.sessionKey,
@@ -520,13 +542,14 @@ export async function runEmbeddedPiAgent(
                 config: params.config,
                 skillsSnapshot: params.skillsSnapshot,
                 senderIsOwner: params.senderIsOwner,
-                provider,
-                model: modelId,
+                provider: compactionProvider,
+                model: compactionModelId,
                 thinkLevel,
                 reasoningLevel: params.reasoningLevel,
                 bashElevated: params.bashElevated,
                 extraSystemPrompt: params.extraSystemPrompt,
                 ownerNumbers: params.ownerNumbers,
+                customInstructions: compactionCfg?.customInstructions,
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;

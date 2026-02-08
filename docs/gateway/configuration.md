@@ -1935,6 +1935,16 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 `agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
 value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.
 
+`agents.defaults.compaction.model` overrides the model used for compaction
+summaries (format: `"provider/model"`). Defaults to the session's current model.
+Useful when you want a cheaper or faster model for summarization while keeping a
+premium model for conversation.
+
+`agents.defaults.compaction.customInstructions` appends additional focus
+instructions to the built-in compaction summary prompt. The value is added as
+`Additional focus: <your text>` after the default prompt — it does not replace
+the built-in summarization instructions.
+
 `agents.defaults.compaction.memoryFlush` runs a **silent** agentic turn before
 auto-compaction, instructing the model to store durable memories on disk (e.g.
 `memory/YYYY-MM-DD.md`). It triggers when the session token estimate crosses a

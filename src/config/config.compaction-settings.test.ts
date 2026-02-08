@@ -46,6 +46,40 @@ describe("config compaction settings", () => {
     });
   });
 
+  it("preserves customInstructions and model config values", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  customInstructions: "Always include tool call summaries.",
+                  model: "openai/gpt-4o-mini",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.compaction?.customInstructions).toBe(
+        "Always include tool call summaries.",
+      );
+      expect(cfg.agents?.defaults?.compaction?.model).toBe("openai/gpt-4o-mini");
+    });
+  });
+
   it("defaults compaction mode to safeguard", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
