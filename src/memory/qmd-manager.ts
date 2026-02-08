@@ -84,6 +84,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
+  private queuedForcedUpdate: Promise<void> | null = null;
   private closed = false;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
@@ -393,7 +394,26 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runUpdate(reason: string, force?: boolean): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     if (this.pendingUpdate) {
+      if (force) {
+        if (!this.queuedForcedUpdate) {
+          this.queuedForcedUpdate = this.pendingUpdate
+            .catch(() => undefined)
+            .then(async () => {
+              if (this.closed) {
+                return;
+              }
+              await this.runUpdate(`${reason}:queued`, true);
+            })
+            .finally(() => {
+              this.queuedForcedUpdate = null;
+            });
+        }
+        return this.queuedForcedUpdate;
+      }
       return this.pendingUpdate;
     }
     if (this.shouldSkipUpdate(force)) {
@@ -474,6 +494,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    // Keep QMD recall responsive when the updater holds a write lock.
+    this.db.exec("PRAGMA busy_timeout = 1");
     return this.db;
   }
 
@@ -547,9 +569,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    const row = db
-      .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
-      .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    let row: { collection: string; path: string } | undefined;
+    try {
+      row = db
+        .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
+        .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    } catch (err) {
+      if (this.isSqliteBusyError(err)) {
+        log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
+        return null;
+      }
+      throw err;
+    }
     if (!row) {
       return null;
     }
@@ -823,6 +854,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return Date.now() - this.lastUpdateAt < debounceMs;
+  }
+
+  private isSqliteBusyError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
   private async waitForPendingUpdateBeforeSearch(): Promise<void> {

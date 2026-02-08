@@ -253,6 +253,61 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("queues a forced sync behind an in-flight update", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            updateTimeoutMs: 1_000,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    let releaseFirstUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        if (updateCalls === 1) {
+          const first = createMockChild({ autoClose: false });
+          releaseFirstUpdate = () => first.closeWith(0);
+          return first;
+        }
+        return createMockChild();
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const inFlight = manager.sync({ reason: "interval" });
+    const forced = manager.sync({ reason: "manual", force: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(updateCalls).toBe(1);
+    if (!releaseFirstUpdate) {
+      throw new Error("first update release missing");
+    }
+    releaseFirstUpdate();
+
+    await Promise.all([inFlight, forced]);
+    expect(updateCalls).toBe(2);
+    await manager.close();
+  });
+
   it("logs and continues when qmd embed times out", async () => {
     cfg = {
       ...cfg,
@@ -340,6 +395,29 @@ describe("QmdMemoryManager", () => {
       "path required",
     );
 
+    await manager.close();
+  });
+
+  it("skips doc lookup when sqlite index is busy", async () => {
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const inner = manager as unknown as {
+      db: { prepare: () => { get: () => never }; close: () => void } | null;
+      resolveDocLocation: (docid?: string) => Promise<unknown>;
+    };
+    inner.db = {
+      prepare: () => ({
+        get: () => {
+          throw new Error("SQLITE_BUSY: database is locked");
+        },
+      }),
+      close: () => {},
+    };
+    await expect(inner.resolveDocLocation("abc123")).resolves.toBeNull();
     await manager.close();
   });
 });
