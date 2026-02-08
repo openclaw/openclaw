@@ -262,7 +262,17 @@ async function runImagePrompt(params: {
         agentDir: params.agentDir,
       });
       const apiKey = requireApiKey(apiKeyInfo, model.provider);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
+      let requestApiKey = apiKey;
+      if (model.provider === "github-copilot") {
+        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+        const copilotToken = await resolveCopilotApiToken({
+          githubToken: apiKey,
+        });
+        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        requestApiKey = copilotToken.token;
+      } else {
+        authStorage.setRuntimeApiKey(model.provider, apiKey);
+      }
       const imageDataUrl = `data:${params.mimeType};base64,${params.base64}`;
 
       if (model.provider === "minimax") {
@@ -277,7 +287,7 @@ async function runImagePrompt(params: {
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
-        apiKey,
+        apiKey: requestApiKey,
         maxTokens: 512,
       });
       const text = coerceImageAssistantText({

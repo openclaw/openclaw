@@ -28,7 +28,17 @@ export async function describeImageWithModel(
     preferredProfile: params.preferredProfile,
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  let requestApiKey = apiKey;
+  if (model.provider === "github-copilot") {
+    const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+    const copilotToken = await resolveCopilotApiToken({
+      githubToken: apiKey,
+    });
+    authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+    requestApiKey = copilotToken.token;
+  } else {
+    authStorage.setRuntimeApiKey(model.provider, apiKey);
+  }
 
   const base64 = params.buffer.toString("base64");
   if (model.provider === "minimax") {
@@ -54,7 +64,7 @@ export async function describeImageWithModel(
     ],
   };
   const message = await complete(model, context, {
-    apiKey,
+    apiKey: requestApiKey,
     maxTokens: params.maxTokens ?? 512,
   });
   const text = coerceImageAssistantText({
