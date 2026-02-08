@@ -80,6 +80,7 @@ describe("docker-setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=");
+    expect(envFile).toContain("CLI_ONLY=");
   });
 
   it("plumbs OPENCLAW_DOCKER_APT_PACKAGES into .env and docker build args", async () => {
@@ -131,6 +132,55 @@ describe("docker-setup.sh", () => {
 
     const log = await readFile(logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+  });
+
+  it("adds cli-only compose override when CLI_ONLY=true", async () => {
+    const assocCheck = spawnSync("bash", ["-c", "declare -A _t=()"], {
+      encoding: "utf8",
+    });
+    if (assocCheck.status !== 0) {
+      return;
+    }
+
+    const rootDir = await mkdtemp(join(tmpdir(), "openclaw-docker-setup-"));
+    const scriptPath = join(rootDir, "docker-setup.sh");
+    const dockerfilePath = join(rootDir, "Dockerfile");
+    const composePath = join(rootDir, "docker-compose.yml");
+    const cliOnlyComposePath = join(rootDir, "docker-compose.cli-only.yml");
+    const binDir = join(rootDir, "bin");
+    const logPath = join(rootDir, "docker-stub.log");
+
+    const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
+    await writeFile(scriptPath, script, { mode: 0o755 });
+    await writeFile(dockerfilePath, "FROM scratch\n");
+    await writeFile(
+      composePath,
+      "services:\n  openclaw-gateway:\n    image: noop\n  openclaw-cli:\n    image: noop\n",
+    );
+    await writeFile(cliOnlyComposePath, "services:\n  openclaw-gateway:\n    ports: !reset []\n");
+    await writeDockerStub(binDir, logPath);
+
+    const env = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      DOCKER_STUB_LOG: logPath,
+      OPENCLAW_GATEWAY_TOKEN: "test-token",
+      OPENCLAW_CONFIG_DIR: join(rootDir, "config"),
+      OPENCLAW_WORKSPACE_DIR: join(rootDir, "openclaw"),
+      CLI_ONLY: "true",
+    };
+
+    const result = spawnSync("bash", [scriptPath], {
+      cwd: rootDir,
+      env,
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+
+    const log = await readFile(logPath, "utf8");
+    expect(log).toContain("compose -f");
+    expect(log).toContain("docker-compose.cli-only.yml");
   });
 
   it("keeps docker-compose gateway command in sync", async () => {

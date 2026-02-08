@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
+CLI_ONLY_COMPOSE_FILE="$ROOT_DIR/docker-compose.cli-only.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
+CLI_ONLY_RAW="${CLI_ONLY:-}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -31,7 +33,7 @@ export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
-export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
@@ -52,6 +54,13 @@ export OPENCLAW_GATEWAY_TOKEN
 
 COMPOSE_FILES=("$COMPOSE_FILE")
 COMPOSE_ARGS=()
+
+is_true() {
+  case "$1" in
+  [Tt][Rr][Uu][Ee] | 1 | [Yy][Ee][Ss] | [Yy] | [Oo][Nn]) return 0 ;;
+  *) return 1 ;;
+  esac
+}
 
 write_extra_compose() {
   local home_volume="$1"
@@ -114,6 +123,9 @@ if [[ -n "$HOME_VOLUME_NAME" || ${#VALID_MOUNTS[@]} -gt 0 ]]; then
   write_extra_compose "$HOME_VOLUME_NAME" "${VALID_MOUNTS[@]}"
   COMPOSE_FILES+=("$EXTRA_COMPOSE_FILE")
 fi
+if is_true "$CLI_ONLY_RAW"; then
+  COMPOSE_FILES+=("$CLI_ONLY_COMPOSE_FILE")
+fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_ARGS+=("-f" "$compose_file")
 done
@@ -168,6 +180,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
+  CLI_ONLY \
   OPENCLAW_DOCKER_APT_PACKAGES
 
 echo "==> Building Docker image: $IMAGE_NAME"
@@ -180,7 +193,7 @@ docker build \
 echo ""
 echo "==> Onboarding (interactive)"
 echo "When prompted:"
-echo "  - Gateway bind: lan"
+echo "  - Gateway bind: loopback"
 echo "  - Gateway auth: token"
 echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"

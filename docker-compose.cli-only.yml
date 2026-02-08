@@ -1,0 +1,3 @@
+services:
+  openclaw-gateway:
+    ports: !reset []
