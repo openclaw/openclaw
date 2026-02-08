@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./signal.js";
 
 describe("signal target normalization", () => {
+  it("preserves base64 case in group IDs", () => {
+    expect(normalizeSignalMessagingTarget("group:mJ6qA3MrX09n1PzxIhv1u3KWKd/eDiNoWY0Hy1z2jas=")).toBe(
+      "group:mJ6qA3MrX09n1PzxIhv1u3KWKd/eDiNoWY0Hy1z2jas=",
+    );
+  });
+
+  it("preserves base64 case with signal: prefix", () => {
+    expect(normalizeSignalMessagingTarget("signal:group:mJ6qA3MrX09n1PzxIhv1u3KWKd/eDiNoWY0Hy1z2jas=")).toBe(
+      "group:mJ6qA3MrX09n1PzxIhv1u3KWKd/eDiNoWY0Hy1z2jas=",
+    );
+  });
+
   it("normalizes uuid targets by stripping uuid:", () => {
     expect(normalizeSignalMessagingTarget("uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
       "123e4567-e89b-12d3-a456-426614174000",
