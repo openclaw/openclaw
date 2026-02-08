@@ -98,6 +98,7 @@ function buildSlackManifest(botName: string) {
           "channel_rename",
           "pin_added",
           "pin_removed",
+          "app_home_opened",
         ],
       },
     },
