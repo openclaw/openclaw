@@ -220,3 +220,44 @@ describe("startSmartAck controller", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("tool-request guardrail", () => {
+  it("overrides FULL to ACK when message asks to read a file", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Found ~/git/misc/nana-peter/..."));
+    const result = await generateSmartAck({
+      message: "pick a random file on my device and read it",
+      cfg: baseCfg,
+    });
+    expect(result).toEqual({
+      text: "Found ~/git/misc/nana-peter/...",
+      isFull: false,
+    });
+  });
+
+  it("overrides FULL to ACK when message mentions 'my device'", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Sure, your device has..."));
+    const result = await generateSmartAck({
+      message: "what files are on my device",
+      cfg: baseCfg,
+    });
+    expect(result).toEqual({ text: "Sure, your device has...", isFull: false });
+  });
+
+  it("overrides FULL to ACK when message asks to run a command", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: The result is 42"));
+    const result = await generateSmartAck({
+      message: "run command ls in my home directory",
+      cfg: baseCfg,
+    });
+    expect(result).toEqual({ text: "The result is 42", isFull: false });
+  });
+
+  it("does not override FULL for casual conversation", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Hello there!"));
+    const result = await generateSmartAck({
+      message: "hey, how are you?",
+      cfg: baseCfg,
+    });
+    expect(result).toEqual({ text: "Hello there!", isFull: true });
+  });
+});

@@ -123,6 +123,39 @@ function buildTriagePrompt(params: {
   return parts.join(" ");
 }
 
+// Patterns that strongly suggest the user wants a tool-backed action, not a
+// pure conversational reply.  Checked as a hard guardrail after model
+// classification so that even if the model says "FULL" we force "ACK".
+const TOOL_REQUEST_PATTERNS: RegExp[] = [
+  /\bread\b.*\bfile/i,
+  /\bpick\b.*\bfile/i,
+  /\bopen\b.*\bfile/i,
+  /\bfind\b.*\bfile/i,
+  /\blist\b.*\bfiles/i,
+  /\bwrite\b.*\bfile/i,
+  /\bcreate\b.*\bfile/i,
+  /\bdelete\b.*\bfile/i,
+  /\brun\b.*\bcommand/i,
+  /\bexecute\b/i,
+  /\bsearch\b.*\b(web|internet|google|online)/i,
+  /\bbrowse\b/i,
+  /\bfetch\b.*\burl/i,
+  /\bsend\b.*\bmessage/i,
+  /\bgenerate\b.*\b(image|audio|speech)/i,
+  /\bon\s+(my|the|this)\s+(device|machine|computer|server|system)/i,
+  /\b(my|the|this)\s+(device|machine|computer|server|system)\b/i,
+  /\bshell\b/i,
+  /\bterminal\b/i,
+  /\bdownload\b/i,
+  /\binstall\b/i,
+  /\bdeploy\b/i,
+  /\bssh\b/i,
+];
+
+function looksLikeToolRequest(message: string): boolean {
+  return TOOL_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 /**
  * Generate a triage response using Claude CLI with Sonnet.
  * Uses the Max subscription instead of per-token API charges.
@@ -180,17 +213,27 @@ export async function generateSmartAck(params: {
 
     // Parse FULL/ACK prefix to determine response type.
     // Also handle "SIMPLE:" as a fallback for FULL (model sometimes echoes category labels).
-    const isFull =
+    const hasFullPrefix =
       ack.startsWith("FULL: ") ||
       ack.startsWith("FULL:") ||
       ack.startsWith("SIMPLE: ") ||
       ack.startsWith("SIMPLE:");
     const isAck = ack.startsWith("ACK: ") || ack.startsWith("ACK:");
-    const cleanText = isFull
+
+    // Strip prefix before guardrail check so the text is always clean.
+    const cleanText = hasFullPrefix
       ? ack.replace(/^(?:FULL|SIMPLE):\s*/, "")
       : isAck
         ? ack.replace(/^ACK:\s*/, "")
         : ack;
+
+    // Hard guardrail: override FULL→ACK when the message implies tool usage.
+    // The model sometimes ignores prompt instructions and fabricates tool results.
+    let isFull = hasFullPrefix;
+    if (isFull && looksLikeToolRequest(message)) {
+      log.info(`smart ack: overriding FULL→ACK for tool-like request`);
+      isFull = false;
+    }
 
     if (!cleanText.trim()) {
       logVerbose("smart-ack: empty after prefix strip");
