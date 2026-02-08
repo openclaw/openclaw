@@ -464,7 +464,13 @@ const ERROR_PATTERNS = {
     "usage limit",
   ],
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
-  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
+  timeout: [
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "context deadline exceeded",
+    "fetch failed",
+  ],
   billing: [
     /\b402\b/,
     "payment required",

@@ -63,6 +63,32 @@ openclaw models set github-copilot/gpt-4o
 }
 ```
 
+## Available models
+
+The following models are available through GitHub Copilot:
+
+### OpenAI models
+
+- `gpt-4o`
+- `gpt-4.1`
+- `gpt-4.1-mini`
+- `gpt-4.1-nano`
+- `o1`
+- `o1-mini`
+- `o3-mini`
+
+### Claude models (Pro+ subscription required)
+
+- `claude-opus-4.5`
+- `claude-sonnet-4.5`
+- `claude-sonnet-4`
+
+To use Claude Opus 4.5:
+
+```bash
+openclaw models set github-copilot/claude-opus-4.5
+```
+
 ## Notes
 
 - Requires an interactive TTY; run it directly in a terminal.
