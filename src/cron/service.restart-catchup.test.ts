@@ -162,4 +162,72 @@ describe("CronService restart catch-up", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("recomputes stale future nextRunAtMs on restart after extended downtime", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    // Simulate extended downtime: job was last run Feb 6 20:00 UTC,
+    // nextRunAtMs was persisted as Feb 8 14:00 UTC (incorrectly far future).
+    // Gateway restarts at Feb 7 10:00 UTC.
+    // Cron expression: 0 8,11,14,17,20 * * * (runs at 08:00,11:00,14:00,17:00,20:00 daily)
+    vi.setSystemTime(new Date("2025-12-14T10:00:00.000Z")); // restart time
+
+    const staleNextRun = Date.parse("2025-12-16T14:00:00.000Z"); // incorrectly far future
+    const lastRunAt = Date.parse("2025-12-13T20:00:00.000Z");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "stale-future-job",
+              name: "trend scout",
+              enabled: true,
+              createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2025-12-13T20:00:00.000Z"),
+              schedule: { kind: "cron", expr: "0 8,11,14,17,20 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "trend search" },
+              state: {
+                nextRunAtMs: staleNextRun,
+                lastRunAtMs: lastRunAt,
+                lastStatus: "ok",
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((job) => job.id === "stale-future-job");
+
+    // nextRunAtMs should be recomputed to the next occurrence from now
+    // (Dec 14 11:00 UTC), not the stale Dec 16 14:00 UTC value
+    expect(updated?.state.nextRunAtMs).toBeLessThan(staleNextRun);
+    expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-14T11:00:00.000Z"));
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

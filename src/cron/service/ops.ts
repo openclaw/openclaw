@@ -31,7 +31,7 @@ export async function start(state: CronServiceState) {
       }
     }
     await runMissedJobs(state);
-    recomputeNextRuns(state);
+    recomputeNextRuns(state, { force: true });
     await persist(state);
     armTimer(state);
     state.deps.log.info(

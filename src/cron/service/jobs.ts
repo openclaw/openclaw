@@ -87,7 +87,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return computeNextRunAtMs(job.schedule, nowMs);
 }
 
-export function recomputeNextRuns(state: CronServiceState): boolean {
+export function recomputeNextRuns(state: CronServiceState, opts?: { force?: boolean }): boolean {
   if (!state.store) {
     return false;
   }
@@ -121,9 +121,11 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Only recompute if nextRunAtMs is missing or already past-due.
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
+    // When force=true (e.g. on startup), always recompute to fix stale
+    // values that may have survived a crash or extended downtime (#11835).
     const nextRun = job.state.nextRunAtMs;
     const isDueOrMissing = nextRun === undefined || now >= nextRun;
-    if (isDueOrMissing) {
+    if (isDueOrMissing || opts?.force) {
       const newNext = computeJobNextRunAtMs(job, now);
       if (job.state.nextRunAtMs !== newNext) {
         job.state.nextRunAtMs = newNext;
