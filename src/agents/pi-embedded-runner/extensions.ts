@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -67,8 +68,38 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
+function resolveCompactionMode(cfg?: OpenClawConfig, sessionKey?: string): "default" | "safeguard" {
+  // For subagent sessions, check subagents.compaction config
+  if (isSubagentSessionKey(sessionKey)) {
+    const subagentCompaction = cfg?.agents?.defaults?.subagents?.compaction;
+    if (typeof subagentCompaction === "boolean") {
+      // true enables safeguard mode, false uses default
+      return subagentCompaction ? "safeguard" : "default";
+    }
+    if (subagentCompaction && typeof subagentCompaction === "object") {
+      return subagentCompaction.mode === "safeguard" ? "safeguard" : "default";
+    }
+  }
+
+  // Fall back to main compaction config
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+}
+
+function resolveCompactionConfig(cfg?: OpenClawConfig, sessionKey?: string): unknown {
+  // For subagent sessions, check subagents.compaction config
+  if (isSubagentSessionKey(sessionKey)) {
+    const subagentCompaction = cfg?.agents?.defaults?.subagents?.compaction;
+    if (typeof subagentCompaction === "boolean") {
+      // When true, use default safeguard config
+      return subagentCompaction ? cfg?.agents?.defaults?.compaction : undefined;
+    }
+    if (subagentCompaction && typeof subagentCompaction === "object") {
+      return subagentCompaction;
+    }
+  }
+
+  // Fall back to main compaction config
+  return cfg?.agents?.defaults?.compaction;
 }
 
 export function buildEmbeddedExtensionPaths(params: {
@@ -77,10 +108,13 @@ export function buildEmbeddedExtensionPaths(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
 }): string[] {
   const paths: string[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  if (resolveCompactionMode(params.cfg, params.sessionKey) === "safeguard") {
+    const compactionCfg = resolveCompactionConfig(params.cfg, params.sessionKey) as
+      | { maxHistoryShare?: number }
+      | undefined;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,
