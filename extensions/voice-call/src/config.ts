@@ -381,14 +381,30 @@ export const VoiceCallConfigSchema = z
     /** Store path for call logs */
     store: z.string().optional(),
 
+    /** Agent ID for voice responses (default: "main"). Use a different agent for custom personality/skills. */
+    responseAgent: z.string().optional(),
+
     /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-    responseModel: z.string().default("openai/gpt-4o-mini"),
+    responseModel: z.string().optional(),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 
     /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
+
+    /** Silence filler — plays ambient SFX while agent is working */
+    silenceFiller: z
+      .object({
+        /** Enable/disable silence filler (default: true when streaming enabled) */
+        enabled: z.boolean().optional(),
+        /** Milliseconds of silence before filler starts (default: 3500) */
+        thresholdMs: z.number().int().positive().optional(),
+        /** SFX set: "typing" (keyboard sounds) or "processing" (digital hum) */
+        sfxSet: z.enum(["typing", "processing"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

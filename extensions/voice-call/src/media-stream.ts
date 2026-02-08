@@ -89,7 +89,9 @@ export class MediaStreamHandler {
    */
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
-    const streamToken = this.getStreamToken(_request);
+    // Try URL query param first, but Twilio strips query params from <Stream> URLs,
+    // so the token will typically come from start.customParameters instead.
+    const urlToken = this.getStreamToken(_request);
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -100,9 +102,13 @@ export class MediaStreamHandler {
             console.log("[MediaStream] Twilio connected");
             break;
 
-          case "start":
+          case "start": {
+            // Prefer token from customParameters (Twilio <Parameter>), fall back to URL query
+            const customToken = message.start?.customParameters?.token;
+            const streamToken = customToken || urlToken;
             session = await this.handleStart(ws, message, streamToken);
             break;
+          }
 
           case "media":
             if (session && message.media?.payload) {
@@ -299,7 +305,13 @@ export class MediaStreamHandler {
    */
   clearTtsQueue(streamSid: string): void {
     const queue = this.getTtsQueue(streamSid);
-    queue.length = 0;
+    // Resolve (not reject) pending entries so their callers don't hang forever
+    const pending = queue.splice(0, queue.length);
+    for (const entry of pending) {
+      entry.controller.abort();
+      entry.resolve();
+    }
+    // Abort the currently active TTS operation
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
   }
@@ -393,6 +405,7 @@ interface TwilioMediaMessage {
     accountSid: string;
     callSid: string;
     tracks: string[];
+    customParameters?: Record<string, string>;
     mediaFormat: {
       encoding: string;
       sampleRate: number;
