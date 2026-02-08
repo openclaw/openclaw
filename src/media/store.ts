@@ -86,77 +86,129 @@ function looksLikeUrl(src: string) {
   return /^https?:\/\//i.test(src);
 }
 
+const DOWNLOAD_TIMEOUT_MS = 60_000; // 60 second timeout for entire download (including DNS + redirects)
+
 /**
  * Download media to disk while capturing the first few KB for mime sniffing.
+ * Uses a single shared AbortSignal to enforce total timeout across DNS resolution,
+ * HTTP request, and any redirects.
  */
 async function downloadToFile(
   url: string,
   dest: string,
   headers?: Record<string, string>,
   maxRedirects = 5,
+  signal?: AbortSignal,
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
+  // Create timeout signal only at top level; redirects reuse the same signal
+  const timeoutSignal = signal ?? AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+
   return await new Promise((resolve, reject) => {
+    // Check if already aborted
+    if (timeoutSignal.aborted) {
+      reject(new Error("Download timeout"));
+      return;
+    }
+
+    // Listen for abort during async operations
+    const onAbort = () => reject(new Error("Download timeout"));
+    timeoutSignal.addEventListener("abort", onAbort, { once: true });
+
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
     } catch {
+      timeoutSignal.removeEventListener("abort", onAbort);
       reject(new Error("Invalid URL"));
       return;
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      timeoutSignal.removeEventListener("abort", onAbort);
       reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
       return;
     }
     const requestImpl = parsedUrl.protocol === "https:" ? httpsRequest : httpRequest;
+
+    // DNS resolution is now covered by the shared timeout signal
     resolvePinnedHostname(parsedUrl.hostname)
       .then((pinned) => {
-        const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-            const location = res.headers.location;
-            if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+        if (timeoutSignal.aborted) {
+          timeoutSignal.removeEventListener("abort", onAbort);
+          reject(new Error("Download timeout"));
+          return;
+        }
+        const req = requestImpl(
+          parsedUrl,
+          { headers, lookup: pinned.lookup, signal: timeoutSignal },
+          (res) => {
+            // Follow redirects - reuse the same timeout signal
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+              const location = res.headers.location;
+              if (!location || maxRedirects <= 0) {
+                timeoutSignal.removeEventListener("abort", onAbort);
+                reject(new Error(`Redirect loop or missing Location header`));
+                return;
+              }
+              const redirectUrl = new URL(location, url).href;
+              // Check abort before starting redirect to avoid unnecessary work
+              if (timeoutSignal.aborted) {
+                timeoutSignal.removeEventListener("abort", onAbort);
+                reject(new Error("Download timeout"));
+                return;
+              }
+              // Pass the SAME signal to maintain total timeout across redirects
+              // Remove listener here as the recursive call will add its own
+              timeoutSignal.removeEventListener("abort", onAbort);
+              resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1, timeoutSignal));
               return;
             }
-            const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
-            return;
-          }
-          if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-            return;
-          }
-          let total = 0;
-          const sniffChunks: Buffer[] = [];
-          let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: 0o600 });
-          res.on("data", (chunk) => {
-            total += chunk.length;
-            if (sniffLen < 16384) {
-              sniffChunks.push(chunk);
-              sniffLen += chunk.length;
+            if (!res.statusCode || res.statusCode >= 400) {
+              timeoutSignal.removeEventListener("abort", onAbort);
+              reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+              return;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
-            }
-          });
-          pipeline(res, out)
-            .then(() => {
-              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-              const rawHeader = res.headers["content-type"];
-              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
-                headerMime,
-                sniffBuffer,
-                size: total,
+            let total = 0;
+            const sniffChunks: Buffer[] = [];
+            let sniffLen = 0;
+            const out = createWriteStream(dest, { mode: 0o600 });
+            res.on("data", (chunk) => {
+              total += chunk.length;
+              if (sniffLen < 16384) {
+                sniffChunks.push(chunk);
+                sniffLen += chunk.length;
+              }
+              if (total > MAX_BYTES) {
+                req.destroy(new Error("Media exceeds 5MB limit"));
+              }
+            });
+            pipeline(res, out)
+              .then(() => {
+                timeoutSignal.removeEventListener("abort", onAbort);
+                const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
+                const rawHeader = res.headers["content-type"];
+                const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+                resolve({
+                  headerMime,
+                  sniffBuffer,
+                  size: total,
+                });
+              })
+              .catch((err) => {
+                timeoutSignal.removeEventListener("abort", onAbort);
+                reject(err);
               });
-            })
-            .catch(reject);
+          },
+        );
+        req.on("error", (err) => {
+          timeoutSignal.removeEventListener("abort", onAbort);
+          reject(err);
         });
-        req.on("error", reject);
         req.end();
       })
-      .catch(reject);
+      .catch((err) => {
+        timeoutSignal.removeEventListener("abort", onAbort);
+        reject(err);
+      });
   });
 }
 
@@ -179,17 +231,23 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
-    const mime = await detectMime({
-      buffer: sniffBuffer,
-      headerMime,
-      filePath: source,
-    });
-    const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-    const id = ext ? `${baseId}${ext}` : baseId;
-    const finalDest = path.join(dir, id);
-    await fs.rename(tempDest, finalDest);
-    return { id, path: finalDest, size, contentType: mime };
+    try {
+      const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
+      const mime = await detectMime({
+        buffer: sniffBuffer,
+        headerMime,
+        filePath: source,
+      });
+      const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+      const id = ext ? `${baseId}${ext}` : baseId;
+      const finalDest = path.join(dir, id);
+      await fs.rename(tempDest, finalDest);
+      return { id, path: finalDest, size, contentType: mime };
+    } catch (err) {
+      // Clean up partial temp file on error (timeout, abort, etc.)
+      await fs.unlink(tempDest).catch(() => {});
+      throw err;
+    }
   }
   // local path
   const stat = await fs.stat(source);
