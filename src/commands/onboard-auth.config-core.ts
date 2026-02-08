@@ -728,15 +728,16 @@ export function applyAisaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const existingProvider = providers.aisa;
   const defaultProvider = buildAisaProvider();
 
-  // Add all AIsa provider models to the allowlist so users can switch
-  // between them at runtime (e.g. /model aisa/deepseek-v3.1).
-  for (const model of defaultProvider.models) {
+  // Add all AIsa provider models (built-in defaults + any user-configured)
+  // to the allowlist so users can switch between them at runtime
+  // (e.g. /model aisa/deepseek-v3.1).
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  for (const model of [...defaultProvider.models, ...existingModels]) {
     const ref = `aisa/${model.id}`;
     if (!models[ref]) {
       models[ref] = {};
     }
   }
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const defaultModels = defaultProvider.models ?? [];
   const hasDefaultModel = existingModels.some((model) => model.id === AISA_DEFAULT_MODEL_ID);
   const mergedModels =

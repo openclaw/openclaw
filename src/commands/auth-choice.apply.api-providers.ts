@@ -976,7 +976,7 @@ export async function applyAuthChoiceApiProviders(
     if (!hasCredential) {
       await params.prompter.note(
         [
-          "AIsa is a unified model gateway for 70+ LLMs (GPT, Claude, Gemini & more).",
+          "AIsa provides production-grade access to China's top AI models (Qwen, DeepSeek, Kimi, GLM).",
           "Get your API key at: https://marketplace.aisa.one/",
         ].join("\n"),
         "AIsa",
