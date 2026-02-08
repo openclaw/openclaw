@@ -373,12 +373,7 @@ export async function deliverOutboundPayloads(params: {
   // text from payloads that produced delivery results.
   const hookRunner = getGlobalHookRunner();
   if (hookRunner && results.length > 0) {
-    // results array corresponds 1:1 with successful sends, so use
-    // results.length to determine how many payloads succeeded.
-    // In bestEffort mode, failed payloads call onError and are skipped.
-    const deliveredCount = results.length;
     const deliveredText = normalizedPayloads
-      .slice(0, deliveredCount)
       .map((p) => p.text ?? "")
       .filter(Boolean)
       .join("\n");

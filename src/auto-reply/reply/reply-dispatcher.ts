@@ -157,7 +157,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           void hookRunner
             .runMessageSent(
               {
-                to: hctx.conversationId ?? hctx.channelId,
+                to: hctx.conversationId ?? "",
                 content: normalized.text,
                 success: true,
               },
