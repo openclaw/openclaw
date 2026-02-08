@@ -119,7 +119,7 @@ cd ./extensions/voice-call && pnpm install
 
 ## 通话的 TTS
 
-Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行通话中的流式语音。你可以在插件配置下使用**相同的结构**覆盖它——它会与 `messages.tts` 深度合并。
+Voice Call 使用核心 `messages.tts` 配置（OpenAI、ElevenLabs 或 Typecast）进行通话中的流式语音。你可以在插件配置下使用**相同的结构**覆盖它——它会与 `messages.tts` 深度合并。
 
 ```json5
 {
