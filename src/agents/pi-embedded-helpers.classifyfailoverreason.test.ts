@@ -38,4 +38,11 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+  it("classifies subscription quota limit errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "403 You have reached your subscription quota limit. Please wait for automatic quota refresh.",
+      ),
+    ).toBe("rate_limit");
+  });
 });
