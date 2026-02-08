@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
-async function getFreePort(): Promise<number> {
+async function getFreePort(): Promise<{ port: number; release: () => Promise<void> }> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -14,14 +14,20 @@ async function getFreePort(): Promise<number> {
         return;
       }
       const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
+      resolve({
+        port,
+        release: () =>
+          new Promise((res) => {
+            server.close(() => res());
+          }),
+      });
     });
   });
 }
 
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
-    const port = await getFreePort();
+    const { port, release } = await getFreePort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
 
     const fetchFn: typeof fetch = async (input, init) => {
@@ -49,21 +55,28 @@ describe("loginChutes", () => {
       throw new Error("onPrompt should not be called for local callback");
     });
 
-    const creds = await loginChutes({
-      app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
-      onAuth: async ({ url }) => {
-        const state = new URL(url).searchParams.get("state");
-        expect(state).toBeTruthy();
-        await fetch(`${redirectUri}?code=code_local&state=${state}`);
-      },
-      onPrompt,
-      fetchFn,
-    });
+    try {
+      const creds = await loginChutes({
+        app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+        onAuth: async ({ url }) => {
+          // Release the temporary server before waitForLocalCallback starts its own server
+          await release();
+          const state = new URL(url).searchParams.get("state");
+          expect(state).toBeTruthy();
+          await fetch(`${redirectUri}?code=code_local&state=${state}`);
+        },
+        onPrompt,
+        fetchFn,
+      });
 
-    expect(onPrompt).not.toHaveBeenCalled();
-    expect(creds.access).toBe("at_local");
-    expect(creds.refresh).toBe("rt_local");
-    expect(creds.email).toBe("local-user");
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(creds.access).toBe("at_local");
+      expect(creds.refresh).toBe("rt_local");
+      expect(creds.email).toBe("local-user");
+    } finally {
+      // Ensure cleanup even if test fails
+      await release().catch(() => {});
+    }
   });
 
   it("supports manual flow with pasted code", async () => {
