@@ -814,6 +814,18 @@ export async function runEmbeddedAttempt(
             });
           }
 
+          // Diagnostic: log context sizes before prompt to help debug early overflow errors.
+          {
+            const msgCount = activeSession.messages.length;
+            const systemLen = systemPromptText?.length ?? 0;
+            const promptLen = effectivePrompt.length;
+            log.info(
+              `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `messages=${msgCount} systemPromptChars=${systemLen} promptChars=${promptLen} ` +
+                `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
+            );
+          }
+
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
