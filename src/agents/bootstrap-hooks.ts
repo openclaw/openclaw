@@ -11,6 +11,7 @@ export async function applyBootstrapHookOverrides(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  incomingMessage?: string;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId ?? "unknown";
   const agentId =
@@ -23,6 +24,7 @@ export async function applyBootstrapHookOverrides(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId,
+    incomingMessage: params.incomingMessage,
   };
   const event = createInternalHookEvent("agent", "bootstrap", sessionKey, context);
   await triggerInternalHook(event);

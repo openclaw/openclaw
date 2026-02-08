@@ -57,4 +57,33 @@ describe("resolveBootstrapContextForRun", () => {
 
     expect(extra?.content).toBe("extra");
   });
+
+  it("passes incomingMessage through to bootstrap hooks", async () => {
+    let receivedMessage: string | undefined;
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      receivedMessage = context.incomingMessage;
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      incomingMessage: "Hello, what's the weather?",
+    });
+
+    expect(receivedMessage).toBe("Hello, what's the weather?");
+  });
+
+  it("incomingMessage is undefined when not provided", async () => {
+    let receivedMessage: string | undefined = "sentinel";
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      receivedMessage = context.incomingMessage;
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await resolveBootstrapContextForRun({ workspaceDir });
+
+    expect(receivedMessage).toBeUndefined();
+  });
 });

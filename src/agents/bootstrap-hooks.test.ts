@@ -37,4 +37,20 @@ describe("applyBootstrapHookOverrides", () => {
     expect(updated).toHaveLength(2);
     expect(updated[1]?.name).toBe("EXTRA.md");
   });
+
+  it("passes incomingMessage to hook context", async () => {
+    let receivedMessage: string | undefined;
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      receivedMessage = context.incomingMessage;
+    });
+
+    await applyBootstrapHookOverrides({
+      files: [makeFile()],
+      workspaceDir: "/tmp",
+      incomingMessage: "test prompt",
+    });
+
+    expect(receivedMessage).toBe("test prompt");
+  });
 });

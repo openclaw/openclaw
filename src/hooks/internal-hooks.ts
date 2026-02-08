@@ -17,6 +17,8 @@ export type AgentBootstrapHookContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  /** The user's incoming message text that triggered this agent run (if available). */
+  incomingMessage?: string;
 };
 
 export type AgentBootstrapHookEvent = InternalHookEvent & {
