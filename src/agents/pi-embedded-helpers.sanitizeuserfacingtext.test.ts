@@ -51,6 +51,22 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
   });
 
+  it("sanitizes short billing error messages", () => {
+    expect(sanitizeUserFacingText("402 Payment Required")).toContain("billing error");
+    expect(sanitizeUserFacingText("insufficient credits")).toContain("billing error");
+  });
+
+  it("does not replace long assistant replies discussing billing topics", () => {
+    const text =
+      "Sure, I can help you understand your billing situation. Your API credits are managed through the billing dashboard. " +
+      "To check your current balance, go to Settings > Billing > Credits. If you need to upgrade your plan, " +
+      "you can do so from the same page. The payment method on file will be charged automatically when your " +
+      "credits run low. Let me know if you have any other questions about billing, credits, or payment options. " +
+      "Here are some tips for managing your API usage efficiently and keeping costs under control. " +
+      "You can set up usage alerts, configure spending limits, and review your consumption patterns over time.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("collapses consecutive duplicate paragraphs", () => {
     const text = "Hello there!\n\nHello there!";
     expect(sanitizeUserFacingText(text)).toBe("Hello there!");

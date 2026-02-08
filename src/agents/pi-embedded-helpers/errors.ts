@@ -424,7 +424,7 @@ export function sanitizeUserFacingText(text: string): string {
     );
   }
 
-  if (isBillingErrorMessage(trimmed)) {
+  if (trimmed.length < 500 && isBillingErrorMessage(trimmed)) {
     return BILLING_ERROR_USER_MESSAGE;
   }
 
