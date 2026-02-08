@@ -5,14 +5,55 @@ import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 
+/**
+ * Validates OAuth redirect URI to prevent open redirect attacks (CWE-601).
+ * Only allows localhost/127.0.0.1 on the expected port for local flows.
+ */
+function validateOAuthRedirectUri(uri: string): string {
+  const trimmed = uri.trim();
+  if (!trimmed) {
+    return "http://127.0.0.1:1456/oauth-callback";
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    // Don't echo the full untrusted URI to avoid leaking sensitive data in logs
+    throw new Error("Invalid OAuth redirect URI: failed to parse URL");
+  }
+
+  // Only allow localhost/127.0.0.1 for local OAuth flows
+  const allowedHosts = new Set(["127.0.0.1", "localhost"]);
+  if (!allowedHosts.has(parsed.hostname)) {
+    throw new Error(
+      `Invalid OAuth redirect hostname: ${parsed.hostname}. ` +
+        "Only localhost and 127.0.0.1 are allowed for security.",
+    );
+  }
+
+  // Enforce expected port for local flows - port must be explicitly 1456
+  // When URL omits port, parsed.port is "" which would default to 80/443
+  const expectedPort = "1456";
+  if (parsed.port !== expectedPort) {
+    throw new Error(`Invalid OAuth redirect port. Expected ${expectedPort}.`);
+  }
+
+  // Must use http for localhost (not https)
+  if (parsed.protocol !== "http:") {
+    throw new Error("OAuth redirect URI must use http: protocol for localhost.");
+  }
+
+  return trimmed;
+}
+
 export async function applyAuthChoiceOAuth(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
   if (params.authChoice === "chutes") {
     let nextConfig = params.config;
     const isRemote = isRemoteEnvironment();
-    const redirectUri =
-      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:1456/oauth-callback";
+    const redirectUri = validateOAuthRedirectUri(process.env.CHUTES_OAUTH_REDIRECT_URI || "");
     const scopes = process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
     const clientId =
       process.env.CHUTES_CLIENT_ID?.trim() ||
@@ -96,3 +137,8 @@ export async function applyAuthChoiceOAuth(
 
   return null;
 }
+
+// Export for testing
+export const _test = {
+  validateOAuthRedirectUri,
+};
