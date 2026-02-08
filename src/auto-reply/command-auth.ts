@@ -3,7 +3,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MsgContext } from "./templating.js";
 import { getChannelDock, listChannelDocks } from "../channels/dock.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../channels/registry.js";
 
 export type CommandAuthorization = {
   providerId?: ChannelId;
@@ -104,7 +104,8 @@ function resolveOwnerAllowFromList(params: {
     const separatorIndex = trimmed.indexOf(":");
     if (separatorIndex > 0) {
       const prefix = trimmed.slice(0, separatorIndex);
-      const channel = normalizeAnyChannelId(prefix);
+      // Try built-in channels first (works without plugin registry), then plugins
+      const channel = normalizeChannelId(prefix) ?? normalizeAnyChannelId(prefix);
       if (channel) {
         if (params.providerId && channel !== params.providerId) {
           continue;

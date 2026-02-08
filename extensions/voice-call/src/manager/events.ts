@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { voiceCallLogger } from "../logger.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
@@ -13,6 +14,8 @@ import {
   startMaxDurationTimer,
 } from "./timers.js";
 
+const log = voiceCallLogger;
+
 function shouldAcceptInbound(
   config: CallManagerContext["config"],
   from: string | undefined,
@@ -21,23 +24,23 @@ function shouldAcceptInbound(
 
   switch (policy) {
     case "disabled":
-      console.log("[voice-call] Inbound call rejected: policy is disabled");
+      log.info("[voice-call] Inbound call rejected: policy is disabled");
       return false;
 
     case "open":
-      console.log("[voice-call] Inbound call accepted: policy is open");
+      log.info("[voice-call] Inbound call accepted: policy is open");
       return true;
 
     case "allowlist":
     case "pairing": {
       const normalized = normalizePhoneNumber(from);
       if (!normalized) {
-        console.log("[voice-call] Inbound call rejected: missing caller ID");
+        log.info("[voice-call] Inbound call rejected: missing caller ID");
         return false;
       }
       const allowed = isAllowlistedCaller(normalized, allowFrom);
       const status = allowed ? "accepted" : "rejected";
-      console.log(
+      log.info(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
       );
       return allowed;
@@ -76,7 +79,7 @@ function createInboundCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
+  log.info(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
   return callRecord;
 }
 

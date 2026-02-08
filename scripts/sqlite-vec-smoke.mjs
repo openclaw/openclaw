@@ -11,9 +11,9 @@ try {
   load(db);
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  console.error("sqlite-vec load failed:");
-  console.error(message);
-  console.error("expected extension path:", getLoadablePath());
+  process.stderr.write("sqlite-vec load failed:\n");
+  process.stderr.write(`${message}\n`);
+  process.stderr.write(`expected extension path: ${getLoadablePath()}\n`);
   process.exit(1);
 }
 
@@ -34,5 +34,5 @@ const rows = db
   .prepare("SELECT id, vec_distance_cosine(embedding, ?) AS dist FROM v ORDER BY dist ASC")
   .all(query);
 
-console.log("sqlite-vec ok");
-console.log(rows);
+process.stdout.write("sqlite-vec ok\n");
+process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);

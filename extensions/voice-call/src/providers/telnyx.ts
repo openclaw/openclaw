@@ -13,6 +13,9 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import { voiceCallLogger } from "../logger.js";
+
+const log = voiceCallLogger;
 import type { VoiceCallProvider } from "./base.js";
 
 /**
@@ -84,7 +87,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     if (!this.publicKey) {
       if (this.options.allowUnsignedWebhooks) {
-        console.warn("[telnyx] Webhook verification skipped (no public key configured)");
+        log.warn("[telnyx] Webhook verification skipped (no public key configured)");
         return { ok: true, reason: "verification skipped (no public key configured)" };
       }
       return {
@@ -192,7 +195,7 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     switch (data.event_type) {
       case "call.initiated":
-        return { ...baseEvent, type: "call.initiated" };
+        log.warn(`[telnyx] Unknown hangup cause: ${cause}`);
 
       case "call.ringing":
         return { ...baseEvent, type: "call.ringing" };
@@ -269,7 +272,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       default:
         // Unknown cause - log it for debugging and return completed
         if (cause) {
-          console.warn(`[telnyx] Unknown hangup cause: ${cause}`);
+          log.warn(`[telnyx] Unknown hangup cause: ${cause}`);
         }
         return "completed";
     }

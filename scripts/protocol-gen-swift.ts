@@ -234,11 +234,12 @@ async function generate() {
   for (const outPath of outPaths) {
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, content);
-    console.log(`wrote ${outPath}`);
+    process.stdout.write(`wrote ${outPath}\n`);
   }
 }
 
 generate().catch((err) => {
-  console.error(err);
+  const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.stderr.write(`${message}\n`);
   process.exit(1);
 });

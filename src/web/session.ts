@@ -11,6 +11,10 @@ import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("web/session");
+
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import {
@@ -131,14 +135,14 @@ export async function createWaSocket(
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
-            console.log("Scan this QR in WhatsApp (Linked Devices):");
+            log.info("Scan this QR in WhatsApp (Linked Devices):");
             qrcode.generate(qr, { small: true });
           }
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
-            console.error(
+            log.error(
               danger(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
               ),
@@ -146,7 +150,7 @@ export async function createWaSocket(
           }
         }
         if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
+          log.info(success("WhatsApp Web connected."));
         }
       } catch (err) {
         sessionLogger.error({ error: String(err) }, "connection.update handler error");

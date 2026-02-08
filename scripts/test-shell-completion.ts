@@ -36,6 +36,14 @@ import { theme } from "../src/terminal/theme.js";
 
 const CLI_NAME = "openclaw";
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message: string): void => {
+  process.stderr.write(`${message}\n`);
+};
+
 interface Options {
   checkOnly: boolean;
   force: boolean;
@@ -63,7 +71,7 @@ function parseArgs(args: string[]): Options {
 }
 
 function printHelp(): void {
-  console.log(`
+  writeStdout(`
 ${theme.heading("Shell Completion Test Script")}
 
 This script simulates the shell completion checks that run during
@@ -127,70 +135,70 @@ async function main() {
     return;
   }
 
-  console.log(theme.heading("Shell Completion Test"));
-  console.log("");
+  writeStdout(theme.heading("Shell Completion Test"));
+  writeStdout("");
 
   // Get completion status using the same function used by doctor/update/onboard
   const status = await checkShellCompletionStatus(CLI_NAME);
 
-  console.log(`  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`);
-  console.log(`  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`);
-  console.log(`  Profile: ${theme.muted(getShellProfilePath(status.shell))}`);
-  console.log(`  Cache path: ${theme.muted(status.cachePath)}`);
-  console.log("");
-  console.log(
+  writeStdout(`  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`);
+  writeStdout(`  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`);
+  writeStdout(`  Profile: ${theme.muted(getShellProfilePath(status.shell))}`);
+  writeStdout(`  Cache path: ${theme.muted(status.cachePath)}`);
+  writeStdout("");
+  writeStdout(
     `  Profile configured: ${status.profileInstalled ? theme.success("yes") : theme.warn("no")}`,
   );
-  console.log(`  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`);
-  console.log(
+  writeStdout(`  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`);
+  writeStdout(
     `  Uses slow pattern: ${status.usesSlowPattern ? theme.error("yes (needs upgrade)") : theme.success("no")}`,
   );
-  console.log("");
+  writeStdout("");
 
   if (options.checkOnly) {
-    console.log(theme.muted("Check-only mode, exiting."));
+    writeStdout(theme.muted("Check-only mode, exiting."));
     return;
   }
 
   // Profile uses slow dynamic pattern - upgrade to cached version
   if (status.usesSlowPattern) {
-    console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
+    writeStdout(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
       await installCompletion(status.shell, false, CLI_NAME);
-      console.log(theme.success("Upgraded to cached completion."));
+      writeStdout(theme.success("Upgraded to cached completion."));
     } else {
-      console.log(theme.error("Failed to generate cache."));
+      writeStdout(theme.error("Failed to generate cache."));
     }
     return;
   }
 
   // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
-    console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
+    writeStdout(theme.warn("Profile has completion but cache is missing. Regenerating..."));
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
-      console.log(theme.success("Cache regenerated successfully."));
+      writeStdout(theme.success("Cache regenerated successfully."));
     } else {
-      console.log(theme.error("Failed to regenerate cache."));
+      writeStdout(theme.error("Failed to regenerate cache."));
     }
     return;
   }
 
   // Both profile and cache exist - nothing to do
   if (status.profileInstalled && status.cacheExists && !options.force) {
-    console.log(theme.muted("Shell completion is fully configured. To test the prompt:"));
-    console.log(
+    writeStdout(theme.muted("Shell completion is fully configured. To test the prompt:"));
+    writeStdout(
       theme.muted("  1. Remove the '# OpenClaw Completion' block from your shell profile"),
     );
-    console.log(theme.muted("  2. Re-run this script"));
-    console.log(theme.muted("  Or use --force to prompt anyway"));
-    console.log("");
+    writeStdout(theme.muted("  2. Re-run this script"));
+    writeStdout(theme.muted("  Or use --force to prompt anyway"));
+    writeStdout("");
     return;
   }
 
   // No profile configured - prompt to install
-  console.log(theme.heading("Shell completion"));
+  writeStdout(theme.heading("Shell completion"));
 
   const shouldInstall = await confirm({
     message: stylePromptMessage(`Enable ${status.shell} shell completion for ${CLI_NAME}?`),
@@ -198,19 +206,19 @@ async function main() {
   });
 
   if (isCancel(shouldInstall) || !shouldInstall) {
-    console.log(theme.muted(`Skipped. Run \`openclaw completion --install\` later to enable.`));
+    writeStdout(theme.muted(`Skipped. Run \`openclaw completion --install\` later to enable.`));
     return;
   }
 
   // Generate cache first (required for fast shell startup)
   if (!status.cacheExists) {
-    console.log(theme.muted("Generating completion cache..."));
+    writeStdout(theme.muted("Generating completion cache..."));
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (!cacheGenerated) {
-      console.log(theme.error("Failed to generate completion cache."));
+      writeStdout(theme.error("Failed to generate completion cache."));
       return;
     }
-    console.log(theme.success("Cache generated."));
+    writeStdout(theme.success("Cache generated."));
   }
 
   // Install to shell profile
@@ -218,6 +226,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(theme.error(`Error: ${String(err)}`));
+  writeStderr(theme.error(`Error: ${String(err)}`));
   process.exit(1);
 });

@@ -14,6 +14,9 @@ import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
 } from "./providers/stt-openai-realtime.js";
+import { formatVoiceCallError, voiceCallLogger } from "./logger.js";
+
+const log = voiceCallLogger;
 
 /**
  * Configuration for the media stream handler.
@@ -97,7 +100,7 @@ export class MediaStreamHandler {
 
         switch (message.event) {
           case "connected":
-            console.log("[MediaStream] Twilio connected");
+            log.info("[MediaStream] Twilio connected");
             break;
 
           case "start":
@@ -120,7 +123,7 @@ export class MediaStreamHandler {
             break;
         }
       } catch (error) {
-        console.error("[MediaStream] Error processing message:", error);
+        log.error(`[MediaStream] Error processing message: ${formatVoiceCallError(error)}`);
       }
     });
 
@@ -131,7 +134,7 @@ export class MediaStreamHandler {
     });
 
     ws.on("error", (error) => {
-      console.error("[MediaStream] WebSocket error:", error);
+      log.error(`[MediaStream] WebSocket error: ${formatVoiceCallError(error)}`);
     });
   }
 
@@ -146,9 +149,9 @@ export class MediaStreamHandler {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
-    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    log.info(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
     if (!callSid) {
-      console.warn("[MediaStream] Missing callSid; closing stream");
+      log.warn("[MediaStream] Missing callSid; closing stream");
       ws.close(1008, "Missing callSid");
       return null;
     }
@@ -156,7 +159,7 @@ export class MediaStreamHandler {
       this.config.shouldAcceptStream &&
       !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: streamToken })
     ) {
-      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      log.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
       ws.close(1008, "Unknown call");
       return null;
     }
@@ -191,7 +194,9 @@ export class MediaStreamHandler {
 
     // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
-      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
+      log.warn(
+        `[MediaStream] STT connection failed (TTS still works): ${formatVoiceCallError(err)}`,
+      );
     });
 
     return session;
@@ -201,7 +206,7 @@ export class MediaStreamHandler {
    * Handle stream stop event.
    */
   private handleStop(session: StreamSession): void {
-    console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
+    log.info(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
     this.clearTtsState(session.streamSid);
     session.sttSession.close();
@@ -358,7 +363,7 @@ export class MediaStreamHandler {
         if (entry.controller.signal.aborted) {
           entry.resolve();
         } else {
-          console.error("[MediaStream] TTS playback error:", error);
+          log.error(`[MediaStream] TTS playback error: ${formatVoiceCallError(error)}`);
           entry.reject(error);
         }
       } finally {

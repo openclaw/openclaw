@@ -15,6 +15,8 @@ import type {
 } from "./types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+
+const log = createSubsystemLogger("skills");
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import {
@@ -52,12 +54,12 @@ function filterSkillEntries(
   if (skillFilter !== undefined) {
     const normalized = skillFilter.map((entry) => String(entry).trim()).filter(Boolean);
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
-    console.log(`[skills] Applying skill filter: ${label}`);
+    log.info(`Applying skill filter: ${label}`);
     filtered =
       normalized.length > 0
         ? filtered.filter((entry) => normalized.includes(entry.skill.name))
         : [];
-    console.log(`[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`);
+    log.info(`After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`);
   }
   return filtered;
 }
@@ -318,7 +320,7 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(`[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        log.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
   });

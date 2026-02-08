@@ -13,7 +13,7 @@ function isTruthyEnvValue(value?: string): boolean {
 
 const debugAccounts = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_NEXTCLOUD_TALK_ACCOUNTS)) {
-    console.warn("[nextcloud-talk:accounts]", ...args);
+    process.stderr.write(`[nextcloud-talk:accounts] ${args.map(String).join(" ")}\n`);
   }
 };
 

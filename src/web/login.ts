@@ -22,13 +22,13 @@ export async function loginWeb(
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
     await wait(sock);
-    console.log(success("✅ Linked! Credentials saved for future sends."));
+    runtime.log(success("✅ Linked! Credentials saved for future sends."));
   } catch (err) {
     const code =
       (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
       (err as { output?: { statusCode?: number } })?.output?.statusCode;
     if (code === 515) {
-      console.log(
+      runtime.log(
         info(
           "WhatsApp asked for a restart after pairing (code 515); creds are saved. Restarting connection once…",
         ),
@@ -43,7 +43,7 @@ export async function loginWeb(
       });
       try {
         await wait(retry);
-        console.log(success("✅ Linked after restart; web session ready."));
+        runtime.log(success("✅ Linked after restart; web session ready."));
         return;
       } finally {
         setTimeout(() => retry.ws?.close(), 500);
@@ -55,7 +55,7 @@ export async function loginWeb(
         isLegacyAuthDir: account.isLegacyAuthDir,
         runtime,
       });
-      console.error(
+      runtime.error(
         danger(
           `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
@@ -63,7 +63,7 @@ export async function loginWeb(
       throw new Error("Session logged out; cache cleared. Re-run login.", { cause: err });
     }
     const formatted = formatError(err);
-    console.error(danger(`WhatsApp Web connection ended before fully opening. ${formatted}`));
+    runtime.error(danger(`WhatsApp Web connection ended before fully opening. ${formatted}`));
     throw new Error(formatted, { cause: err });
   } finally {
     // Let Baileys flush any final events before closing the socket.

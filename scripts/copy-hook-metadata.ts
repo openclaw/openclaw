@@ -15,7 +15,7 @@ const distBundled = path.join(projectRoot, "dist", "hooks", "bundled");
 
 function copyHookMetadata() {
   if (!fs.existsSync(srcBundled)) {
-    console.warn("[copy-hook-metadata] Source directory not found:", srcBundled);
+    process.stderr.write(`[copy-hook-metadata] Source directory not found: ${srcBundled}\n`);
     return;
   }
 
@@ -37,7 +37,7 @@ function copyHookMetadata() {
     const distHookMd = path.join(distHookDir, "HOOK.md");
 
     if (!fs.existsSync(srcHookMd)) {
-      console.warn(`[copy-hook-metadata] No HOOK.md found for ${hookName}`);
+      process.stderr.write(`[copy-hook-metadata] No HOOK.md found for ${hookName}\n`);
       continue;
     }
 
@@ -46,10 +46,10 @@ function copyHookMetadata() {
     }
 
     fs.copyFileSync(srcHookMd, distHookMd);
-    console.log(`[copy-hook-metadata] Copied ${hookName}/HOOK.md`);
+    process.stdout.write(`[copy-hook-metadata] Copied ${hookName}/HOOK.md\n`);
   }
 
-  console.log("[copy-hook-metadata] Done");
+  process.stdout.write("[copy-hook-metadata] Done\n");
 }
 
 copyHookMetadata();

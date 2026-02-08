@@ -8,6 +8,7 @@
   },
   "rules": {
     "curly": "error",
+    "eslint/no-console": "error",
     "eslint-plugin-unicorn/prefer-array-find": "off",
     "eslint/no-await-in-loop": "off",
     "eslint/no-new": "off",
@@ -32,5 +33,29 @@
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
     "vendor/"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "**/runtime.ts",
+        "**/globals.ts",
+        "**/index.ts",
+        "**/entry.ts",
+        "**/cli/run-main.ts",
+        "**/cli/completion-cli.ts",
+        "**/cli/program/help.ts",
+        "**/acp/client.ts",
+        "**/acp/server.ts",
+        "**/macos/relay.ts",
+        "**/macos/gateway-daemon.ts",
+        "**/logging/console.ts",
+        "**/infra/unhandled-rejections.ts",
+        "**/*.test.ts",
+        "scripts/**/*.mjs"
+      ],
+      "rules": {
+        "eslint/no-console": "off"
+      }
+    }
   ]
 }

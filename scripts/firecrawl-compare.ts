@@ -10,6 +10,14 @@ const DEFAULT_URLS = [
 
 const urls = process.argv.slice(2);
 const targets = urls.length > 0 ? urls : DEFAULT_URLS;
+
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message: string): void => {
+  process.stderr.write(`${message}\n`);
+};
 const apiKey = process.env.FIRECRAWL_API_KEY;
 const baseUrl = process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev";
 
@@ -55,11 +63,11 @@ async function fetchHtml(url: string): Promise<{
 
 async function run() {
   if (!apiKey) {
-    console.log("FIRECRAWL_API_KEY not set. Firecrawl comparisons will be skipped.");
+    writeStdout("FIRECRAWL_API_KEY not set. Firecrawl comparisons will be skipped.");
   }
 
   for (const url of targets) {
-    console.log(`\n=== ${url}`);
+    writeStdout(`\n=== ${url}`);
     let localStatus = "skipped";
     let localTitle = "";
     let localText = "";
@@ -90,12 +98,12 @@ async function run() {
       localError = error instanceof Error ? error.message : String(error);
     }
 
-    console.log(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
+    writeStdout(`local: ${localStatus} len=${localText.length} title=${truncate(localTitle, 80)}`);
     if (localError) {
-      console.log(`local error: ${localError}`);
+      writeStdout(`local error: ${localError}`);
     }
     if (localText) {
-      console.log(`local sample: ${truncate(localText)}`);
+      writeStdout(`local sample: ${truncate(localText)}`);
     }
 
     if (apiKey) {
@@ -111,21 +119,21 @@ async function run() {
           storeInCache: true,
           timeoutSeconds: 60,
         });
-        console.log(
+        writeStdout(
           `firecrawl: ok len=${firecrawl.text.length} title=${truncate(
             firecrawl.title ?? "",
             80,
           )} status=${firecrawl.status ?? "n/a"}`,
         );
         if (firecrawl.warning) {
-          console.log(`firecrawl warning: ${firecrawl.warning}`);
+          writeStdout(`firecrawl warning: ${firecrawl.warning}`);
         }
         if (firecrawl.text) {
-          console.log(`firecrawl sample: ${truncate(firecrawl.text)}`);
+          writeStdout(`firecrawl sample: ${truncate(firecrawl.text)}`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.log(`firecrawl: error ${message}`);
+        writeStdout(`firecrawl: error ${message}`);
       }
     }
   }
@@ -134,6 +142,7 @@ async function run() {
 }
 
 run().catch((error) => {
-  console.error(error);
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  writeStderr(message);
   process.exit(1);
 });

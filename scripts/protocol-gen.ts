@@ -37,7 +37,7 @@ async function writeJsonSchema() {
   await fs.mkdir(distDir, { recursive: true });
   const jsonSchemaPath = path.join(distDir, "protocol.schema.json");
   await fs.writeFile(jsonSchemaPath, JSON.stringify(rootSchema, null, 2));
-  console.log(`wrote ${jsonSchemaPath}`);
+  process.stdout.write(`wrote ${jsonSchemaPath}\n`);
   return { jsonSchemaPath, schemaString: JSON.stringify(rootSchema) };
 }
 
@@ -46,6 +46,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.stderr.write(`${message}\n`);
   process.exit(1);
 });

@@ -57,6 +57,7 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onError?: (err: unknown) => void;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
@@ -265,7 +266,7 @@ export class GatewayBrowserClient {
       try {
         this.opts.onEvent?.(evt);
       } catch (err) {
-        console.error("[gateway] event handler error:", err);
+        this.opts.onError?.(err);
       }
       return;
     }

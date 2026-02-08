@@ -28,7 +28,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("retries after import failure without poisoning the cache", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     let call = 0;
 
     __setModelCatalogImportForTest(async () => {
@@ -57,7 +57,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("returns partial results on discovery errors", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     __setModelCatalogImportForTest(
       async () =>

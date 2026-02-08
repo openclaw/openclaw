@@ -70,6 +70,7 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+const log = createSubsystemLogger("telegram");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -302,7 +303,7 @@ export async function sendMessageTelegram(
       const errText = formatErrorMessage(err);
       if (PARSE_ERR_RE.test(errText)) {
         if (opts.verbose) {
-          console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+          log.warn(`HTML parse failed, retrying as plain text: ${errText}`);
         }
         const fallback = fallbackText ?? rawText;
         const plainParams = hasBaseParams ? baseParams : undefined;
@@ -622,7 +623,7 @@ export async function editMessageTelegram(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
       if (opts.verbose) {
-        console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+        log.warn(`HTML parse failed, retrying as plain text: ${errText}`);
       }
       const plainParams: Record<string, unknown> = {};
       if (replyMarkup !== undefined) {

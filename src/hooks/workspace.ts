@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("hooks/workspace");
+
 import type {
   Hook,
   HookEligibilityContext,
@@ -81,7 +85,7 @@ function loadHookFromDir(params: {
     }
 
     if (!handlerPath) {
-      console.warn(`[hooks] Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
+      log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
       return null;
     }
 
@@ -95,7 +99,9 @@ function loadHookFromDir(params: {
       handlerPath,
     };
   } catch (err) {
-    console.warn(`[hooks] Failed to load hook from ${params.hookDir}:`, err);
+    log.warn(
+      `Failed to load hook from ${params.hookDir}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }

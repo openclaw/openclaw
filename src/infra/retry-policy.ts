@@ -1,6 +1,9 @@
 import { RateLimitError } from "@buape/carbon";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
+
+const log = createSubsystemLogger("infra/retry");
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
@@ -61,7 +64,7 @@ export function createDiscordRetryRunner(params: {
         ? (info) => {
             const labelText = info.label ?? "request";
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
+            log.warn(
               `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
             );
           }
@@ -92,7 +95,7 @@ export function createTelegramRetryRunner(params: {
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
+            log.warn(
               `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
             );
           }

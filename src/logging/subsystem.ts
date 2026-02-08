@@ -193,13 +193,27 @@ function writeConsoleLine(level: LogLevel, line: string) {
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
-  const sink = loggingState.rawConsole ?? console;
+  type ConsoleSink = {
+    log?: (message: string) => void;
+    warn?: (message: string) => void;
+    error?: (message: string) => void;
+  };
+  const sink =
+    (loggingState.rawConsole as ConsoleSink | null) ??
+    ({
+      log: (message: string) => process.stdout.write(`${message}\n`),
+      warn: (message: string) => process.stderr.write(`${message}\n`),
+      error: (message: string) => process.stderr.write(`${message}\n`),
+    } satisfies ConsoleSink);
+  const fallbackError = (message: string) => process.stderr.write(`${message}\n`);
+  const fallbackWarn = (message: string) => process.stderr.write(`${message}\n`);
+  const fallbackLog = (message: string) => process.stdout.write(`${message}\n`);
   if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
-    (sink.error ?? console.error)(sanitized);
+    (sink.error ?? fallbackError)(sanitized);
   } else if (level === "warn") {
-    (sink.warn ?? console.warn)(sanitized);
+    (sink.warn ?? fallbackWarn)(sanitized);
   } else {
-    (sink.log ?? console.log)(sanitized);
+    (sink.log ?? fallbackLog)(sanitized);
   }
 }
 

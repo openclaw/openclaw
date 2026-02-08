@@ -16,6 +16,10 @@ type RunResult = {
 const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
 function parseArg(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
   if (idx === -1) {
@@ -73,7 +77,7 @@ async function runModel(opts: {
     );
     const durationMs = Date.now() - started;
     results.push({ durationMs, usage: res.usage });
-    console.log(`${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`);
+    writeStdout(`${opts.label} run ${i + 1}/${opts.runs}: ${durationMs}ms`);
   }
   return results;
 }
@@ -108,9 +112,9 @@ async function main(): Promise<void> {
   };
   const opusModel = getModel("anthropic", "claude-opus-4-6");
 
-  console.log(`Prompt: ${prompt}`);
-  console.log(`Runs: ${runs}`);
-  console.log("");
+  writeStdout(`Prompt: ${prompt}`);
+  writeStdout(`Runs: ${runs}`);
+  writeStdout("");
 
   const minimaxResults = await runModel({
     label: "minimax",
@@ -136,10 +140,10 @@ async function main(): Promise<void> {
   };
 
   const summary = [summarize("minimax", minimaxResults), summarize("opus", opusResults)];
-  console.log("");
-  console.log("Summary (ms):");
+  writeStdout("");
+  writeStdout("Summary (ms):");
   for (const row of summary) {
-    console.log(`${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`);
+    writeStdout(`${row.label.padEnd(7)} median=${row.med} min=${row.min} max=${row.max}`);
   }
 }
 

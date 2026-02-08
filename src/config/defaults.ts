@@ -2,12 +2,14 @@ import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveTalkApiKey } from "./talk.js";
 
 type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
+const warnLogger = createSubsystemLogger("config/defaults");
 
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
@@ -135,7 +137,7 @@ export function applySessionDefaults(
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
+  const warn = options.warn ?? ((message: string) => warnLogger.warn(message));
   const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {

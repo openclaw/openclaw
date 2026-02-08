@@ -118,7 +118,7 @@ describe("hooks", () => {
     });
 
     it("should catch and log errors from handlers", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const consoleError = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const errorHandler = vi.fn(() => {
         throw new Error("Handler failed");
       });
@@ -132,10 +132,12 @@ describe("hooks", () => {
 
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Hook error"),
-        expect.stringContaining("Handler failed"),
-      );
+      expect(consoleError).toHaveBeenCalled();
+      const firstCall = consoleError.mock.calls[0];
+      // Strip ANSI color codes
+      // eslint-disable-next-line no-control-regex
+      const stripped = firstCall[0].replace(/\u001b\[\d+m/g, "");
+      expect(stripped).toBe("[hooks/internal] Hook error [command:new]: Handler failed\n");
 
       consoleError.mockRestore();
     });

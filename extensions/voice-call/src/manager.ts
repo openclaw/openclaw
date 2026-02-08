@@ -6,6 +6,7 @@ import path from "node:path";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
+import { formatVoiceCallError, voiceCallLogger } from "./logger.js";
 import {
   type CallId,
   type CallRecord,
@@ -18,6 +19,8 @@ import {
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
 import { escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
+
+const log = voiceCallLogger;
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
   const rawOverride = storePath?.trim() || config.store?.trim();
@@ -158,7 +161,7 @@ export class CallManager {
       if (mode === "notify" && initialMessage) {
         const pollyVoice = mapVoiceToPolly(this.config.tts?.openai?.voice);
         inlineTwiml = this.generateNotifyTwiml(initialMessage, pollyVoice);
-        console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
+        log.info(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
       }
 
       const result = await this.provider.initiateCall({
@@ -243,7 +246,7 @@ export class CallManager {
   async speakInitialMessage(providerCallId: string): Promise<void> {
     const call = this.getCallByProviderCallId(providerCallId);
     if (!call) {
-      console.warn(`[voice-call] speakInitialMessage: no call found for ${providerCallId}`);
+      log.warn(`[voice-call] speakInitialMessage: no call found for ${providerCallId}`);
       return;
     }
 
@@ -251,7 +254,7 @@ export class CallManager {
     const mode = (call.metadata?.mode as CallMode) ?? "conversation";
 
     if (!initialMessage) {
-      console.log(`[voice-call] speakInitialMessage: no initial message for ${call.callId}`);
+      log.info(`[voice-call] speakInitialMessage: no initial message for ${call.callId}`);
       return;
     }
 
@@ -261,21 +264,21 @@ export class CallManager {
       this.persistCallRecord(call);
     }
 
-    console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
+    log.info(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
     const result = await this.speak(call.callId, initialMessage);
     if (!result.success) {
-      console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
+      log.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
       return;
     }
 
     // In notify mode, auto-hangup after delay
     if (mode === "notify") {
       const delaySec = this.config.outbound.notifyHangupDelaySec;
-      console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
+      log.info(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
       setTimeout(async () => {
         const currentCall = this.getCall(call.callId);
         if (currentCall && !TerminalStates.has(currentCall.state)) {
-          console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
+          log.info(`[voice-call] Notify mode: hanging up call ${call.callId}`);
           await this.endCall(call.callId);
         }
       }, delaySec * 1000);
@@ -291,7 +294,7 @@ export class CallManager {
     this.clearMaxDurationTimer(callId);
 
     const maxDurationMs = this.config.maxDurationSeconds * 1000;
-    console.log(
+    log.info(
       `[voice-call] Starting max duration timer (${this.config.maxDurationSeconds}s) for call ${callId}`,
     );
 
@@ -299,7 +302,7 @@ export class CallManager {
       this.maxDurationTimers.delete(callId);
       const call = this.getCall(callId);
       if (call && !TerminalStates.has(call.state)) {
-        console.log(
+        log.info(
           `[voice-call] Max duration reached (${this.config.maxDurationSeconds}s), ending call ${callId}`,
         );
         call.endReason = "timeout";
@@ -466,23 +469,23 @@ export class CallManager {
 
     switch (policy) {
       case "disabled":
-        console.log("[voice-call] Inbound call rejected: policy is disabled");
+        log.info("[voice-call] Inbound call rejected: policy is disabled");
         return false;
 
       case "open":
-        console.log("[voice-call] Inbound call accepted: policy is open");
+        log.info("[voice-call] Inbound call accepted: policy is open");
         return true;
 
       case "allowlist":
       case "pairing": {
         const normalized = normalizePhoneNumber(from);
         if (!normalized) {
-          console.log("[voice-call] Inbound call rejected: missing caller ID");
+          log.info("[voice-call] Inbound call rejected: missing caller ID");
           return false;
         }
         const allowed = isAllowlistedCaller(normalized, allowFrom);
         const status = allowed ? "accepted" : "rejected";
-        console.log(
+        log.info(
           `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
         );
         return allowed;
@@ -519,7 +522,7 @@ export class CallManager {
     this.providerCallIdMap.set(providerCallId, callId); // Map providerCallId to internal callId
     this.persistCallRecord(callRecord);
 
-    console.log(`[voice-call] Created inbound call record: ${callId} from ${from}`);
+    log.info(`[voice-call] Created inbound call record: ${callId} from ${from}`);
     return callRecord;
   }
 
@@ -667,9 +670,8 @@ export class CallManager {
         reason: "hangup-bot",
       });
     } catch (err) {
-      console.warn(
-        `[voice-call] Failed to reject inbound call ${event.providerCallId}:`,
-        err instanceof Error ? err.message : err,
+      log.warn(
+        `[voice-call] Failed to reject inbound call ${event.providerCallId}: ${formatVoiceCallError(err)}`,
       );
     }
   }
@@ -825,7 +827,7 @@ export class CallManager {
     const line = `${JSON.stringify(call)}\n`;
     // Fire-and-forget async write to avoid blocking event loop
     fsp.appendFile(logPath, line).catch((err) => {
-      console.error("[voice-call] Failed to persist call record:", err);
+      log.error(`[voice-call] Failed to persist call record: ${formatVoiceCallError(err)}`);
     });
   }
 

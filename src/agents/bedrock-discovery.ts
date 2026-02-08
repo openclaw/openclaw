@@ -4,6 +4,7 @@ import {
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
 const DEFAULT_CONTEXT_WINDOW = 32000;
@@ -14,6 +15,8 @@ const DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const log = createSubsystemLogger("bedrock-discovery");
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
 
@@ -216,7 +219,7 @@ export async function discoverBedrockModels(params: {
     }
     if (!hasLoggedBedrockError) {
       hasLoggedBedrockError = true;
-      console.warn(`[bedrock-discovery] Failed to list models: ${String(error)}`);
+      log.warn(`Failed to list models: ${String(error)}`);
     }
     return [];
   }

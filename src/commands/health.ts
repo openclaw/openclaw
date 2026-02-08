@@ -15,9 +15,12 @@ import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
 } from "../infra/heartbeat-runner.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
+
+const log = createSubsystemLogger("health");
 
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -74,7 +77,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
-    console.warn("[health:debug]", ...args);
+    log.warn(args.join(" "));
   }
 };
 

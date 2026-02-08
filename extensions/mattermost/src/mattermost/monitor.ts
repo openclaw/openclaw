@@ -76,6 +76,14 @@ const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 const DEFAULT_ONCHAR_PREFIXES = [">", "!"];
 
+function writeStdout(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 const recentInboundMessages = createDedupeCache({
   ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
   maxSize: RECENT_MATTERMOST_MESSAGE_MAX,
@@ -84,8 +92,8 @@ const recentInboundMessages = createDedupeCache({
 function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
   return (
     opts.runtime ?? {
-      log: console.log,
-      error: console.error,
+      log: writeStdout,
+      error: writeStderr,
       exit: (code: number): never => {
         throw new Error(`exit ${code}`);
       },

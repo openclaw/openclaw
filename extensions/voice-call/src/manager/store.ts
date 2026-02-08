@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { formatVoiceCallError, voiceCallLogger } from "../logger.js";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
+
+const log = voiceCallLogger;
 
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   const logPath = path.join(storePath, "calls.jsonl");
   const line = `${JSON.stringify(call)}\n`;
   // Fire-and-forget async write to avoid blocking event loop.
   fsp.appendFile(logPath, line).catch((err) => {
-    console.error("[voice-call] Failed to persist call record:", err);
+    log.error(`[voice-call] Failed to persist call record: ${formatVoiceCallError(err)}`);
   });
 }
 

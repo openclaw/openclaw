@@ -6,21 +6,29 @@ import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
 
 const DEFAULT_PORT = 18789;
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message: string): void => {
+  process.stderr.write(`${message}\n`);
+};
+
 function killGatewayListeners(port: number): PortProcess[] {
   try {
     const killed = forceFreePort(port);
     if (killed.length > 0) {
-      console.log(
+      writeStdout(
         `freed port ${port}; terminated: ${killed
           .map((p) => `${p.command} (pid ${p.pid})`)
           .join(", ")}`,
       );
     } else {
-      console.log(`port ${port} already free`);
+      writeStdout(`port ${port} already free`);
     }
     return killed;
   } catch (err) {
-    console.error(`failed to free port ${port}: ${String(err)}`);
+    writeStderr(`failed to free port ${port}: ${String(err)}`);
     return [];
   }
 }
@@ -37,7 +45,7 @@ function runTests() {
     },
   });
   if (result.error) {
-    console.error(`pnpm test failed to start: ${String(result.error)}`);
+    writeStderr(`pnpm test failed to start: ${String(result.error)}`);
     process.exit(1);
   }
   process.exit(result.status ?? 1);
@@ -46,13 +54,13 @@ function runTests() {
 function main() {
   const port = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? `${DEFAULT_PORT}`, 10);
 
-  console.log(`🧹 test:force - clearing gateway on port ${port}`);
+  writeStdout(`🧹 test:force - clearing gateway on port ${port}`);
   const killed = killGatewayListeners(port);
   if (killed.length === 0) {
-    console.log("no listeners to kill");
+    writeStdout("no listeners to kill");
   }
 
-  console.log("running pnpm test…");
+  writeStdout("running pnpm test…");
   runTests();
 }
 

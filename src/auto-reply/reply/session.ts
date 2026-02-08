@@ -26,10 +26,13 @@ import {
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
+
+const log = createSubsystemLogger("session-init");
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -313,10 +316,11 @@ export async function initSessionState(params: {
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey]
   ) {
-    console.warn(
-      `[session-init] forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-        `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
-    );
+    log.warn("Forking from parent session", {
+      parentKey: parentSessionKey,
+      sessionKey,
+      parentTokens: sessionStore[parentSessionKey].totalTokens ?? "?",
+    });
     const forked = forkSessionFromParent({
       parentEntry: sessionStore[parentSessionKey],
     });
@@ -324,7 +328,7 @@ export async function initSessionState(params: {
       sessionId = forked.sessionId;
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
-      console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
+      log.warn("Forked session created", { file: forked.sessionFile });
     }
   }
   if (!sessionEntry.sessionFile) {

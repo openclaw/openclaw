@@ -25,7 +25,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger, createSubsystemRuntime } from "../logging/subsystem.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -110,13 +110,11 @@ export function getTelegramSequentialKey(ctx: {
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createSubsystemRuntime("telegram/bot", (code: number): never => {
       throw new Error(`exit ${code}`);
-    },
-  };
+    });
   const cfg = opts.config ?? loadConfig();
   const account = resolveTelegramAccount({
     cfg,

@@ -116,7 +116,7 @@ describe("model-selection", () => {
 
   describe("resolveConfiguredModelRef", () => {
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const cfg: Partial<OpenClawConfig> = {
         agents: {
           defaults: {

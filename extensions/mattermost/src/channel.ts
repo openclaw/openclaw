@@ -68,7 +68,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     idLabel: "mattermostUserId",
     normalizeAllowEntry: (entry) => normalizeAllowEntry(entry),
     notifyApproval: async ({ id }) => {
-      console.log(`[mattermost] User ${id} approved for pairing`);
+      process.stdout.write(`[mattermost] User ${id} approved for pairing\n`);
     },
   },
   capabilities: {

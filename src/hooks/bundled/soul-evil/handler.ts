@@ -1,9 +1,11 @@
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 import { applySoulEvilOverride, resolveSoulEvilConfigFromHook } from "../../soul-evil.js";
 
 const HOOK_KEY = "soul-evil";
+const log = createSubsystemLogger("hooks/soul-evil");
 
 const soulEvilHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
@@ -21,7 +23,7 @@ const soulEvilHook: HookHandler = async (event) => {
   }
 
   const soulConfig = resolveSoulEvilConfigFromHook(hookConfig as Record<string, unknown>, {
-    warn: (message) => console.warn(`[soul-evil] ${message}`),
+    warn: (message) => log.warn(message),
   });
   if (!soulConfig) {
     return;
@@ -38,8 +40,8 @@ const soulEvilHook: HookHandler = async (event) => {
     config: soulConfig,
     userTimezone: cfg?.agents?.defaults?.userTimezone,
     log: {
-      warn: (message) => console.warn(`[soul-evil] ${message}`),
-      debug: (message) => console.debug?.(`[soul-evil] ${message}`),
+      warn: (message) => log.warn(message),
+      debug: (message) => log.debug(message),
     },
   });
 

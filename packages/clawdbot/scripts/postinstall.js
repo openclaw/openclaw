@@ -1,1 +1,1 @@
-console.warn("clawdbot renamed -> openclaw");
+process.stderr.write("clawdbot renamed -> openclaw\n");

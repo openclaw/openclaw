@@ -15,9 +15,12 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import type { VoiceCallProvider } from "./base.js";
+import { voiceCallLogger } from "../logger.js";
 import { chunkAudio } from "../telephony-audio.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import { twilioApiRequest } from "./twilio/api.js";
+
+const log = voiceCallLogger;
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
 /**
@@ -512,7 +515,7 @@ export class TwilioProvider implements VoiceCallProvider {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        console.warn(
+        log.warn(
           `[voice-call] Telephony TTS failed, falling back to Twilio <Say>:`,
           err instanceof Error ? err.message : err,
         );
@@ -526,7 +529,7 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
-    console.warn(
+    log.warn(
       "[voice-call] Using TwiML <Say> fallback - telephony TTS not configured or media stream not active",
     );
 

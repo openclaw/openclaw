@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { voiceCallLogger } from "./logger.js";
 import { getTailscaleDnsName } from "./webhook.js";
+
+const log = voiceCallLogger;
 
 /**
  * Tunnel configuration for exposing the webhook server.
@@ -97,7 +100,7 @@ export async function startNgrokTunnel(config: {
           // Add path to the public URL
           const fullUrl = publicUrl + config.path;
 
-          console.log(`[voice-call] ngrok tunnel active: ${fullUrl}`);
+          log.info(`[voice-call] ngrok tunnel active: ${fullUrl}`);
 
           resolve({
             publicUrl: fullUrl,
@@ -239,7 +242,7 @@ export async function startTailscaleTunnel(config: {
       clearTimeout(timeout);
       if (code === 0) {
         const publicUrl = `https://${dnsName}${path}`;
-        console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
+        log.info(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
 
         resolve({
           publicUrl,

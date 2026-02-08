@@ -7,6 +7,7 @@ import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationMs } from "../infra/format-duration.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+import { createSubsystemRuntime } from "../logging/subsystem.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
@@ -88,7 +89,8 @@ const isGrammyHttpError = (err: unknown): boolean => {
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const log = opts.runtime?.error ?? console.error;
+  const runtime = opts.runtime ?? createSubsystemRuntime("telegram/monitor");
+  const log = runtime.error;
 
   // Register handler for Grammy HttpError unhandled rejections.
   // This catches network errors that escape the polling loop's try-catch
@@ -132,9 +134,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           updateId,
         });
       } catch (err) {
-        (opts.runtime?.error ?? console.error)(
-          `telegram: failed to persist update offset: ${String(err)}`,
-        );
+        runtime.error(`telegram: failed to persist update offset: ${String(err)}`);
       }
     };
 
@@ -194,9 +194,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
         const reason = isConflict ? "getUpdates conflict" : "network error";
         const errMsg = formatErrorMessage(err);
-        (opts.runtime?.error ?? console.error)(
-          `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
-        );
+        runtime.error(`Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`);
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);
         } catch (sleepErr) {
