@@ -199,6 +199,7 @@ Notes:
 - Owner hint: when a per-guild or per-channel `users` allowlist matches the sender, OpenClaw treats that sender as the owner in the system prompt. For a global owner across channels, set `commands.ownerAllowFrom`.
 - Bot-authored messages are ignored by default; set `channels.discord.allowBots=true` to allow them (own messages remain filtered).
 - Warning: If you allow replies to other bots (`channels.discord.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.discord.guilds.*.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
+- Multi-agent context: set `channels.discord.historyIncludeBots=true` (account-level) to include other bots' messages in channel history context. This allows multiple agents sharing a channel to see each other's messages without triggering runs. Note: this setting applies to all guilds/channels for the account; per-guild or per-channel overrides are not currently supported.
 
 ### 6) Verify it works
 

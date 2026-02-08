@@ -138,7 +138,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
-  const untrustedChannelMetadata = isGuildMessage
+  const includeChannelMetadata =
+    isGuildMessage &&
+    channelConfig?.channelMetadata !== false &&
+    guildInfo?.channelMetadata !== false;
+  const untrustedChannelMetadata = includeChannelMetadata
     ? buildUntrustedChannelMetadata({
         source: "discord",
         label: "Discord channel topic",

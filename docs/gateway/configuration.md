@@ -1119,6 +1119,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
       token: "your-bot-token",
       mediaMaxMb: 8, // clamp inbound media size
       allowBots: false, // allow bot-authored messages
+      historyIncludeBots: false, // include other bots' messages in channel history context
       actions: {
         // tool action gates (false disables)
         reactions: true,
@@ -1183,6 +1184,7 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
 OpenClaw starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
+For multi-agent setups where agents need to see each other's messages without triggering runs, enable `channels.discord.historyIncludeBots` (account-level setting). This records other bots' messages to channel history context while still dropping them (no agent run triggered). Per-guild/per-channel overrides are not currently supported.
 Reaction notification modes:
 
 - `off`: no reaction events.

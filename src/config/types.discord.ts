@@ -27,6 +27,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** If false, omit channel metadata (e.g. channel topic) from untrusted context. Default: true. */
+  channelMetadata?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -47,6 +49,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** If false, omit channel metadata (e.g. channel topic) from untrusted context for this guild. Default: true. */
+  channelMetadata?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -113,6 +117,10 @@ export type DiscordAccountConfig = {
   token?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /** Include other bots' messages in guild channel history context (default: false).
+   * Useful for multi-agent setups where agents need to see each other's messages.
+   */
+  historyIncludeBots?: boolean;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies

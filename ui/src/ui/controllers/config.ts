@@ -156,9 +156,19 @@ export async function applyConfig(state: ConfigState) {
 }
 
 export async function runUpdate(state: ConfigState) {
-  if (!state.client || !state.connected) {
+  if (!state.client || !state.connected) return;
+
+  // Safety: prevent accidental one-click self-updates.
+  // This is intentionally frictiony: users must type UPDATE.
+  const confirmation = window.prompt(
+    "This will self-update the OpenClaw gateway (git/pnpm). Type UPDATE to confirm:",
+    "",
+  );
+  if (confirmation !== "UPDATE") {
+    state.lastError = "Update cancelled.";
     return;
   }
+
   state.updateRunning = true;
   state.lastError = null;
   try {

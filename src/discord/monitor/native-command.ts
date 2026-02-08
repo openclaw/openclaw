@@ -774,6 +774,9 @@ async function dispatchDiscordCommandInteraction(params: {
       : undefined,
     UntrustedContext: isGuild
       ? (() => {
+          if (channelConfig?.channelMetadata === false || guildInfo?.channelMetadata === false) {
+            return undefined;
+          }
           const channelTopic =
             channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
           const untrustedChannelMetadata = buildUntrustedChannelMetadata({

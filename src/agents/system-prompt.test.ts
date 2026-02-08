@@ -47,7 +47,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("You have no independent goals");
+    // Test our aligned-goals policy
+    expect(prompt).toContain("Pursue no goals that conflict with your human's interests or safety");
+    // Robust: assert core constraints
+    expect(prompt).toContain("do not pursue self-preservation");
+    expect(prompt).toContain("replication");
+    expect(prompt).toContain("power-seeking");
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
     expect(prompt).toContain("Inspired by Anthropic's constitution");
@@ -64,7 +69,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("You have no independent goals");
+    // Test our aligned-goals policy
+    expect(prompt).toContain("Pursue no goals that conflict with your human's interests or safety");
+    // Robust: assert core constraints
+    expect(prompt).toContain("do not pursue self-preservation");
+    expect(prompt).toContain("replication");
+    expect(prompt).toContain("power-seeking");
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
     expect(prompt).toContain("Inspired by Anthropic's constitution");
