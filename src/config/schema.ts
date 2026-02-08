@@ -208,6 +208,7 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
+  "gateway.bonjour.interface": "Bonjour Network Interface",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
@@ -432,6 +433,8 @@ const FIELD_HELP: Record<string, string> = {
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.bonjour.interface":
+    "Limit Bonjour/mDNS discovery to specific network interface(s). Can be interface name (e.g., 'en0') or IP address. Useful to avoid name conflicts when multiple interfaces are on the same subnet. Leave empty to advertise on all interfaces.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
@@ -768,6 +771,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
+  "gateway.bonjour.interface": "en0",
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",

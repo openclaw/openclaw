@@ -508,6 +508,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        bonjour: z
+          .object({
+            interface: z.union([z.string(), z.array(z.string())]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

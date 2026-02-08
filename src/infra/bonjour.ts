@@ -23,6 +23,12 @@ export type GatewayBonjourAdvertiseOpts = {
    * Reduces information disclosure for better operational security.
    */
   minimal?: boolean;
+  /**
+   * Network interface(s) to bind Bonjour advertising to.
+   * Can be interface name (e.g., "en0") or IP address.
+   * If not specified, advertises on all interfaces.
+   */
+  interface?: string | string[];
 };
 
 function isDisabledByEnv() {
@@ -89,7 +95,14 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   const { getResponder, Protocol } = await import("@homebridge/ciao");
-  const responder = getResponder();
+
+  // Pass interface option to responder if specified
+  const responderOptions: { interface?: string | string[] } = {};
+  if (opts.interface) {
+    responderOptions.interface = opts.interface;
+  }
+
+  const responder = getResponder(responderOptions);
 
   // mDNS service instance names are single DNS labels; dots in hostnames (like
   // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.

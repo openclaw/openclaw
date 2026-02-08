@@ -211,6 +211,11 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayBonjourConfig = {
+  /** Network interface(s) to bind Bonjour/mDNS advertising (e.g. "en0" or ["en0", "en1"]). */
+  interface?: string | string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -239,6 +244,7 @@ export type GatewayConfig = {
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;
+  bonjour?: GatewayBonjourConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or
