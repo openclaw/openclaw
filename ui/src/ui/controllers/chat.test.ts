@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../gateway.js";
+import { handleChatEvent, sendChatMessage, type ChatEventPayload, type ChatState } from "./chat.js";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -91,5 +92,161 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
+  });
+});
+
+describe("sendChatMessage", () => {
+  function createMockClient(): { client: GatewayBrowserClient; request: ReturnType<typeof vi.fn> } {
+    const request = vi.fn().mockResolvedValue({});
+    const mock = {
+      request,
+      get connected() {
+        return true;
+      },
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    return {
+      client: mock as unknown as GatewayBrowserClient,
+      request,
+    };
+  }
+
+  it("adds regular messages optimistically to chatMessages", async () => {
+    const { client: mockClient, request: mockRequest } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+    const initialMessageCount = state.chatMessages.length;
+
+    await sendChatMessage(state, "Hello, world!");
+
+    // Message should be added optimistically
+    expect(state.chatMessages.length).toBe(initialMessageCount + 1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "Hello, world!" }],
+    });
+    // Should be sent to server
+    expect(mockRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "Hello, world!",
+      }),
+    );
+  });
+
+  it("does not add /new command optimistically to chatMessages", async () => {
+    const { client: mockClient, request: mockRequest } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+    const initialMessageCount = state.chatMessages.length;
+
+    await sendChatMessage(state, "/new");
+
+    // Message should NOT be added optimistically
+    expect(state.chatMessages.length).toBe(initialMessageCount);
+    // But should still be sent to server
+    expect(mockRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "/new",
+      }),
+    );
+  });
+
+  it("does not add /reset command optimistically to chatMessages", async () => {
+    const { client: mockClient, request: mockRequest } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+    const initialMessageCount = state.chatMessages.length;
+
+    await sendChatMessage(state, "/reset");
+
+    // Message should NOT be added optimistically
+    expect(state.chatMessages.length).toBe(initialMessageCount);
+    // But should still be sent to server
+    expect(mockRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "/reset",
+      }),
+    );
+  });
+
+  it("does not add /new with arguments optimistically to chatMessages", async () => {
+    const { client: mockClient, request: mockRequest } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+    const initialMessageCount = state.chatMessages.length;
+
+    await sendChatMessage(state, "/new with some text");
+
+    // Message should NOT be added optimistically
+    expect(state.chatMessages.length).toBe(initialMessageCount);
+    // But should still be sent to server
+    expect(mockRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "/new with some text",
+      }),
+    );
+  });
+
+  it("does not add /reset with arguments optimistically to chatMessages", async () => {
+    const { client: mockClient, request: mockRequest } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+    const initialMessageCount = state.chatMessages.length;
+
+    await sendChatMessage(state, "/reset session please");
+
+    // Message should NOT be added optimistically
+    expect(state.chatMessages.length).toBe(initialMessageCount);
+    // But should still be sent to server
+    expect(mockRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "/reset session please",
+      }),
+    );
+  });
+
+  it("handles case-insensitive reset commands", async () => {
+    const { client: mockClient } = createMockClient();
+    const state = createState({
+      client: mockClient,
+      connected: true,
+      sessionKey: "main",
+    });
+
+    // Test various casings
+    await sendChatMessage(state, "/NEW");
+    expect(state.chatMessages.length).toBe(0);
+
+    await sendChatMessage(state, "/Reset");
+    expect(state.chatMessages.length).toBe(0);
+
+    await sendChatMessage(state, "/NeW test");
+    expect(state.chatMessages.length).toBe(0);
   });
 });
