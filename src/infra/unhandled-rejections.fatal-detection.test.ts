@@ -10,8 +10,11 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   beforeAll(() => {
     originalExit = process.exit.bind(process);
-    installUnhandledRejectionHandler();
   });
+
+  let installedUnhandledListener: ((reason: unknown, promise: Promise<unknown>) => void) | null =
+    null;
+  let originalExitOnUnhandledEnv: string | undefined;
 
   beforeEach(() => {
     exitCalls = [];
@@ -24,9 +27,34 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Install a fresh handler per-test so we can control env flags that are
+    // captured at install time.
+    originalExitOnUnhandledEnv = process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION;
+
+    const before = process.listeners("unhandledRejection");
+    installUnhandledRejectionHandler();
+    const after = process.listeners("unhandledRejection");
+
+    // The installer registers exactly one new listener. Capture it so we can remove it.
+    const newListeners = after.slice(before.length);
+    installedUnhandledListener = (newListeners[0] as typeof installedUnhandledListener) ?? null;
   });
 
   afterEach(() => {
+    // Clean up handler installed in beforeEach
+    if (installedUnhandledListener) {
+      process.off("unhandledRejection", installedUnhandledListener);
+    }
+    installedUnhandledListener = null;
+
+    // Restore env var used to configure exit behavior
+    if (originalExitOnUnhandledEnv === undefined) {
+      delete process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION;
+    } else {
+      process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION = originalExitOnUnhandledEnv;
+    }
+
     vi.clearAllMocks();
     consoleErrorSpy.mockRestore();
     consoleWarnSpy.mockRestore();
@@ -124,16 +152,37 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalled();
     });
 
-    it("exits on generic errors without code", () => {
+    it("does NOT exit on generic errors without code by default", () => {
       const genericErr = new Error("Something went wrong");
 
       process.emit("unhandledRejection", genericErr, Promise.resolve());
 
-      expect(exitCalls).toEqual([1]);
+      expect(exitCalls).toEqual([]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
       );
+    });
+
+    it("exits on generic errors without code when OPENCLAW_EXIT_ON_UNHANDLED_REJECTION=1", () => {
+      // Remove the handler installed in beforeEach so we can reinstall with env flag.
+      if (installedUnhandledListener) {
+        process.off("unhandledRejection", installedUnhandledListener);
+        installedUnhandledListener = null;
+      }
+
+      process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION = "1";
+
+      const before = process.listeners("unhandledRejection");
+      installUnhandledRejectionHandler();
+      const after = process.listeners("unhandledRejection");
+      const newListeners = after.slice(before.length);
+      installedUnhandledListener = (newListeners[0] as typeof installedUnhandledListener) ?? null;
+
+      const genericErr = new Error("Something went wrong");
+      process.emit("unhandledRejection", genericErr, Promise.resolve());
+
+      expect(exitCalls).toEqual([1]);
     });
 
     it("does NOT exit on connection reset errors", () => {

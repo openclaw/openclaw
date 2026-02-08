@@ -141,6 +141,10 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
+  const shouldExitOnUnhandled =
+    process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION === "1" ||
+    process.env.OPENCLAW_EXIT_ON_UNHANDLED_REJECTION === "true";
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
@@ -173,7 +177,14 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
+    // Default: log and continue.
+    // Rationale: many real-world unhandled rejections are transient I/O issues that
+    // shouldn't take down the entire gateway. If you *do* want strict crash-on-unhandled
+    // behavior for debugging, set OPENCLAW_EXIT_ON_UNHANDLED_REJECTION=1.
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
-    process.exit(1);
+
+    if (shouldExitOnUnhandled) {
+      process.exit(1);
+    }
   });
 }
