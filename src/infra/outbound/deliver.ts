@@ -241,7 +241,7 @@ export async function deliverOutboundPayloads(params: {
     }
     // Safety: if text fits within limit, send directly without chunking.
     // This prevents the chunker from splitting messages that don't need it,
-    // which was causing mid-sentence truncation on Signal/TUI. (#XXXX)
+    // which was causing mid-sentence truncation on Signal/TUI. (#12064)
     if (text.length <= textLimit) {
       results.push(await handler.sendText(text));
       return;
