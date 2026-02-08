@@ -1,0 +1,321 @@
+name: Promote Branch
+
+# Staged branch promotion for openclaw:
+#
+# develop → alpha → beta → main
+#
+# - External contributors: target `develop`
+# - develop → alpha: auto-creates PR after core checks pass
+# - alpha → beta: auto-creates PR after alpha tests pass (+ secrets scan)
+# - beta → main: auto-creates PR after full tests pass (+ Windows)
+#
+# Merging to main triggers a release (handled separately by release workflow)
+
+# NOTE: push triggers disabled until staging pipeline is activated.
+# To enable: uncomment the push block below.
+#   push:
+#     branches:
+#       - develop
+#       - alpha
+#       - beta
+#     paths-ignore:
+#       - "docs/**"
+#       - "*.md"
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: "Source branch to promote from"
+        required: true
+        type: choice
+        options:
+          - develop
+          - alpha
+          - beta
+      skip_tests:
+        description: "Skip tests (use with caution)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: promote-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Determine promotion target
+  determine-target:
+    name: Determine Target Branch
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.determine.outputs.source }}
+      target: ${{ steps.determine.outputs.target }}
+      test_stage: ${{ steps.determine.outputs.test_stage }}
+      should_promote: ${{ steps.determine.outputs.should_promote }}
+    steps:
+      - name: Determine promotion target
+        id: determine
+        run: |
+          # Get source branch
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SOURCE="${{ inputs.source_branch }}"
+          else
+            SOURCE="${{ github.ref_name }}"
+          fi
+
+          echo "source=$SOURCE" >> $GITHUB_OUTPUT
+
+          case "$SOURCE" in
+            develop)
+              echo "target=alpha" >> $GITHUB_OUTPUT
+              echo "test_stage=develop" >> $GITHUB_OUTPUT
+              echo "should_promote=true" >> $GITHUB_OUTPUT
+              ;;
+            alpha)
+              echo "target=beta" >> $GITHUB_OUTPUT
+              echo "test_stage=alpha" >> $GITHUB_OUTPUT
+              echo "should_promote=true" >> $GITHUB_OUTPUT
+              ;;
+            beta)
+              echo "target=main" >> $GITHUB_OUTPUT
+              echo "test_stage=beta" >> $GITHUB_OUTPUT
+              echo "should_promote=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "target=" >> $GITHUB_OUTPUT
+              echo "test_stage=" >> $GITHUB_OUTPUT
+              echo "should_promote=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  # Ensure target branch exists (create from main if not)
+  ensure-target-branch:
+    name: Ensure Target Branch
+    needs: determine-target
+    if: needs.determine-target.outputs.should_promote == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create target branch if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TARGET="${{ needs.determine-target.outputs.target }}"
+
+          if git ls-remote --exit-code origin "refs/heads/$TARGET" >/dev/null 2>&1; then
+            echo "Branch '$TARGET' already exists"
+          else
+            echo "Branch '$TARGET' does not exist — creating from main"
+            git push origin "origin/main:refs/heads/$TARGET"
+          fi
+
+  # Run stage-appropriate tests
+  run-tests:
+    name: Run Tests
+    needs: [determine-target, ensure-target-branch]
+    if: ${{ needs.determine-target.outputs.should_promote == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.skip_tests) }}
+    uses: ./.github/workflows/testing-strategy.yml
+    with:
+      test_stage: ${{ needs.determine-target.outputs.test_stage }}
+      app_version: ${{ github.sha }}
+    secrets: inherit
+
+  # Create promotion PR
+  create-promotion-pr:
+    name: Create Promotion PR
+    needs: [determine-target, ensure-target-branch, run-tests]
+    if: |
+      !cancelled() &&
+      needs.determine-target.outputs.should_promote == 'true' &&
+      (needs.run-tests.outputs.test_status == 'passed' || (github.event_name == 'workflow_dispatch' && inputs.skip_tests))
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.output-pr.outputs.pull-request-number }}
+      pr_url: ${{ steps.output-pr.outputs.pull-request-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-target.outputs.source }}
+          fetch-depth: 0
+
+      - name: Get commit info
+        id: commits
+        run: |
+          TARGET="${{ needs.determine-target.outputs.target }}"
+
+          # Fetch target branch
+          git fetch origin $TARGET 2>/dev/null || true
+
+          # Get commits not in target
+          if git rev-parse origin/$TARGET >/dev/null 2>&1; then
+            COMMIT_COUNT=$(git rev-list --count origin/$TARGET..HEAD 2>/dev/null || echo "0")
+            COMMIT_SUMMARY=$(git log origin/$TARGET..HEAD --oneline --format="- %s (%h)" 2>/dev/null | head -20 || echo "Initial promotion")
+          else
+            COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+            COMMIT_SUMMARY=$(git log --oneline --format="- %s (%h)" 2>/dev/null | head -20 || echo "Initial promotion")
+          fi
+
+          echo "count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          DELIM="COMMITS_$(openssl rand -hex 16)"
+          echo "summary<<${DELIM}" >> $GITHUB_OUTPUT
+          echo "$COMMIT_SUMMARY" >> $GITHUB_OUTPUT
+          echo "${DELIM}" >> $GITHUB_OUTPUT
+
+      - name: Check for existing PR
+        id: check-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SOURCE="${{ needs.determine-target.outputs.source }}"
+          TARGET="${{ needs.determine-target.outputs.target }}"
+
+          EXISTING=$(gh pr list --head "$SOURCE" --base "$TARGET" --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
+            echo "pr_url=https://github.com/${{ github.repository }}/pull/$EXISTING" >> $GITHUB_OUTPUT
+            echo "Promotion PR #$EXISTING already exists for $SOURCE → $TARGET"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        id: create-pr
+        if: steps.check-pr.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SOURCE="${{ needs.determine-target.outputs.source }}"
+          TARGET="${{ needs.determine-target.outputs.target }}"
+          TEST_STAGE="${{ needs.determine-target.outputs.test_stage }}"
+          COMMIT_COUNT="${{ steps.commits.outputs.count }}"
+
+          # Write PR body to a temp file to avoid shell quoting issues
+          BODY_FILE=$(mktemp)
+          cat > "$BODY_FILE" <<__PRBODY__
+          ## Staged Promotion
+
+          | Property | Value |
+          |----------|-------|
+          | Source | \`${SOURCE}\` |
+          | Target | \`${TARGET}\` |
+          | Test Stage | \`${TEST_STAGE}\` |
+
+          ### Changes (${COMMIT_COUNT} commits)
+
+          ${{ steps.commits.outputs.summary }}
+
+          ### Checklist
+
+          - [ ] Changes reviewed
+          - [ ] CI passing
+          - [ ] Ready to promote
+
+          ---
+          *Auto-generated by the branch promotion workflow.*
+          __PRBODY__
+
+          PR_URL=$(gh pr create \
+            --base "$TARGET" \
+            --head "$SOURCE" \
+            --title "🚀 Promote: $SOURCE → $TARGET" \
+            --body-file "$BODY_FILE" \
+            --label "promotion")
+
+          rm -f "$BODY_FILE"
+
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          echo "Created promotion PR: $SOURCE → $TARGET"
+
+      - name: Output existing PR
+        id: output-pr
+        run: |
+          if [ "${{ steps.check-pr.outputs.exists }}" = "true" ]; then
+            echo "pull-request-number=${{ steps.check-pr.outputs.pr_number }}" >> $GITHUB_OUTPUT
+            echo "pull-request-url=${{ steps.check-pr.outputs.pr_url }}" >> $GITHUB_OUTPUT
+          else
+            echo "pull-request-number=${{ steps.create-pr.outputs.pr_number }}" >> $GITHUB_OUTPUT
+            echo "pull-request-url=${{ steps.create-pr.outputs.pr_url }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Auto-merge for develop → alpha (fast-track, new PRs only)
+  auto-merge:
+    name: Auto-merge (develop → alpha)
+    needs: [determine-target, create-promotion-pr]
+    if: |
+      needs.determine-target.outputs.source == 'develop' &&
+      needs.create-promotion-pr.outputs.pr_number != '' &&
+      needs.create-promotion-pr.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge
+        run: |
+          gh pr merge ${{ needs.create-promotion-pr.outputs.pr_number }} \
+            --auto \
+            --squash \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Notify about promotion
+  notify-promotion:
+    name: Notify Promotion
+    needs: [determine-target, create-promotion-pr]
+    if: "!cancelled() && needs.create-promotion-pr.outputs.pr_url != ''"
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "🔄 Promotion PR: ${{ needs.determine-target.outputs.source }} → ${{ needs.determine-target.outputs.target }}"
+          description: |
+            **PR**: ${{ needs.create-promotion-pr.outputs.pr_url }}
+            **Stage**: ${{ needs.determine-target.outputs.test_stage }}
+          color: "3447003"
+
+  # Handle failed tests
+  notify-failure:
+    name: Notify Test Failure
+    needs: [determine-target, run-tests]
+    if: |
+      !cancelled() &&
+      needs.run-tests.outputs.test_status != 'passed' &&
+      !inputs.skip_tests
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "❌ Promotion Blocked: ${{ needs.determine-target.outputs.source }}"
+          description: |
+            **Target**: ${{ needs.determine-target.outputs.target }}
+            **Reason**: Tests failed
+            [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          color: "15158332"

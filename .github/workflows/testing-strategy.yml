@@ -1,0 +1,153 @@
+name: Testing Strategy
+
+# Reusable testing workflow for staged releases
+# Passes test_stage to ci.yml to control which platform tests run
+#
+# Progressive test coverage by stage:
+# - develop/alpha: core checks + secrets + android
+# - beta: + Windows tests
+# - stable: + macOS tests, macOS app, install smoke
+
+on:
+  workflow_call:
+    inputs:
+      test_stage:
+        description: "Testing stage: develop, alpha, beta, or stable"
+        required: true
+        type: string
+      app_version:
+        description: "Version of the application being tested"
+        required: false
+        type: string
+        default: "dev"
+    outputs:
+      test_status:
+        description: "Overall test status"
+        value: ${{ jobs.test-summary.outputs.overall_status }}
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+jobs:
+  # Run CI with stage-appropriate platform gates
+  ci:
+    name: Core CI
+    uses: ./.github/workflows/ci.yml
+    with:
+      test_stage: ${{ inputs.test_stage }}
+    secrets: inherit
+
+  # Install smoke test (stable only)
+  install-smoke:
+    name: Install Smoke Test
+    if: inputs.test_stage == 'stable'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Install pnpm deps (minimal)
+        run: pnpm install --ignore-scripts --frozen-lockfile
+
+      - name: Run installer smoke tests
+        env:
+          CLAWDBOT_INSTALL_URL: https://openclaw.ai/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
+          CLAWDBOT_NO_ONBOARD: "1"
+          CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
+          CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: "1"
+          CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+        run: pnpm test:install:smoke
+
+  # Test summary
+  test-summary:
+    name: Test Summary (${{ inputs.test_stage }})
+    runs-on: ubuntu-latest
+    needs: [ci, install-smoke]
+    if: "!cancelled()"
+    outputs:
+      overall_status: ${{ steps.summary.outputs.overall_status }}
+    steps:
+      - name: Generate summary
+        id: summary
+        run: |
+          echo "## 🧪 Test Results - ${{ inputs.test_stage }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| CI (checks + secrets) | ${{ needs.ci.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Install Smoke | ${{ needs.install-smoke.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+
+          # CI must pass (includes platform-specific jobs based on test_stage)
+          if [ "${{ needs.ci.result }}" != "success" ]; then
+            echo "overall_status=failed" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ❌ CI failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Stage-specific checks
+          STAGE="${{ inputs.test_stage }}"
+          FAILED=false
+
+          if [ "$STAGE" = "stable" ]; then
+            if [ "${{ needs.install-smoke.result }}" = "failure" ]; then
+              FAILED=true
+            fi
+          fi
+
+          if [ "$FAILED" = "true" ]; then
+            echo "overall_status=failed" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ❌ Some stage-specific tests failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "overall_status=passed" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ All required tests passed!" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Discord notifications
+  notify:
+    name: Discord Notification
+    needs: test-summary
+    if: "!cancelled()"
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord success notification
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' && needs.test-summary.outputs.overall_status == 'passed' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "✅ Tests Passed: ${{ inputs.test_stage }} v${{ inputs.app_version }}"
+          description: "All tests passed for ${{ inputs.test_stage }} stage!"
+          color: "3066993"
+
+      - name: Discord failure notification
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' && needs.test-summary.outputs.overall_status != 'passed' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "❌ Tests Failed: ${{ inputs.test_stage }} v${{ inputs.app_version }}"
+          description: |
+            Some tests failed for ${{ inputs.test_stage }} stage.
+            [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          color: "15158332"

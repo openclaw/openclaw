@@ -1,0 +1,129 @@
+name: Generate Changelog
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version for the changelog"
+        required: true
+        type: string
+      release_type:
+        description: "Release type: alpha, beta, or stable"
+        required: true
+        type: string
+    outputs:
+      changelog:
+        description: "Generated changelog content"
+        value: ${{ jobs.generate.outputs.changelog }}
+      changelog_file:
+        description: "Path to changelog file"
+        value: ${{ jobs.generate.outputs.changelog_file }}
+
+jobs:
+  generate:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.generate.outputs.changelog }}
+      changelog_file: ${{ steps.generate.outputs.changelog_file }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: generate
+        run: |
+          VERSION="${{ inputs.version }}"
+          RELEASE_TYPE="${{ inputs.release_type }}"
+          DATE=$(date +%Y-%m-%d)
+
+          # Start building changelog
+          CHANGELOG="## v${VERSION} (${DATE})\n\n"
+
+          # Initialize sections
+          FEATURES=""
+          FIXES=""
+          DOCS=""
+          CHORES=""
+          OTHER=""
+
+          # Get commits since last tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LATEST_TAG" ]; then
+            COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --format="%s")
+          else
+            COMMITS=$(git log --oneline --format="%s" | head -50)
+          fi
+
+          # Categorize commits by conventional commit type
+          while IFS= read -r commit; do
+            if [ -z "$commit" ]; then
+              continue
+            fi
+            
+            # Extract type from conventional commit
+            if [[ "$commit" =~ ^feat(\(.+\))?:\ (.+)$ ]]; then
+              FEATURES="${FEATURES}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^fix(\(.+\))?:\ (.+)$ ]]; then
+              FIXES="${FIXES}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^docs(\(.+\))?:\ (.+)$ ]]; then
+              DOCS="${DOCS}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^chore(\(.+\))?:\ (.+)$ ]]; then
+              CHORES="${CHORES}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^refactor(\(.+\))?:\ (.+)$ ]]; then
+              CHORES="${CHORES}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^test(\(.+\))?:\ (.+)$ ]]; then
+              CHORES="${CHORES}- ${BASH_REMATCH[2]}\n"
+            elif [[ "$commit" =~ ^ci(\(.+\))?:\ (.+)$ ]]; then
+              CHORES="${CHORES}- ${BASH_REMATCH[2]}\n"
+            else
+              # Non-conventional commit, add to other
+              OTHER="${OTHER}- ${commit}\n"
+            fi
+          done <<< "$COMMITS"
+
+          # Build final changelog
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG="${CHANGELOG}### ✨ Features\n\n${FEATURES}\n"
+          fi
+
+          if [ -n "$FIXES" ]; then
+            CHANGELOG="${CHANGELOG}### 🐛 Bug Fixes\n\n${FIXES}\n"
+          fi
+
+          if [ -n "$DOCS" ]; then
+            CHANGELOG="${CHANGELOG}### 📚 Documentation\n\n${DOCS}\n"
+          fi
+
+          if [ -n "$CHORES" ]; then
+            CHANGELOG="${CHANGELOG}### 🔧 Maintenance\n\n${CHORES}\n"
+          fi
+
+          if [ -n "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}### Other Changes\n\n${OTHER}\n"
+          fi
+
+          # If no categorized commits, add a simple message
+          if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$DOCS" ] && [ -z "$CHORES" ] && [ -z "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}No notable changes in this release.\n"
+          fi
+
+          # Add release metadata
+          CHANGELOG="${CHANGELOG}\n---\n\n"
+          CHANGELOG="${CHANGELOG}**Release Type**: ${RELEASE_TYPE}\n"
+          CHANGELOG="${CHANGELOG}**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST_TAG:-initial}...v${VERSION}\n"
+
+          # Escape for multiline output (random delimiter prevents collision with commit messages)
+          DELIMITER="CHANGELOG_$(openssl rand -hex 16)"
+          echo "changelog<<${DELIMITER}" >> $GITHUB_OUTPUT
+          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "${DELIMITER}" >> $GITHUB_OUTPUT
+          echo "changelog_file=CHANGELOG.md" >> $GITHUB_OUTPUT
+
+          # Also write to step summary
+          echo "## Generated Changelog" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo -e "$CHANGELOG" >> $GITHUB_STEP_SUMMARY

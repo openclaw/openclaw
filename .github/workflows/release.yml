@@ -1,0 +1,51 @@
+name: Release
+
+# Manual release workflow - triggers the release orchestrator
+#
+# Branch → Release Type mapping:
+#   alpha  → releases from 'alpha' branch with -alpha.N suffix
+#   beta   → releases from 'beta' branch with -beta.N suffix
+#   stable → releases from 'main' branch with YYYY.M.D version
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type"
+        required: true
+        type: choice
+        options:
+          - alpha
+          - beta
+          - stable
+        default: "alpha"
+      dry_run:
+        description: "Dry run (no publish)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  determine-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.branch.outputs.name }}
+    steps:
+      - name: Determine source branch
+        id: branch
+        run: |
+          case "${{ inputs.release_type }}" in
+            alpha)  echo "name=alpha" >> $GITHUB_OUTPUT ;;
+            beta)   echo "name=beta" >> $GITHUB_OUTPUT ;;
+            stable) echo "name=main" >> $GITHUB_OUTPUT ;;
+          esac
+
+  release:
+    name: Release
+    needs: determine-branch
+    uses: ./.github/workflows/release-orchestrator.yml
+    with:
+      release_type: ${{ inputs.release_type }}
+      source_branch: ${{ needs.determine-branch.outputs.branch }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit

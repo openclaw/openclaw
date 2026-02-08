@@ -1,0 +1,97 @@
+name: Feature PR
+
+# Auto-create PR from dev/* branches to develop
+# This is the entry point for new features into the staging pipeline
+
+# NOTE: push triggers disabled until staging pipeline is activated.
+# To enable: uncomment the push block and remove workflow_dispatch.
+#   push:
+#     branches:
+#       - "dev/**"
+#       - "feature/**"
+#       - "fix/**"
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: feature-pr-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-pr:
+    name: Create PR to develop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure develop branch exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-remote --heads origin develop | grep -q develop; then
+            echo "develop branch already exists"
+          else
+            echo "develop branch does not exist — creating from main"
+            git push origin origin/main:refs/heads/develop
+          fi
+
+      - name: Check for existing PR
+        id: check-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          TARGET="develop"
+
+          # Check if PR already exists
+          EXISTING=$(gh pr list --head "$BRANCH" --base "$TARGET" --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
+            echo "PR #$EXISTING already exists for $BRANCH → $TARGET"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR
+        if: steps.check-pr.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          TARGET="develop"
+
+          # Extract title from branch name (dev/foo-bar → foo bar)
+          TITLE=$(echo "$BRANCH" | sed 's|^dev/||; s|^feature/||; s|^fix/||; s|-| |g; s|_| |g')
+
+          # Capitalize first letter
+          TITLE="$(echo "${TITLE:0:1}" | tr '[:lower:]' '[:upper:]')${TITLE:1}"
+
+          # Create PR body
+          BODY=$(cat << 'PRBODY'
+          Auto-created PR from feature branch.
+
+          ## Changes
+
+          <!-- Describe your changes here -->
+
+          ---
+          *This PR was auto-created by the feature-pr workflow.*
+          PRBODY
+          )
+
+          gh pr create \
+            --base "$TARGET" \
+            --head "$BRANCH" \
+            --title "$TITLE" \
+            --body "$BODY"
+
+          echo "Created PR: $BRANCH → $TARGET"

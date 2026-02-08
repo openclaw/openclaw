@@ -1,0 +1,96 @@
+name: Hotfix PR
+
+# Emergency hotfix workflow - bypasses staging pipeline
+# Use for critical security fixes or production-breaking bugs only
+#
+# Flow: hotfix/* → main (directly, with expedited review)
+
+# NOTE: push triggers disabled until staging pipeline is activated.
+# To enable: uncomment the push block and remove workflow_dispatch.
+#   push:
+#     branches:
+#       - "hotfix/**"
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: hotfix-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  create-pr:
+    name: Create Hotfix PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for existing PR
+        id: check-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
+            echo "Hotfix PR #$EXISTING already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Hotfix PR
+        if: steps.check-pr.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+
+          # Extract title from branch name
+          TITLE=$(echo "$BRANCH" | sed 's|^hotfix/||; s|-| |g; s|_| |g')
+          TITLE="🚨 HOTFIX: $(echo "${TITLE:0:1}" | tr '[:lower:]' '[:upper:]')${TITLE:1}"
+
+          # Create PR body
+          BODY=$(cat << 'PRBODY'
+          ## 🚨 Emergency Hotfix
+
+          **This PR bypasses the normal staging pipeline.**
+
+          ### What's broken?
+          <!-- Describe the production issue -->
+
+          ### Root cause
+          <!-- Brief explanation of what went wrong -->
+
+          ### Fix
+          <!-- What this hotfix does -->
+
+          ### Verification
+          - [ ] Tested locally
+          - [ ] Reviewed by at least one other maintainer
+          - [ ] Post-merge monitoring plan in place
+
+          ---
+          ⚠️ **After merging:** Cherry-pick this fix to `develop`, `alpha`, and `beta` branches to keep them in sync.
+
+          *This PR was auto-created by the hotfix-pr workflow.*
+          PRBODY
+          )
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "$TITLE" \
+            --label "hotfix,priority:critical" \
+            --body "$BODY"
+
+          echo "Created hotfix PR: $BRANCH → main"

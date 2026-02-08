@@ -1,0 +1,69 @@
+name: Discord Notify
+description: Send notifications to Discord webhook
+
+inputs:
+  webhook_url:
+    description: Discord webhook URL
+    required: true
+  title:
+    description: Notification title
+    required: true
+  description:
+    description: Notification description
+    required: true
+  color:
+    description: Embed color (decimal)
+    required: false
+    default: "3447003"
+  username:
+    description: Bot username
+    required: false
+    default: "OpenClaw CI"
+  avatar_url:
+    description: Bot avatar URL
+    required: false
+    default: "https://avatars.githubusercontent.com/u/182880377"
+  timestamp:
+    description: Include timestamp
+    required: false
+    default: "true"
+  fields:
+    description: JSON array of embed fields
+    required: false
+    default: "[]"
+
+runs:
+  using: composite
+  steps:
+    - name: Send Discord notification
+      shell: bash
+      run: |
+        TIMESTAMP=""
+        if [ "${{ inputs.timestamp }}" = "true" ]; then
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        fi
+
+        # Build JSON payload with jq to handle escaping properly
+        PAYLOAD=$(jq -n \
+          --arg username "${{ inputs.username }}" \
+          --arg avatar_url "${{ inputs.avatar_url }}" \
+          --arg title "${{ inputs.title }}" \
+          --arg description "${{ inputs.description }}" \
+          --argjson color "${{ inputs.color }}" \
+          --argjson fields '${{ inputs.fields }}' \
+          --arg timestamp "$TIMESTAMP" \
+          --argjson add_timestamp "${{ inputs.timestamp == 'true' }}" \
+          '{
+            username: $username,
+            avatar_url: $avatar_url,
+            embeds: [{
+              title: $title,
+              description: $description,
+              color: $color,
+              fields: $fields
+            } + (if $add_timestamp then {timestamp: $timestamp} else {} end)]
+          }')
+
+        curl -sS -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          "${{ inputs.webhook_url }}"

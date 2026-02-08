@@ -1,0 +1,256 @@
+name: Rollback
+
+# Emergency rollback workflow
+#
+# Reverts npm + Docker to a previous known-good version.
+# Does NOT revert git — the bad commits stay in history.
+# Create a hotfix branch to fix forward after rolling back.
+#
+# What it does:
+#   1. Re-tags the previous version as @latest / :latest on npm + Docker
+#   2. Creates a GitHub release noting the rollback
+#   3. Notifies Discord
+#
+# What it does NOT do:
+#   - Revert git commits (fix forward instead)
+#   - Remove the bad version from npm (use `npm unpublish` manually if needed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_to:
+        description: "Version to roll back to (e.g. 2026.2.5)"
+        required: true
+        type: string
+      reason:
+        description: "Reason for rollback"
+        required: true
+        type: string
+      rollback_npm:
+        description: "Roll back npm dist-tag"
+        required: false
+        type: boolean
+        default: true
+      rollback_docker:
+        description: "Roll back Docker :latest tag"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: rollback
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Validate the target version exists
+  validate:
+    name: Validate Target Version
+    runs-on: ubuntu-latest
+    outputs:
+      tag_exists: ${{ steps.check.outputs.tag_exists }}
+      npm_exists: ${{ steps.check.outputs.npm_exists }}
+      docker_exists: ${{ steps.check.outputs.docker_exists }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version
+        id: check
+        run: |
+          VERSION="${{ inputs.rollback_to }}"
+
+          # Check git tag
+          if git tag -l "v${VERSION}" | grep -q .; then
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Git tag v${VERSION} exists"
+          else
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+            echo "❌ Git tag v${VERSION} not found"
+          fi
+
+          # Check npm
+          if npm view "openclaw@${VERSION}" version 2>/dev/null | grep -q "${VERSION}"; then
+            echo "npm_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ npm version ${VERSION} exists"
+          else
+            echo "npm_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ npm version ${VERSION} not found (npm rollback will be skipped)"
+          fi
+
+          # Check Docker
+          if docker manifest inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}" >/dev/null 2>&1; then
+            echo "docker_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Docker image ${VERSION} exists"
+          else
+            echo "docker_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Docker image ${VERSION} not found (Docker rollback will be skipped)"
+          fi
+
+      - name: Fail if tag doesn't exist
+        if: steps.check.outputs.tag_exists != 'true'
+        run: |
+          echo "::error::Version v${{ inputs.rollback_to }} does not exist as a git tag"
+          exit 1
+
+  # Roll back npm dist-tag
+  rollback-npm:
+    name: Rollback npm
+    needs: validate
+    if: ${{ inputs.rollback_npm && needs.validate.outputs.npm_exists == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.rollback.outputs.status }}
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Roll back npm @latest tag
+        id: rollback
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ inputs.rollback_to }}"
+
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN not set, skipping npm rollback"
+            echo "status=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Move the @latest dist-tag to the rollback version
+          if npm dist-tag add "openclaw@${VERSION}" latest; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ npm @latest now points to ${VERSION}"
+
+            # Show current dist-tags for verification
+            npm dist-tag ls openclaw
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "::error::Failed to update npm dist-tag"
+            exit 1
+          fi
+
+  # Roll back Docker :latest tag
+  rollback-docker:
+    name: Rollback Docker
+    needs: validate
+    if: ${{ inputs.rollback_docker && needs.validate.outputs.docker_exists == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      status: ${{ steps.rollback.outputs.status }}
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Roll back Docker :latest tag
+        id: rollback
+        run: |
+          VERSION="${{ inputs.rollback_to }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          # Re-tag the rollback version as :latest
+          if docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${VERSION}"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ Docker :latest now points to ${VERSION}"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "::error::Failed to retag Docker image"
+            exit 1
+          fi
+
+  # Create rollback release note
+  create-rollback-release:
+    name: Create Rollback Release
+    needs: [validate, rollback-npm, rollback-docker]
+    if: "!cancelled() && needs.validate.result == 'success'"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get current version
+        id: current
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "version=$CURRENT" >> $GITHUB_OUTPUT
+
+      - name: Create rollback release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.rollback_to }}
+          name: "⚠️ Rollback to openclaw ${{ inputs.rollback_to }}"
+          body: |
+            ## ⚠️ Rollback
+
+            | Property | Value |
+            |----------|-------|
+            | Rolled back from | `${{ steps.current.outputs.version }}` |
+            | Rolled back to | `${{ inputs.rollback_to }}` |
+            | Initiated by | @${{ github.actor }} |
+
+            ### Reason
+
+            ${{ inputs.reason }}
+
+            ### Rollback Status
+
+            | Target | Status |
+            |--------|--------|
+            | npm @latest | ${{ needs.rollback-npm.outputs.status || 'skipped' }} |
+            | Docker :latest | ${{ needs.rollback-docker.outputs.status || 'skipped' }} |
+
+            ### Next Steps
+
+            1. Investigate the issue in the rolled-back version
+            2. Create a `hotfix/*` branch with the fix
+            3. Merge via the hotfix workflow to restore forward progress
+
+            ---
+            *This release was created by the rollback workflow.*
+          make_latest: false
+          prerelease: false
+
+  # Notify
+  notify:
+    name: Discord Notification
+    needs: [validate, rollback-npm, rollback-docker, create-rollback-release]
+    if: "!cancelled() && needs.validate.result == 'success'"
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "⚠️ ROLLBACK: openclaw → v${{ inputs.rollback_to }}"
+          description: |
+            **Reason**: ${{ inputs.reason }}
+            **Initiated by**: @${{ github.actor }}
+            **npm**: ${{ needs.rollback-npm.outputs.status || 'skipped' }}
+            **Docker**: ${{ needs.rollback-docker.outputs.status || 'skipped' }}
+          color: "15105570"

@@ -1,0 +1,349 @@
+name: Deployment Strategy
+
+# Reusable deployment workflow for staged releases
+#
+# Deployment targets by stage:
+# - alpha: npm @alpha tag only
+# - beta: npm @beta tag + Docker (ghcr.io) beta tag
+# - stable: npm @latest + Docker latest + multi-arch manifest
+
+on:
+  workflow_call:
+    inputs:
+      deployment_stage:
+        description: "Deployment stage: alpha, beta, or stable"
+        required: true
+        type: string
+      app_version:
+        description: "Version of the application to deploy"
+        required: true
+        type: string
+      source_branch:
+        description: "Source branch for deployment"
+        required: true
+        type: string
+    outputs:
+      deployment_status:
+        description: "Status of the deployment"
+        value: ${{ jobs.deploy-summary.outputs.status }}
+      npm_url:
+        description: "npm package URL"
+        value: ${{ jobs.deploy-summary.outputs.npm_url }}
+      docker_url:
+        description: "Docker image URL"
+        value: ${{ jobs.deploy-summary.outputs.docker_url }}
+    secrets:
+      NPM_TOKEN:
+        required: false
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # npm publish (all stages)
+  npm-publish:
+    name: npm Publish (${{ inputs.deployment_stage }})
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      status: ${{ steps.publish.outputs.status }}
+      npm_url: ${{ steps.publish.outputs.npm_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+          submodules: false
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Build
+        run: pnpm build
+
+      - name: Determine npm tag
+        id: npm-tag
+        run: |
+          case "${{ inputs.deployment_stage }}" in
+            alpha)
+              echo "tag=alpha" >> $GITHUB_OUTPUT
+              ;;
+            beta)
+              echo "tag=beta" >> $GITHUB_OUTPUT
+              ;;
+            stable)
+              echo "tag=latest" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Publish to npm
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN not set, skipping publish"
+            echo "status=skipped" >> $GITHUB_OUTPUT
+            echo "npm_url=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          NPM_TAG="${{ steps.npm-tag.outputs.tag }}"
+
+          if npm publish --tag "$NPM_TAG" --access public; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "npm_url=https://www.npmjs.com/package/openclaw/v/${{ inputs.app_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "npm_url=" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+  # Docker build - amd64 (beta+ only)
+  docker-amd64:
+    name: Docker amd64 (${{ inputs.deployment_stage }})
+    if: inputs.deployment_stage != 'alpha'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.app_version }}-amd64
+            type=raw,value=${{ inputs.deployment_stage }}-amd64
+
+      - name: Build and push amd64
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          push: true
+
+  # Docker build - arm64 (beta+ only)
+  docker-arm64:
+    name: Docker arm64 (${{ inputs.deployment_stage }})
+    if: inputs.deployment_stage != 'alpha'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.app_version }}-arm64
+            type=raw,value=${{ inputs.deployment_stage }}-arm64
+
+      - name: Build and push arm64
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          push: true
+
+  # Create multi-arch manifest (beta+ only)
+  docker-manifest:
+    name: Docker Manifest (${{ inputs.deployment_stage }})
+    if: inputs.deployment_stage != 'alpha'
+    runs-on: ubuntu-latest
+    needs: [docker-amd64, docker-arm64]
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      docker_url: ${{ steps.manifest.outputs.docker_url }}
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        id: manifest
+        run: |
+          STAGE="${{ inputs.deployment_stage }}"
+          VERSION="${{ inputs.app_version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          # Create version manifest
+          docker buildx imagetools create \
+            -t "${IMAGE}:${VERSION}" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+
+          # Create stage manifest (beta or latest)
+          if [ "$STAGE" = "stable" ]; then
+            docker buildx imagetools create \
+              -t "${IMAGE}:latest" \
+              "${IMAGE}:${VERSION}-amd64" \
+              "${IMAGE}:${VERSION}-arm64"
+            echo "docker_url=${IMAGE}:latest" >> $GITHUB_OUTPUT
+          else
+            docker buildx imagetools create \
+              -t "${IMAGE}:${STAGE}" \
+              "${IMAGE}:${VERSION}-amd64" \
+              "${IMAGE}:${VERSION}-arm64"
+            echo "docker_url=${IMAGE}:${STAGE}" >> $GITHUB_OUTPUT
+          fi
+
+  # Deployment summary
+  deploy-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [npm-publish, docker-manifest]
+    if: "!cancelled()"
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+      npm_url: ${{ steps.summary.outputs.npm_url }}
+      docker_url: ${{ steps.summary.outputs.docker_url }}
+    steps:
+      - name: Summarize deployment
+        id: summary
+        run: |
+          NPM_STATUS="${{ needs.npm-publish.outputs.status || 'skipped' }}"
+          NPM_URL="${{ needs.npm-publish.outputs.npm_url }}"
+          DOCKER_URL="${{ needs.docker-manifest.outputs.docker_url || '' }}"
+
+          echo "npm_url=$NPM_URL" >> $GITHUB_OUTPUT
+          echo "docker_url=$DOCKER_URL" >> $GITHUB_OUTPUT
+
+          if [ "$NPM_STATUS" = "success" ] || [ "$NPM_STATUS" = "skipped" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+          # Generate summary
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | ${{ inputs.deployment_stage }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ inputs.app_version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| npm | $NPM_STATUS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker | ${{ needs.docker-manifest.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # Discord notification
+  notify:
+    name: Discord Notification
+    needs: deploy-summary
+    if: "!cancelled()"
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord success notification
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' && needs.deploy-summary.outputs.status == 'success' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "🚀 Deployed: ${{ inputs.deployment_stage }} v${{ inputs.app_version }}"
+          description: |
+            **npm**: ${{ needs.deploy-summary.outputs.npm_url || 'skipped' }}
+            **Docker**: ${{ needs.deploy-summary.outputs.docker_url || 'skipped' }}
+          color: "3066993"
+
+      - name: Discord failure notification
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' && needs.deploy-summary.outputs.status != 'success' }}
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "❌ Deployment Failed: ${{ inputs.deployment_stage }}"
+          description: |
+            **Version**: ${{ inputs.app_version }}
+            [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          color: "15158332"

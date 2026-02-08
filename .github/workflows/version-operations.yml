@@ -1,0 +1,188 @@
+name: Version Operations
+
+# Version bump workflow for openclaw
+#
+# Version format: YYYY.M.D (stable) or YYYY.M.D-{alpha,beta}.N (prerelease)
+# Examples: 2026.2.6, 2026.2.6-alpha.1, 2026.2.6-beta.3
+
+on:
+  workflow_call:
+    inputs:
+      release_type:
+        description: "Release type: alpha, beta, or stable"
+        required: true
+        type: string
+      source_branch:
+        description: "Source branch"
+        required: true
+        type: string
+      should_bump:
+        description: "Whether to bump the version"
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: "Perform a dry run without committing"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      current_version:
+        description: "Current version before bump"
+        value: ${{ jobs.version.outputs.current_version }}
+      new_version:
+        description: "New version after bump"
+        value: ${{ jobs.version.outputs.new_version }}
+      version_tag:
+        description: "Version tag (with v prefix)"
+        value: ${{ jobs.version.outputs.version_tag }}
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Version Operations
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.get-version.outputs.current }}
+      new_version: ${{ steps.bump-version.outputs.new }}
+      version_tag: ${{ steps.bump-version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Get current version
+        id: get-version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Calculate new version
+        id: bump-version
+        run: |
+          CURRENT="${{ steps.get-version.outputs.current }}"
+          RELEASE_TYPE="${{ inputs.release_type }}"
+
+          # Get current date components
+          YEAR=$(date +%Y)
+          MONTH=$(date +%-m)
+          DAY=$(date +%-d)
+          TODAY="${YEAR}.${MONTH}.${DAY}"
+
+          # Parse current version to check if it's today + same type
+          # Patterns: YYYY.M.D or YYYY.M.D-type.N
+          if [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([a-z]+)\.([0-9]+))?$ ]]; then
+            CURR_DATE="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            CURR_TYPE="${BASH_REMATCH[5]}"
+            CURR_NUM="${BASH_REMATCH[6]:-0}"
+          else
+            CURR_DATE=""
+            CURR_TYPE=""
+            CURR_NUM=0
+          fi
+
+          case "$RELEASE_TYPE" in
+            alpha)
+              if [ "$CURR_DATE" = "$TODAY" ] && [ "$CURR_TYPE" = "alpha" ]; then
+                # Same day, same type - increment prerelease number
+                NEW_NUM=$((CURR_NUM + 1))
+              else
+                # New day or different type - start at 1
+                NEW_NUM=1
+              fi
+              NEW_VERSION="${TODAY}-alpha.${NEW_NUM}"
+              ;;
+            beta)
+              if [ "$CURR_DATE" = "$TODAY" ] && [ "$CURR_TYPE" = "beta" ]; then
+                NEW_NUM=$((CURR_NUM + 1))
+              else
+                NEW_NUM=1
+              fi
+              NEW_VERSION="${TODAY}-beta.${NEW_NUM}"
+              ;;
+            stable)
+              # Stable releases use date; append counter if tag already exists
+              if git tag -l "v${TODAY}" | grep -q .; then
+                # Tag exists, find next available counter
+                COUNTER=1
+                while git tag -l "v${TODAY}.${COUNTER}" | grep -q .; do
+                  COUNTER=$((COUNTER + 1))
+                done
+                NEW_VERSION="${TODAY}.${COUNTER}"
+              else
+                NEW_VERSION="${TODAY}"
+              fi
+              ;;
+            *)
+              echo "Unknown release type: $RELEASE_TYPE"
+              exit 1
+              ;;
+          esac
+
+          echo "new=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Update package.json
+        if: ${{ inputs.should_bump && !inputs.dry_run }}
+        run: |
+          NEW_VERSION="${{ steps.bump-version.outputs.new }}"
+
+          # Update package.json version
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$NEW_VERSION';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          echo "Updated package.json to version $NEW_VERSION"
+
+      - name: Sync extension versions
+        if: ${{ inputs.should_bump && !inputs.dry_run }}
+        run: |
+          # Run plugins:sync if available (aligns extension package versions)
+          if npm run --silent plugins:sync 2>/dev/null; then
+            echo "Extension versions synced"
+          else
+            echo "plugins:sync not available, skipping"
+          fi
+
+      - name: Commit version bump
+        if: ${{ inputs.should_bump && !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          NEW_VERSION="${{ steps.bump-version.outputs.new }}"
+
+          # Stage all version-related changes
+          git add package.json
+          git add extensions/*/package.json 2>/dev/null || true
+
+          # Check if there are changes to commit
+          if git diff --cached --quiet; then
+            echo "No version changes to commit"
+          else
+            git commit -m "chore: bump version to $NEW_VERSION"
+            git push origin ${{ inputs.source_branch }}
+          fi
+
+      - name: Create tag
+        if: ${{ inputs.should_bump && !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.bump-version.outputs.tag }}"
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

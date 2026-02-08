@@ -1,0 +1,265 @@
+name: Release Orchestrator
+
+# Orchestrates staged releases for openclaw
+#
+# This workflow is called when code is promoted to main (stable release)
+# or can be triggered manually for alpha/beta releases from their branches.
+#
+# Flow: version → changelog → test → deploy → release
+
+# NOTE: push-to-main trigger disabled until staging pipeline is activated.
+# To enable: uncomment the push block below.
+#   push:
+#     branches:
+#       - main
+#     paths-ignore:
+#       - "docs/**"
+#       - "*.md"
+#       - ".github/workflows/docs-*.yml"
+on:
+  workflow_call:
+    inputs:
+      release_type:
+        description: "Release type: alpha, beta, or stable"
+        required: true
+        type: string
+      source_branch:
+        description: "Source branch for the release"
+        required: true
+        type: string
+      dry_run:
+        description: "Perform a dry run without publishing"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "The released version"
+        value: ${{ jobs.version.outputs.new_version }}
+      release_url:
+        description: "URL to the GitHub release"
+        value: ${{ jobs.release.outputs.release_url }}
+      status:
+        description: "Release status"
+        value: ${{ jobs.release.outputs.status }}
+    secrets:
+      NPM_TOKEN:
+        required: false
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # Determine release parameters (push vs workflow_call)
+  determine-params:
+    name: Determine Parameters
+    runs-on: ubuntu-latest
+    outputs:
+      release_type: ${{ steps.params.outputs.release_type }}
+      source_branch: ${{ steps.params.outputs.source_branch }}
+      dry_run: ${{ steps.params.outputs.dry_run }}
+    steps:
+      - name: Set parameters
+        id: params
+        run: |
+          # When triggered by push to main, use stable defaults
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "release_type=stable" >> $GITHUB_OUTPUT
+            echo "source_branch=main" >> $GITHUB_OUTPUT
+            echo "dry_run=false" >> $GITHUB_OUTPUT
+          else
+            # workflow_call - use provided inputs
+            echo "release_type=${{ inputs.release_type }}" >> $GITHUB_OUTPUT
+            echo "source_branch=${{ inputs.source_branch }}" >> $GITHUB_OUTPUT
+            echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
+          fi
+
+  # Get commits since last release
+  get-commits:
+    name: Get Commits
+    needs: determine-params
+    runs-on: ubuntu-latest
+    outputs:
+      commits: ${{ steps.commits.outputs.commits }}
+      has_changes: ${{ steps.commits.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.determine-params.outputs.source_branch }}
+
+      - name: Get commits since last tag
+        id: commits
+        run: |
+          # Get latest tag for this release type
+          case "${{ needs.determine-params.outputs.release_type }}" in
+            alpha)
+              PATTERN="v*-alpha.*"
+              ;;
+            beta)
+              PATTERN="v*-beta.*"
+              ;;
+            stable)
+              PATTERN="v[0-9]*.[0-9]*.[0-9]*"
+              ;;
+          esac
+
+          # Filter out prerelease tags for stable (glob * matches -alpha/-beta suffixes)
+          if [ "${{ needs.determine-params.outputs.release_type }}" = "stable" ]; then
+            LATEST_TAG=$(git tag -l "$PATTERN" --sort=-v:refname | grep -v -E '-(alpha|beta)\.' | head -1)
+          else
+            LATEST_TAG=$(git tag -l "$PATTERN" --sort=-v:refname | head -1)
+          fi
+
+          if [ -z "$LATEST_TAG" ]; then
+            # No previous tag, use all commits
+            LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
+            echo "No previous ${{ needs.determine-params.outputs.release_type }} tag found, using initial commit"
+          else
+            echo "Latest ${{ needs.determine-params.outputs.release_type }} tag: $LATEST_TAG"
+          fi
+
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --format="- %s (%h)")
+
+          if [ -z "$COMMITS" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "commits=" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            DELIM="COMMITS_$(openssl rand -hex 16)"
+            echo "commits<<${DELIM}" >> $GITHUB_OUTPUT
+            echo "$COMMITS" >> $GITHUB_OUTPUT
+            echo "${DELIM}" >> $GITHUB_OUTPUT
+          fi
+
+  # Version operations
+  version:
+    name: Version
+    needs: [determine-params, get-commits]
+    if: needs.get-commits.outputs.has_changes == 'true'
+    uses: ./.github/workflows/version-operations.yml
+    with:
+      release_type: ${{ needs.determine-params.outputs.release_type }}
+      source_branch: ${{ needs.determine-params.outputs.source_branch }}
+      should_bump: true
+      dry_run: ${{ needs.determine-params.outputs.dry_run }}
+
+  # Generate changelog
+  changelog:
+    name: Changelog
+    needs: [determine-params, get-commits, version]
+    if: needs.get-commits.outputs.has_changes == 'true'
+    uses: ./.github/workflows/generate-changelog.yml
+    with:
+      version: ${{ needs.version.outputs.new_version }}
+      release_type: ${{ needs.determine-params.outputs.release_type }}
+
+  # Run full test suite for the release type
+  test:
+    name: Test
+    needs: [determine-params, get-commits, version]
+    if: needs.get-commits.outputs.has_changes == 'true'
+    uses: ./.github/workflows/testing-strategy.yml
+    with:
+      test_stage: ${{ needs.determine-params.outputs.release_type }}
+      app_version: ${{ needs.version.outputs.new_version }}
+    secrets: inherit
+
+  # Deploy (npm + Docker)
+  deploy:
+    name: Deploy
+    needs: [determine-params, version, test]
+    if: ${{ needs.determine-params.outputs.dry_run != 'true' && needs.test.outputs.test_status == 'passed' }}
+    uses: ./.github/workflows/deployment-strategy.yml
+    with:
+      deployment_stage: ${{ needs.determine-params.outputs.release_type }}
+      app_version: ${{ needs.version.outputs.new_version }}
+      source_branch: ${{ needs.determine-params.outputs.source_branch }}
+    secrets: inherit
+
+  # Create GitHub release
+  release:
+    name: GitHub Release
+    needs: [determine-params, version, changelog, deploy]
+    if: ${{ needs.determine-params.outputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_url: ${{ steps.create-release.outputs.html_url }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-params.outputs.source_branch }}
+
+      - name: Create GitHub Release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.new_version }}
+          name: openclaw ${{ needs.version.outputs.new_version }}
+          body: ${{ needs.changelog.outputs.changelog }}
+          prerelease: ${{ needs.determine-params.outputs.release_type != 'stable' }}
+          draft: false
+
+      - name: Set status
+        id: status
+        run: echo "status=success" >> $GITHUB_OUTPUT
+
+  # Notify on success
+  notify-success:
+    name: Notify Success
+    needs: [determine-params, version, release]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "🎉 Released: openclaw v${{ needs.version.outputs.new_version }}"
+          description: |
+            **Type**: ${{ needs.determine-params.outputs.release_type }}
+            **Release**: ${{ needs.release.outputs.release_url }}
+          color: "3066993"
+
+  # Notify on failure
+  notify-failure:
+    name: Notify Failure
+    needs: [determine-params, version, test, deploy, release]
+    if: |
+      !cancelled() &&
+      needs.version.result != 'skipped' &&
+      (needs.test.result == 'failure' || needs.deploy.result == 'failure' || needs.release.result == 'failure')
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        uses: ./.github/actions/discord-notify
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          title: "❌ Release Failed: ${{ needs.determine-params.outputs.release_type }}"
+          description: |
+            **Branch**: ${{ needs.determine-params.outputs.source_branch }}
+            **Tests**: ${{ needs.test.outputs.test_status }}
+            [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          color: "15158332"
