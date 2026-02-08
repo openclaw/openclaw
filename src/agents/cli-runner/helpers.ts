@@ -10,6 +10,7 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { runExec } from "../../process/exec.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { resolveAgentIdentityPrompt } from "../identity-prompt.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
@@ -231,10 +232,16 @@ export function buildSystemPrompt(params: {
     },
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const identity = resolveAgentIdentityPrompt({
+    config: params.config,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+  });
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    identity,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
@@ -516,7 +523,7 @@ export function buildCliArgs(params: {
   if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  if (params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
   if (!params.useResume && params.sessionId) {

@@ -478,6 +478,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/tagers: {}
+
   extensions/telegram:
     devDependencies:
       openclaw:

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { runCliAgent } from "./cli-runner.js";
-import { cleanupSuspendedCliProcesses } from "./cli-runner/helpers.js";
+import { buildCliArgs, cleanupSuspendedCliProcesses } from "./cli-runner/helpers.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const runExecMock = vi.fn();
@@ -222,5 +222,23 @@ describe("cleanupSuspendedCliProcesses", () => {
     const killCall = runExecMock.mock.calls[1] ?? [];
     expect(killCall[0]).toBe("kill");
     expect(killCall[1]).toEqual(["-9", "50", "51"]);
+  });
+});
+
+describe("buildCliArgs", () => {
+  it("keeps system prompt args on resume when provided", () => {
+    const args = buildCliArgs({
+      backend: { systemPromptArg: "--append-system-prompt" } as CliBackendConfig,
+      baseArgs: ["-p"],
+      modelId: "model",
+      sessionId: "session-1",
+      systemPrompt: "identity",
+      useResume: true,
+      promptArg: "hello",
+    });
+
+    const index = args.indexOf("--append-system-prompt");
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(args[index + 1]).toBe("identity");
   });
 });

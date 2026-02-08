@@ -24,6 +24,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentIdentityPrompt } from "../identity-prompt.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
@@ -332,6 +333,11 @@ export async function compactEmbeddedPiSessionDirect(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const identity = resolveAgentIdentityPrompt({
+      config: params.config,
+      agentId: sessionAgentId,
+      workspaceDir: effectiveWorkspace,
+    });
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -355,6 +361,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimezone,
       userTime,
       userTimeFormat,
+      identity,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });

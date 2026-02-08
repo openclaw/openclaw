@@ -31,6 +31,7 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { resolveAgentIdentityPrompt } from "../../identity-prompt.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -347,6 +348,11 @@ export async function runEmbeddedAttempt(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const identity = resolveAgentIdentityPrompt({
+      config: params.config,
+      agentId: sessionAgentId,
+      workspaceDir: effectiveWorkspace,
+    });
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -372,6 +378,7 @@ export async function runEmbeddedAttempt(
       userTimezone,
       userTime,
       userTimeFormat,
+      identity,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });

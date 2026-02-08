@@ -14,6 +14,20 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes agent identity when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      identity: { name: "Pulse", theme: "Electric" },
+    });
+
+    expect(prompt).toContain("You are Pulse");
+    expect(prompt).toContain("## Identity");
+    expect(prompt).toContain("Name: Pulse");
+    expect(prompt).toContain("Theme: Electric");
+    expect(prompt).toContain("Always identify as this persona");
+    expect(prompt).toContain("Do not claim to be a different assistant or model");
+  });
+
   it("omits owner section when numbers are missing", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

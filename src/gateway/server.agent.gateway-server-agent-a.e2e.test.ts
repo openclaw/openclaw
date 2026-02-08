@@ -286,6 +286,29 @@ describe("gateway server agent", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  test("agent.identity.get resolves default agent for global sessions", async () => {
+    testState.agentsConfig = {
+      list: [
+        {
+          id: "pulse",
+          default: true,
+          identity: { name: "Pulse", emoji: "P" },
+        },
+      ],
+    };
+
+    const res = await rpcReq<{ agentId?: string; name?: string; avatar?: string }>(
+      ws,
+      "agent.identity.get",
+      { sessionKey: "global" },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.agentId).toBe("pulse");
+    expect(res.payload?.name).toBe("Pulse");
+    expect(res.payload?.avatar).toBe("P");
+  });
+
   test("agent forwards accountId to agentCommand", async () => {
     setRegistry(defaultRegistry);
     testState.allowFrom = ["+1555"];

@@ -1,6 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
+import type { AgentIdentityPrompt } from "./identity-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -70,6 +71,42 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
     return [];
   }
   return ["## User Identity", ownerLine, ""];
+}
+
+function formatAgentIdentityLine(identity?: AgentIdentityPrompt | null): string {
+  if (!identity?.name) {
+    return "You are a personal assistant running inside OpenClaw.";
+  }
+  const emoji = identity.emoji ? ` ${identity.emoji}` : "";
+  return `You are ${identity.name}${emoji}, a personal assistant running inside OpenClaw.`;
+}
+
+function buildAgentIdentitySection(identity?: AgentIdentityPrompt | null): string[] {
+  if (!identity) {
+    return [];
+  }
+  const lines: string[] = ["## Identity", "Use the following identity at all times:"];
+  if (identity.name) {
+    lines.push(`- Name: ${identity.name}`);
+  }
+  if (identity.emoji) {
+    lines.push(`- Emoji: ${identity.emoji}`);
+  }
+  if (identity.theme) {
+    lines.push(`- Theme: ${identity.theme}`);
+  }
+  if (identity.creature) {
+    lines.push(`- Creature: ${identity.creature}`);
+  }
+  if (identity.vibe) {
+    lines.push(`- Vibe: ${identity.vibe}`);
+  }
+  lines.push(
+    "Always identify as this persona in replies.",
+    "Do not claim to be a different assistant or model (e.g., Claude/ChatGPT).",
+    "",
+  );
+  return lines;
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
@@ -166,6 +203,7 @@ export function buildAgentSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
+  identity?: AgentIdentityPrompt | null;
   ownerNumbers?: string[];
   reasoningTagHint?: boolean;
   toolNames?: string[];
@@ -360,6 +398,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
+  const agentIdentitySection = buildAgentIdentitySection(params.identity);
   const memorySection = buildMemorySection({
     isMinimal,
     availableTools,
@@ -374,12 +413,14 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return formatAgentIdentityLine(params.identity);
   }
 
+  const identityLine = formatAgentIdentityLine(params.identity);
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    identityLine,
     "",
+    ...agentIdentitySection,
     "## Tooling",
     "Tool availability (filtered by policy):",
     "Tool names are case-sensitive. Call tools exactly as listed.",
