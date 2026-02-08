@@ -224,17 +224,22 @@ Example config:
 
 Not yet supported.
 
-### Stub Providers
+### Not Yet Implemented
 
-The following providers are recognized in config, but not yet implemented:
+The following providers are recognized in config but **will fail at runtime** if you try to
+resolve secrets through them. They exist as placeholders for future implementation:
 
-- AWS
-- 1Password
-- Doppler
-- Bitwarden
-- Vault
+- AWS Secrets Manager (`aws`)
+- 1Password (`1password`)
+- Doppler (`doppler`)
+- Bitwarden (`bitwarden`)
+- HashiCorp Vault (`vault`)
 
-Contributions are welcome.
+Setting `secrets.provider` to one of these values will pass config validation, but any
+`$secret{...}` reference will throw an error during resolution. **Do not use these in
+production configs until they are implemented.**
+
+Contributions are welcome — see the stub files in `src/config/secrets/`.
 
 ## Sync vs Async
 

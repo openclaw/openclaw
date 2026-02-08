@@ -249,6 +249,20 @@ describe("resolveConfigSecrets", () => {
   });
 
   it("throws for keyring provider when secret not found", async () => {
+    const os = (await import("node:os")).platform();
+    // Skip on platforms where keyring isn't supported (e.g. Windows, CI containers)
+    if (os !== "darwin" && os !== "linux") {
+      return;
+    }
+    // On Linux, skip if secret-tool isn't installed
+    if (os === "linux") {
+      const { execSync } = await import("node:child_process");
+      try {
+        execSync("which secret-tool", { stdio: "ignore" });
+      } catch {
+        return; // secret-tool not available — skip test
+      }
+    }
     const config = {
       token: "$secret{nonexistent-test-secret-xyzzy}",
       secrets: { provider: "keyring" },
