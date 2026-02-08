@@ -115,9 +115,21 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
+function formatApprovalCommand(command: string): string {
+  if (!command.includes("\n") && !command.includes("`")) {
+    return `\`${command}\``;
+  }
+
+  let fence = "```";
+  while (command.includes(fence)) {
+    fence += "`";
+  }
+  return `${fence}\n${command}\n${fence}`;
+}
+
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
-  lines.push(`Command: ${request.request.command}`);
+  lines.push(`Command: ${formatApprovalCommand(request.request.command)}`);
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);
   }
