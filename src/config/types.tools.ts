@@ -417,6 +417,23 @@ export type ToolsConfig = {
       /** Enable broadcast action (default: true). */
       enabled?: boolean;
     };
+    /** Optional hard preflight gate for outbound actions (MVRSA-style). */
+    gate?: {
+      /** Enable outbound gate enforcement (default: false). */
+      enabled?: boolean;
+      /**
+       * Gate failure behavior.
+       * - fail-closed (default): block outbound action if gate cannot run
+       * - fail-open: allow outbound action when gate fails
+       */
+      mode?: "fail-closed" | "fail-open";
+      /** Command to execute as a JSON gate. Receives JSON on stdin, returns JSON on stdout. */
+      command?: string[];
+      /** Gate command timeout in ms (default: 1500). */
+      timeoutMs?: number;
+      /** Extra environment variables for the gate command. */
+      env?: Record<string, string>;
+    };
   };
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
