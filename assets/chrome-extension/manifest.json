@@ -10,7 +10,7 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["debugger", "tabs", "activeTab", "storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": ["http://*/*", "https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
     "default_title": "OpenClaw Browser Relay (click to attach/detach)",
