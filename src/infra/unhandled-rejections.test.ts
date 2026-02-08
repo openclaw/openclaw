@@ -80,6 +80,11 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it('returns true for TypeError with extended "fetch failed: <reason>" message (Node v25+)', () => {
+    const error = new TypeError("fetch failed: expect header not supported");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for fetch failed with network cause", () => {
     const cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
     const error = Object.assign(new TypeError("fetch failed"), { cause });
