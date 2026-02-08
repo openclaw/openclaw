@@ -28,4 +28,32 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
   });
+
+  it("preserves group ID case for Base64-encoded IDs", () => {
+    // Base64 is case-sensitive, so group IDs must preserve their original case
+    expect(
+      normalizeSignalMessagingTarget("group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY="),
+    ).toBe("group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY=");
+  });
+
+  it("preserves group ID case with signal: prefix", () => {
+    expect(
+      normalizeSignalMessagingTarget("signal:group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY="),
+    ).toBe("group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY=");
+  });
+
+  it("handles mixed-case group IDs correctly", () => {
+    expect(normalizeSignalMessagingTarget("GROUP:AbCdEfGhIjKlMnOp=")).toBe(
+      "group:AbCdEfGhIjKlMnOp=",
+    );
+  });
+
+  it("accepts group targets for target detection", () => {
+    expect(looksLikeSignalTargetId("group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY=")).toBe(
+      true,
+    );
+    expect(
+      looksLikeSignalTargetId("signal:group:VpVD1Z7py+k6DSC+oxEcDey5sndViJyJ9Ogi0kvgiLY="),
+    ).toBe(true);
+  });
 });
