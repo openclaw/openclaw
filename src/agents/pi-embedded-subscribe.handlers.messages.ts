@@ -235,13 +235,20 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  const previousCleanedText = ctx.state.lastStreamedAssistantCleaned ?? "";
+  const shouldEmitFinalUpdate =
+    (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) ||
+    (cleanedText && cleanedText !== previousCleanedText);
+  if (shouldEmitFinalUpdate) {
+    const deltaText = cleanedText.startsWith(previousCleanedText)
+      ? cleanedText.slice(previousCleanedText.length)
+      : cleanedText;
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: deltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
@@ -249,12 +256,13 @@ export function handleMessageEnd(
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: deltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     ctx.state.emittedAssistantUpdate = true;
   }
+  ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
@@ -368,5 +376,4 @@ export function handleMessageEnd(
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
 }

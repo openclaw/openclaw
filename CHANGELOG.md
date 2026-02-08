@@ -162,6 +162,7 @@ Docs: https://docs.openclaw.ai
 - Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed); completion prompt now handled by install/update.
 - TUI: block onboarding output while TUI is active and restore terminal state on exit.
+- TUI: emit final assistant event when reply tags hide stream. (#4495) Thanks @ukeate.
 - CLI/Zsh completion: cache scripts in state dir and escape option descriptions to avoid invalid option errors.
 - fix(ui): resolve Control UI asset path correctly.
 - fix(ui): refresh agent files after external edits.

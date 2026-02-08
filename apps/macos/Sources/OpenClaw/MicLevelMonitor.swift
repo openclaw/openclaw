@@ -64,8 +64,7 @@ actor MicLevelMonitor {
         }
         let rms = sqrt(sum / Float(frameCount) + 1e-12)
         let db = 20 * log10(Double(rms))
-        let normalized = max(0, min(1, (db + 50) / 50))
-        return normalized
+        return max(0, min(1, (db + 50) / 50))
     }
 }
 
