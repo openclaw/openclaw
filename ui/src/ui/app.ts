@@ -136,6 +136,7 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatManualRefreshInFlight = false;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -395,11 +396,12 @@ export class OpenClawApp extends LitElement {
     resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
   }
 
-  scrollToBottom() {
+  scrollToBottom(opts?: { smooth?: boolean }) {
     resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
     scheduleChatScrollInternal(
       this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
       true,
+      Boolean(opts?.smooth),
     );
   }
 

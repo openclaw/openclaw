@@ -126,9 +126,23 @@ export function renderChatControls(state: AppViewState) {
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
-        @click=${() => {
-          (state as unknown as OpenClawApp).resetToolStream();
-          void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
+        @click=${async () => {
+          const app = state as unknown as OpenClawApp;
+          app.chatManualRefreshInFlight = true;
+          app.chatNewMessagesBelow = false;
+          await app.updateComplete;
+          app.resetToolStream();
+          try {
+            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+              scheduleScroll: false,
+            });
+            app.scrollToBottom({ smooth: true });
+          } finally {
+            requestAnimationFrame(() => {
+              app.chatManualRefreshInFlight = false;
+              app.chatNewMessagesBelow = false;
+            });
+          }
         }}
         title="Refresh chat data"
       >
