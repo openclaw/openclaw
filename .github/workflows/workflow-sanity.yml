@@ -9,6 +9,8 @@ concurrency:
   group: workflow-sanity-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+permissions: read-all
+
 jobs:
   no-tabs:
     runs-on: ubuntu-latest
