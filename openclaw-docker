@@ -1,0 +1,42 @@
+#!/bin/bash
+# OpenClaw CLI helper scripts for Docker
+
+COMPOSE_FILE="/Users/manojmalviya/Documents/projects/openclaw/docker-compose.yml"
+GATEWAY_CONTAINER="openclaw-openclaw-gateway-1"
+
+# Check if gateway container is running (for exec commands)
+is_gateway_running() {
+    docker ps --format '{{.Names}}' | grep -q "^${GATEWAY_CONTAINER}$"
+}
+
+case "$1" in
+  plugin-install)
+    echo "Installing plugin: $2"
+    docker compose -f "$COMPOSE_FILE" run --rm openclaw-cli plugins install "$2"
+    echo "Restarting gateway..."
+    docker compose -f "$COMPOSE_FILE" restart openclaw-gateway
+    ;;
+  plugin-remove)
+    echo "Removing plugin: $2"
+    docker compose -f "$COMPOSE_FILE" run --rm openclaw-cli plugins uninstall "$2"
+    docker compose -f "$COMPOSE_FILE" restart openclaw-gateway
+    ;;
+  plugin-list)
+    # Use exec for faster read-only operation
+    if is_gateway_running; then
+        docker exec "$GATEWAY_CONTAINER" node dist/index.js plugins list
+    else
+        echo "Error: Gateway container is not running. Start it with: docker compose up -d"
+        exit 1
+    fi
+    ;;
+  *)
+    # Default: pass through to gateway container
+    if is_gateway_running; then
+        docker exec -it "$GATEWAY_CONTAINER" node dist/index.js "$@"
+    else
+        echo "Error: Gateway container is not running. Start it with: docker compose up -d"
+        exit 1
+    fi
+    ;;
+esac
