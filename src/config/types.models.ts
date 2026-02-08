@@ -50,6 +50,7 @@ export type BedrockDiscoveryConfig = {
   refreshInterval?: number;
   defaultContextWindow?: number;
   defaultMaxTokens?: number;
+  includeInferenceProfiles?: boolean;
 };
 
 export type ModelsConfig = {

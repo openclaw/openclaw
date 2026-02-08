@@ -67,6 +67,7 @@ export const BedrockDiscoverySchema = z
     refreshInterval: z.number().int().nonnegative().optional(),
     defaultContextWindow: z.number().int().positive().optional(),
     defaultMaxTokens: z.number().int().positive().optional(),
+    includeInferenceProfiles: z.boolean().optional(),
   })
   .strict()
   .optional();
