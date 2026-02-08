@@ -85,7 +85,7 @@ export function renderSimplexCard(params: {
         <button
           class="btn primary"
           ?disabled=${busyCreate}
-          @click=${() => props.onSimplexInviteCreate(accountId, "connect")}
+          @click=${() => props.onSimplexOneTimeLinkCreate(accountId)}
         >
           ${busyCreate ? "Working..." : "Create 1-time Link"}
         </button>

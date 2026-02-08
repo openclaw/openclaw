@@ -1,4 +1,3 @@
-import type { SimplexInviteMode } from "../app-channels.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
@@ -51,7 +50,7 @@ export type ChannelsProps = {
   onNostrProfileSave: () => void;
   onNostrProfileImport: () => void;
   onNostrProfileToggleAdvanced: () => void;
-  onSimplexInviteCreate: (accountId: string, mode: SimplexInviteMode) => void;
+  onSimplexOneTimeLinkCreate: (accountId: string) => void;
   onSimplexInviteRevoke: (accountId: string) => void;
   onSimplexAddressShowOrCreate: (accountId: string) => void;
 };

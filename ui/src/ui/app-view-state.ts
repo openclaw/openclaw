@@ -1,4 +1,3 @@
-import type { SimplexInviteMode } from "./app-channels.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus } from "./app-tool-stream.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -244,7 +243,7 @@ export type AppViewState = {
   handleNostrProfileSave: () => Promise<void>;
   handleNostrProfileImport: () => Promise<void>;
   handleNostrProfileToggleAdvanced: () => void;
-  handleSimplexInviteCreate: (accountId: string, mode: SimplexInviteMode) => Promise<void>;
+  handleSimplexOneTimeLinkCreate: (accountId: string) => Promise<void>;
   handleSimplexInviteRevoke: (accountId: string) => Promise<void>;
   handleSimplexAddressShowOrCreate: (accountId: string) => Promise<void>;
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;

@@ -9,8 +9,6 @@ import { loadConfig, saveConfig } from "./controllers/config.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
-export type SimplexInviteMode = "connect" | "address";
-
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
   await loadChannels(host, true);
@@ -280,10 +278,10 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
   }
 }
 
-export async function handleSimplexInviteCreate(
+async function createSimplexInvite(
   host: OpenClawApp,
   accountId: string,
-  mode: SimplexInviteMode,
+  mode: "connect" | "address",
 ) {
   if (!host.client || !host.connected) {
     return;
@@ -313,7 +311,7 @@ export async function handleSimplexInviteCreate(
   try {
     const result = await host.client.request<{
       accountId?: string;
-      mode?: SimplexInviteMode;
+      mode?: "connect" | "address";
       link?: string | null;
       qrDataUrl?: string | null;
     }>("simplex.invite.create", {
@@ -368,6 +366,10 @@ export async function handleSimplexInviteCreate(
   }
 }
 
+export async function handleSimplexOneTimeLinkCreate(host: OpenClawApp, accountId: string) {
+  await createSimplexInvite(host, accountId, "connect");
+}
+
 async function fetchSimplexInviteList(host: OpenClawApp, accountId: string) {
   const result = await host.client?.request<{
     accountId?: string;
@@ -413,7 +415,7 @@ export async function handleSimplexAddressShowOrCreate(host: OpenClawApp, accoun
   } catch {
     // Fall through to create path.
   }
-  await handleSimplexInviteCreate(host, accountId, "address");
+  await createSimplexInvite(host, accountId, "address");
 }
 
 export async function handleSimplexInviteRevoke(host: OpenClawApp, accountId: string) {
