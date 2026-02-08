@@ -172,6 +172,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const model = ctx.model;
     if (!model) {
+      // getModel is initialized on the extensionRunner after session creation
+      // (see attempt.ts and compact.ts). If ctx.model is still undefined, return
+      // the fallback summary with tool failures and file ops rather than bypassing
+      // the extension entirely.
       return {
         compaction: {
           summary: fallbackSummary,
@@ -184,6 +188,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
+      // Return fallback summary with tool failures and file ops rather than
+      // bypassing the extension.
       return {
         compaction: {
           summary: fallbackSummary,

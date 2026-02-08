@@ -492,6 +492,17 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+
+      // Initialize getModel on extensionRunner so extensions (e.g. compaction-safeguard)
+      // can access ctx.model. Without this, ctx.model resolves to undefined in embedded
+      // runner mode because extensionRunner.initialize() is not called.
+      const sessionWithRunner = activeSession as unknown as {
+        _extensionRunner?: { getModel?: () => typeof activeSession.model };
+      };
+      if (sessionWithRunner._extensionRunner) {
+        sessionWithRunner._extensionRunner.getModel = () => activeSession.model;
+      }
+
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,

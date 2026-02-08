@@ -413,6 +413,16 @@ export async function compactEmbeddedPiSessionDirect(
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
 
+      // Initialize getModel on extensionRunner so extensions (e.g. compaction-safeguard)
+      // can access ctx.model. Without this, ctx.model resolves to undefined in embedded
+      // runner mode because extensionRunner.initialize() is not called.
+      const sessionWithRunner = session as unknown as {
+        _extensionRunner?: { getModel?: () => typeof session.model };
+      };
+      if (sessionWithRunner._extensionRunner) {
+        sessionWithRunner._extensionRunner.getModel = () => session.model;
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
