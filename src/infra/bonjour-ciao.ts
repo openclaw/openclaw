@@ -3,9 +3,15 @@ import { formatBonjourError } from "./bonjour-errors.js";
 
 export function ignoreCiaoCancellationRejection(reason: unknown): boolean {
   const message = formatBonjourError(reason).toUpperCase();
-  if (!message.includes("CIAO ANNOUNCEMENT CANCELLED")) {
-    return false;
+  // Ignore ciao cancellation rejections (normal cleanup)
+  if (message.includes("CIAO ANNOUNCEMENT CANCELLED")) {
+    logDebug(`bonjour: ignoring unhandled ciao rejection: ${formatBonjourError(reason)}`);
+    return true;
   }
-  logDebug(`bonjour: ignoring unhandled ciao rejection: ${formatBonjourError(reason)}`);
-  return true;
+  // Ignore socket errors from mDNS announcements (non-fatal, can happen due to network issues)
+  if (message.includes("ANNOUNCEMENT FAILED") && message.includes("SOCKET ERRORS")) {
+    logDebug(`bonjour: ignoring mDNS socket error: ${formatBonjourError(reason)}`);
+    return true;
+  }
+  return false;
 }
