@@ -330,8 +330,11 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.imessage": "iMessage",
   "channels.bluebubbles": "BlueBubbles",
   "channels.msteams": "MS Teams",
+  "channels.simplex": "SimpleX",
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
+  "channels.simplex.dmPolicy": "SimpleX DM Policy",
+  "channels.simplex.accounts.*.dmPolicy": "SimpleX DM Policy",
   "channels.telegram.streamMode": "Telegram Draft Stream Mode",
   "channels.telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
   "channels.telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
@@ -715,6 +718,10 @@ const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.simplex.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.simplex.allowFrom=["*"].',
+  "channels.simplex.accounts.*.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.simplex.allowFrom=["*"].',
   "channels.telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
   "channels.telegram.draftChunk.minChars":

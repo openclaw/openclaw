@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/simplex",
+  "version": "2026.2.1",
+  "description": "OpenClaw SimpleX channel plugin",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "simplex",
+      "label": "SimpleX",
+      "selectionLabel": "SimpleX (CLI)",
+      "docsPath": "/channels/simplex",
+      "docsLabel": "simplex",
+      "blurb": "SimpleX Chat over CLI WebSocket API.",
+      "order": 95,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/simplex",
+      "localPath": "extensions/simplex",
+      "defaultChoice": "npm"
+    }
+  }
+}
