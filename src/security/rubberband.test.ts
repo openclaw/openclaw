@@ -44,6 +44,34 @@ describe("rubberband", () => {
     });
   });
 
+  describe("workspace path exclusions", () => {
+    it("should NOT flag mv within .openclaw/workspace/", () => {
+      const command =
+        "mv /Users/jeff/.openclaw/workspace/projects/old-name /Users/jeff/.openclaw/workspace/projects/new-name";
+      const result = analyzeCommand(command);
+      expect(result.disposition).not.toBe("BLOCK");
+    });
+
+    it("should NOT flag cp within .openclaw/workspace/", () => {
+      const command =
+        "cp -r /Users/jeff/.openclaw/workspace/projects/foo /Users/jeff/.openclaw/workspace/projects/bar";
+      const result = analyzeCommand(command);
+      expect(result.disposition).not.toBe("BLOCK");
+    });
+
+    it("should still flag writes to .openclaw/config paths", () => {
+      const command = "cp evil.json /Users/jeff/.openclaw/config.json";
+      const result = analyzeCommand(command);
+      expect(result.score).toBeGreaterThan(0);
+    });
+
+    it("should still flag redirect to .openclaw/ non-workspace paths", () => {
+      const command = "echo 'bad' > /Users/jeff/.openclaw/sessions/inject.json";
+      const result = analyzeCommand(command);
+      expect(result.score).toBeGreaterThan(0);
+    });
+  });
+
   describe("real threats still detected", () => {
     it("should flag SSH key access", () => {
       const result = analyzeCommand("cat ~/.ssh/id_rsa");
