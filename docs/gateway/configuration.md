@@ -2916,7 +2916,9 @@ Defaults:
     enabled: true,
     evaluateEnabled: true,
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    defaultProfile: "chrome",
+    // Recommended: use the managed browser by default for stability.
+    // Use "chrome" when you specifically want to control an attached tab via the Browser Relay extension.
+    defaultProfile: "openclaw",
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
