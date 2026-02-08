@@ -106,8 +106,6 @@ function isApprovedElevatedSender(params: {
   addToken(params.ctx.SenderE164);
   addToken(params.ctx.From);
   addToken(stripSenderPrefix(params.ctx.From));
-  addToken(params.ctx.To);
-  addToken(stripSenderPrefix(params.ctx.To));
 
   for (const rawEntry of allowTokens) {
     const entry = rawEntry.trim();
