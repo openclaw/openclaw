@@ -6,6 +6,7 @@ import type { WebInboundMsg } from "../types.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { logVerbose } from "../../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../../hooks/internal-hooks.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
 import { normalizeE164 } from "../../../utils.js";
@@ -162,6 +163,38 @@ export function createWebOnMessageHandler(params: {
       })
     ) {
       return;
+    }
+
+    // Trigger message:received hook before agent processing
+    const hookEvent = createInternalHookEvent("message", "received", route.sessionKey, {
+      message: msg.body,
+      messageId: msg.id,
+      senderId: msg.senderJid?.trim() || msg.senderE164,
+      senderName: msg.senderName,
+      channel: "whatsapp",
+      chatId: conversationId,
+      isGroup: msg.chatType === "group",
+      sessionKey: route.sessionKey,
+      agentId: route.agentId,
+      injectedContext: undefined,
+      skipProcessing: false,
+      skipReason: undefined,
+    });
+    await triggerInternalHook(hookEvent);
+
+    // Check if hook requested to skip processing
+    if (hookEvent.context.skipProcessing) {
+      logVerbose(
+        `Skipping auto-reply: hook requested skip (reason: ${hookEvent.context.skipReason ?? "none"})`,
+      );
+      return;
+    }
+
+    // Inject any context from hooks into the message body
+    const injectedContext = hookEvent.context.injectedContext;
+    if (injectedContext) {
+      // Prepend injected context to the message body
+      msg.body = `${injectedContext}\n${msg.body}`;
     }
 
     await processForRoute(msg, route, groupHistoryKey);

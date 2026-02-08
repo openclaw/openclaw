@@ -4,6 +4,7 @@ import {
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
+  isMessageReceivedEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -242,6 +243,174 @@ describe("hooks", () => {
       await triggerInternalHook(event3);
 
       expect(results).toHaveLength(2);
+    });
+  });
+
+  describe("message:received hook", () => {
+    it("should trigger handlers for message:received events", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message:received", handler);
+
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Hello, world!",
+        messageId: "msg-123",
+        senderId: "sender-456",
+        senderName: "Test User",
+        channel: "whatsapp",
+        chatId: "chat-789",
+        isGroup: false,
+        sessionKey: "test-session",
+        agentId: "agent-abc",
+        injectedContext: undefined,
+        skipProcessing: false,
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger handlers for all message events via 'message' type", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message", handler);
+
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Test message",
+        channel: "discord",
+        isGroup: true,
+        sessionKey: "session-key",
+        agentId: "agent-id",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should allow hooks to modify injectedContext", async () => {
+      const handler = vi.fn((event: InternalHookEvent) => {
+        const context = event.context as {
+          injectedContext?: string;
+          message: string;
+        };
+        context.injectedContext = "Curated memory: You like pizza.";
+      });
+      registerInternalHook("message:received", handler);
+
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "What's for dinner?",
+        channel: "whatsapp",
+        isGroup: false,
+        sessionKey: "session-key",
+        agentId: "agent-id",
+        injectedContext: undefined,
+        skipProcessing: false,
+      });
+      await triggerInternalHook(event);
+
+      const context = event.context as { injectedContext?: string };
+      expect(context.injectedContext).toBe("Curated memory: You like pizza.");
+    });
+
+    it("should allow hooks to set skipProcessing", async () => {
+      const handler = vi.fn((event: InternalHookEvent) => {
+        const context = event.context as {
+          skipProcessing?: boolean;
+          skipReason?: string;
+        };
+        context.skipProcessing = true;
+        context.skipReason = "Rate limit exceeded";
+      });
+      registerInternalHook("message:received", handler);
+
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Spam message",
+        channel: "whatsapp",
+        isGroup: false,
+        sessionKey: "session-key",
+        agentId: "agent-id",
+        injectedContext: undefined,
+        skipProcessing: false,
+        skipReason: undefined,
+      });
+      await triggerInternalHook(event);
+
+      const context = event.context as {
+        skipProcessing?: boolean;
+        skipReason?: string;
+      };
+      expect(context.skipProcessing).toBe(true);
+      expect(context.skipReason).toBe("Rate limit exceeded");
+    });
+
+    it("should handle multiple handlers for message:received", async () => {
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+
+      registerInternalHook("message:received", handler1);
+      registerInternalHook("message:received", handler2);
+
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Test",
+        channel: "whatsapp",
+        isGroup: false,
+        sessionKey: "session-key",
+        agentId: "agent-id",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler1).toHaveBeenCalledWith(event);
+      expect(handler2).toHaveBeenCalledWith(event);
+    });
+  });
+
+  describe("isMessageReceivedEvent", () => {
+    it("returns true for message:received events with expected context", () => {
+      const context = {
+        message: "Hello",
+        channel: "whatsapp",
+        isGroup: false,
+        sessionKey: "test-session",
+        agentId: "agent-1",
+      };
+      const event = createInternalHookEvent("message", "received", "test-session", context);
+      expect(isMessageReceivedEvent(event)).toBe(true);
+    });
+
+    it("returns false for non-message events", () => {
+      const event = createInternalHookEvent("command", "new", "test-session");
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+
+    it("returns false for message events with wrong action", () => {
+      const event = createInternalHookEvent("message", "sent", "test-session", {
+        message: "Hello",
+        channel: "whatsapp",
+        isGroup: false,
+        sessionKey: "test-session",
+        agentId: "agent-1",
+      });
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+
+    it("returns false for events missing required fields", () => {
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Hello",
+        // channel is missing
+        isGroup: false,
+        sessionKey: "test-session",
+        agentId: "agent-1",
+      });
+      expect(isMessageReceivedEvent(event)).toBe(false);
+    });
+
+    it("returns false for events with wrong types", () => {
+      const event = createInternalHookEvent("message", "received", "test-session", {
+        message: "Hello",
+        channel: "whatsapp",
+        isGroup: "not a boolean", // wrong type
+        sessionKey: "test-session",
+        agentId: "agent-1",
+      });
+      expect(isMessageReceivedEvent(event)).toBe(false);
     });
   });
 });

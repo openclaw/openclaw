@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -23,6 +23,38 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   type: "agent";
   action: "bootstrap";
   context: AgentBootstrapHookContext;
+};
+
+export type MessageReceivedHookContext = {
+  /** Message content */
+  message: string;
+  messageId?: string;
+
+  /** Sender info */
+  senderId?: string;
+  senderName?: string;
+
+  /** Channel info */
+  channel: string;
+  chatId?: string;
+  isGroup: boolean;
+
+  /** Session info */
+  sessionKey: string;
+  agentId: string;
+
+  /** Mutable: hooks can add context to inject */
+  injectedContext?: string;
+
+  /** Mutable: hooks can request skip */
+  skipProcessing?: boolean;
+  skipReason?: string;
+};
+
+export type MessageReceivedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "received";
+  context: MessageReceivedHookContext;
 };
 
 export interface InternalHookEvent {
@@ -178,4 +210,26 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
     return false;
   }
   return Array.isArray(context.bootstrapFiles);
+}
+
+export function isMessageReceivedEvent(
+  event: InternalHookEvent,
+): event is MessageReceivedHookEvent {
+  if (event.type !== "message" || event.action !== "received") {
+    return false;
+  }
+  const context = event.context as Partial<MessageReceivedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  if (typeof context.message !== "string") {
+    return false;
+  }
+  if (typeof context.channel !== "string") {
+    return false;
+  }
+  if (typeof context.isGroup !== "boolean") {
+    return false;
+  }
+  return typeof context.sessionKey === "string" && typeof context.agentId === "string";
 }
