@@ -21,6 +21,10 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("rate_limit");
+    expect(classifyFailoverReason("Unknown model: moonshotai/kimi-k2-0711-preview")).toBe(
+      "unknown",
+    );
+    expect(classifyFailoverReason("file does not exist")).toBeNull();
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");

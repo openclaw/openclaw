@@ -245,8 +245,11 @@ Docs: https://docs.openclaw.ai
 - Plugins: validate plugin/hook install paths and reject traversal-like names.
 - Telegram: add download timeouts for file fetches. (#6914) Thanks @hclsys.
 - Telegram: enforce thread specs for DM vs forum sends. (#6833) Thanks @obviyus.
+- Agents: fall back when the primary model name is invalid. Fixes #6939. (#6987) Thanks @spirosrap.
 - Streaming: flush block streaming on paragraph boundaries for newline chunking. (#7014)
 - Streaming: stabilize partial streaming filters.
+- Streaming: avoid stuck typing indicator after streamed BlueBubbles replies.
+- Streaming: dedupe fence-split handling and cover maxChars fallback for newline chunking.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Tools: align tool execute adapters/signatures (legacy + parameter order + arg normalization).
 - Tools: treat `"*"` tool allowlist entries as valid to avoid spurious unknown-entry warnings.
