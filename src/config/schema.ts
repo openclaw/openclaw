@@ -125,6 +125,7 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "agents.list.*.identity.avatar": "Identity Avatar",
   "agents.list.*.skills": "Agent Skill Filter",
+  "agents.list.*.memory.allowReadFrom": "Agent Memory Allowlist",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -377,6 +378,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.imessage.cliPath": "iMessage CLI Path",
   "agents.list[].skills": "Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",
+  "agents.list[].memory.allowReadFrom": "Agent Memory Allowlist",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   "plugins.enabled": "Enable Plugins",
   "plugins.allow": "Plugin Allowlist",
@@ -413,6 +415,10 @@ const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.list.*.memory.allowReadFrom":
+    'Allow this agent to read memory from other agents (ids or "*"); self is always allowed.',
+  "agents.list[].memory.allowReadFrom":
+    'Allow this agent to read memory from other agents (ids or "*"); self is always allowed.',
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   "gateway.auth.token":
