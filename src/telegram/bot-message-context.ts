@@ -50,7 +50,9 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   describeReplyTarget,
+  extractTelegramContact,
   extractTelegramLocation,
+  formatContactText,
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -351,6 +353,8 @@ export const buildTelegramMessageContext = async ({
     placeholder = "<media:document>";
   } else if (msg.sticker) {
     placeholder = "<media:sticker>";
+  } else if (msg.contact) {
+    placeholder = "<media:contact>";
   }
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
@@ -369,9 +373,11 @@ export const buildTelegramMessageContext = async ({
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
+  const contactData = extractTelegramContact(msg);
+  const contactText = contactData ? formatContactText(contactData) : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
-  let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+  let rawBody = [rawText, locationText, contactText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = placeholder;
   }

@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Doe;John;;;
+FN:John Doe
+TEL;TYPE=CELL:+15555550199
+EMAIL;TYPE=INTERNET:john.doe@example.com
+BDAY:1990-06-15
+ORG:Acme Corp
+TITLE:Founder
+ADR;TYPE=HOME:;;123 Main Street;Springfield;IL;62701;USA
+URL:https://example.com/johndoe
+NOTE:AI consultancy and engineering
+END:VCARD
