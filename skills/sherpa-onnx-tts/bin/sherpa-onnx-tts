@@ -31,7 +31,7 @@ function resolveModelFile(modelDir, explicitFlag) {
   try {
     const candidates = fs
       .readdirSync(modelDir)
-      .filter((entry) => entry.endsWith(".onnx"))
+      .filter((entry) => entry.endsWith(".onnx") || entry.endsWith(".rknn"))
       .map((entry) => path.join(modelDir, entry));
     if (candidates.length === 1) return candidates[0];
   } catch {
@@ -71,6 +71,7 @@ let modelDir = "";
 let modelFile = "";
 let tokensFile = "";
 let dataDir = "";
+let provider = "";
 let output = "tts.wav";
 const textParts = [];
 
@@ -131,6 +132,10 @@ if (!modelFile || !tokensFile || !dataDir) {
   );
 }
 
+if (modelFile.endsWith(".rknn")) {
+  provider = 'rknn';
+}
+
 const text = textParts.join(" ").trim();
 if (!text) {
   usage("Missing text.");
@@ -154,20 +159,22 @@ if (process.platform === "darwin") {
 const outputPath = path.isAbsolute(output) ? output : path.join(process.cwd(), output);
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-const child = spawnSync(
-  bin,
-  [
+
+const cmd = [];
+
+if (provider) {
+  cmd.push(`--provider=${provider}`);
+}
+
+cmd.push(
     `--vits-model=${modelFile}`,
     `--vits-tokens=${tokensFile}`,
     `--vits-data-dir=${dataDir}`,
     `--output-filename=${outputPath}`,
-    text,
-  ],
-  {
-    stdio: "inherit",
-    env,
-  },
+    text
 );
+
+const child = spawnSync(bin, cmd, { stdio: "inherit", env });
 
 if (typeof child.status === "number") {
   process.exit(child.status);
