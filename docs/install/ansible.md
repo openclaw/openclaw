@@ -16,7 +16,7 @@ The recommended way to deploy OpenClaw to production servers is via **[openclaw-
 One-command install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/openclaw/clawdbot-ansible/main/install.sh | bash
 ```
 
 > **📦 Full guide: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
