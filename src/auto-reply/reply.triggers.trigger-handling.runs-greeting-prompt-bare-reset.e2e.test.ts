@@ -134,6 +134,13 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain("A new session was started via /new or /reset");
+      expect(prompt).toContain(
+        "If the runtime model differs from default_model in the system prompt, add one plain-language line that names both the current model and the default model, and clarify that the current model is a fallback from the default.",
+      );
+      expect(prompt).toContain(
+        "If the runtime model matches default_model, do not mention model names.",
+      );
+      expect(prompt).toContain("plain-language line");
     });
   });
   it("does not reset for unauthorized /reset", async () => {

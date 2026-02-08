@@ -40,7 +40,62 @@ function baseConfig(): OpenClawConfig {
 }
 
 describe("/model chat UX", () => {
-  it("shows summary for /model with no args", async () => {
+  it("shows fallback-only summary lines only when current model differs from default", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+    const sharedSummaryLines = [
+      "Switch: /model <provider/model>",
+      "Browse: /models (providers) or /models <provider> (models)",
+      "More: /model status",
+    ];
+
+    const nonFallbackReply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+    });
+
+    const fallbackReply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "openai",
+      model: "gpt-5.2",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+    });
+
+    expect(nonFallbackReply?.text).toBe(
+      ["Current: anthropic/claude-opus-4-5", "", ...sharedSummaryLines].join("\n"),
+    );
+    expect(nonFallbackReply?.text).not.toContain("Fallback active");
+    expect(nonFallbackReply?.text).not.toContain("Default:");
+
+    expect(fallbackReply?.text).toBe(
+      [
+        "Current: openai/gpt-5.2",
+        "",
+        "Fallback active",
+        "Default: anthropic/claude-opus-4-5",
+        "",
+        ...sharedSummaryLines,
+      ].join("\n"),
+    );
+  });
+
+  it("keeps non-fallback /model summary wording unchanged", async () => {
     const directives = parseInlineDirectives("/model");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
 
@@ -58,9 +113,79 @@ describe("/model chat UX", () => {
       resetModelOverride: false,
     });
 
-    expect(reply?.text).toContain("Current:");
-    expect(reply?.text).toContain("Browse: /models");
-    expect(reply?.text).toContain("Switch: /model <provider/model>");
+    expect(reply?.text).toBe(
+      [
+        "Current: anthropic/claude-opus-4-5",
+        "",
+        "Switch: /model <provider/model>",
+        "Browse: /models (providers) or /models <provider> (models)",
+        "More: /model status",
+      ].join("\n"),
+    );
+    expect(reply?.text).not.toContain("Fallback active");
+  });
+
+  it("gates telegram fallback-only summary lines on current-vs-default mismatch", async () => {
+    const directives = parseInlineDirectives("/model");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+    const telegramButtons = [[{ text: "Browse providers", callback_data: "mdl_prov" }]];
+
+    const nonFallbackReply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      surface: "telegram",
+    });
+
+    const fallbackReply = await maybeHandleModelDirectiveInfo({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      provider: "openai",
+      model: "gpt-5.2",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      surface: "telegram",
+    });
+
+    expect(nonFallbackReply?.text).toBe(
+      [
+        "Current: anthropic/claude-opus-4-5",
+        "",
+        "Tap below to browse models, or use:",
+        "/model <provider/model> to switch",
+        "/model status for details",
+      ].join("\n"),
+    );
+    expect(nonFallbackReply?.channelData).toEqual({ telegram: { buttons: telegramButtons } });
+    expect(nonFallbackReply?.text).not.toContain("Fallback active");
+    expect(nonFallbackReply?.text).not.toContain("Default:");
+
+    expect(fallbackReply?.text).toBe(
+      [
+        "Current: openai/gpt-5.2",
+        "",
+        "Fallback active",
+        "Default: anthropic/claude-opus-4-5",
+        "",
+        "Tap below to browse models, or use:",
+        "/model <provider/model> to switch",
+        "/model status for details",
+      ].join("\n"),
+    );
+    expect(fallbackReply?.channelData).toEqual({ telegram: { buttons: telegramButtons } });
   });
 
   it("auto-applies closest match for typos", () => {

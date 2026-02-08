@@ -215,19 +215,42 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   if (wantsSummary) {
     const current = `${params.provider}/${params.model}`;
+    const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
+    const fallbackActive =
+      normalizeProviderId(params.provider) !== normalizeProviderId(params.defaultProvider) ||
+      params.model !== params.defaultModel;
     const isTelegram = params.surface === "telegram";
 
     if (isTelegram) {
       const buttons = buildBrowseProvidersButton();
+      const fallbackLines = fallbackActive
+        ? ["Fallback active", `Default: ${defaultLabel}`, ""]
+        : [];
       return {
         text: [
           `Current: ${current}`,
           "",
+          ...fallbackLines,
           "Tap below to browse models, or use:",
           "/model <provider/model> to switch",
           "/model status for details",
         ].join("\n"),
         channelData: { telegram: { buttons } },
+      };
+    }
+
+    if (fallbackActive) {
+      return {
+        text: [
+          `Current: ${current}`,
+          "",
+          "Fallback active",
+          `Default: ${defaultLabel}`,
+          "",
+          "Switch: /model <provider/model>",
+          "Browse: /models (providers) or /models <provider> (models)",
+          "More: /model status",
+        ].join("\n"),
       };
     }
 
