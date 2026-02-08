@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -270,7 +273,7 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
 
 export function createSandboxedReadTool(root: string) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+  return wrapSandboxPathGuard(createOpenClawReadTool(base, root), root);
 }
 
 export function createSandboxedWriteTool(root: string) {
@@ -283,7 +286,65 @@ export function createSandboxedEditTool(root: string) {
   return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
 }
 
-export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
+const MIME_TO_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+
+/**
+ * Persist a base64-encoded image from a read tool result to a cache file under the workspace,
+ * returning a relative MEDIA path that the delivery pipeline can pick up.
+ */
+async function persistReadImage(
+  imageBlock: { data: string; mimeType: string },
+  workspaceRoot: string,
+): Promise<string | undefined> {
+  const ext = MIME_TO_EXT[imageBlock.mimeType] ?? "png";
+  const hash = createHash("sha256")
+    .update(imageBlock.data.slice(0, 1024))
+    .digest("hex")
+    .slice(0, 12);
+  const id = `${hash}-${randomUUID().slice(0, 8)}`;
+  const cacheDir = join(workspaceRoot, ".openclaw", "media-cache");
+  const filePath = join(cacheDir, `${id}.${ext}`);
+  try {
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(filePath, Buffer.from(imageBlock.data, "base64"));
+    const relPath = `./${relative(workspaceRoot, filePath)}`;
+    return relPath;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Inject a MEDIA: directive into the text content block of a read result
+ * so that the delivery pipeline can deliver the image to channels.
+ */
+function injectMediaDirective(
+  result: AgentToolResult<unknown>,
+  mediaPath: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const nextContent = content.map((block) => {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const b = block as TextContentBlock & { text: string };
+      return { ...b, text: `${b.text}\nMEDIA:${mediaPath}` } satisfies TextContentBlock;
+    }
+    return block;
+  });
+  return { ...result, content: nextContent };
+}
+
+export function createOpenClawReadTool(base: AnyAgentTool, workspaceRoot?: string): AnyAgentTool {
   const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
     ...patched,
@@ -296,7 +357,31 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
       const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
-      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      const sanitized = await sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+
+      // Persist image data and inject MEDIA: directive for channel delivery
+      if (workspaceRoot) {
+        const content = Array.isArray(sanitized.content) ? sanitized.content : [];
+        const imageBlock = content.find(
+          (b): b is ImageContentBlock =>
+            !!b &&
+            typeof b === "object" &&
+            (b as { type?: unknown }).type === "image" &&
+            typeof (b as { data?: unknown }).data === "string" &&
+            typeof (b as { mimeType?: unknown }).mimeType === "string",
+        );
+        if (imageBlock) {
+          const mediaPath = await persistReadImage(
+            imageBlock as { data: string; mimeType: string },
+            workspaceRoot,
+          );
+          if (mediaPath) {
+            return injectMediaDirective(sanitized, mediaPath);
+          }
+        }
+      }
+
+      return sanitized;
     },
   };
 }

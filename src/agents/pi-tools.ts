@@ -248,7 +248,7 @@ export function createOpenClawCodingTools(options?: {
         return [createSandboxedReadTool(sandboxRoot)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
-      return [createOpenClawReadTool(freshReadTool)];
+      return [createOpenClawReadTool(freshReadTool, workspaceRoot)];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
