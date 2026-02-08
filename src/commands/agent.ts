@@ -127,9 +127,9 @@ export async function agentCommand(
     opts.timeout !== undefined ? Number.parseInt(String(opts.timeout), 10) : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
-    (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw <= 0)
+    (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
   ) {
-    throw new Error("--timeout must be a positive integer (seconds)");
+    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
   const timeoutMs = resolveAgentTimeoutMs({
     cfg,
@@ -391,6 +391,9 @@ export async function agentCommand(
         ? (agentFallbacksOverride ?? [])
         : agentFallbacksOverride;
 
+      // Track model fallback attempts so retries on an existing session don't
+      // re-inject the original prompt as a duplicate user message.
+      let fallbackAttemptIndex = 0;
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -398,6 +401,15 @@ export async function agentCommand(
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride) => {
+          const isFallbackRetry = fallbackAttemptIndex > 0;
+          fallbackAttemptIndex += 1;
+          // On fallback retries the session file already contains the original
+          // prompt from the first attempt.  Re-injecting the full prompt would
+          // create a duplicate user message.  Use a short continuation hint
+          // instead so the model picks up where it left off.
+          const effectivePrompt = isFallbackRetry
+            ? "Continue where you left off. The previous model attempt failed or timed out."
+            : body;
           if (isCliProvider(providerOverride, cfg)) {
             const cliSessionId = getCliSessionId(sessionEntry, providerOverride);
             return runCliAgent({
@@ -407,7 +419,7 @@ export async function agentCommand(
               sessionFile,
               workspaceDir,
               config: cfg,
-              prompt: body,
+              prompt: effectivePrompt,
               provider: providerOverride,
               model: modelOverride,
               thinkLevel: resolvedThinkLevel,
@@ -415,7 +427,7 @@ export async function agentCommand(
               runId,
               extraSystemPrompt: opts.extraSystemPrompt,
               cliSessionId,
-              images: opts.images,
+              images: isFallbackRetry ? undefined : opts.images,
               streamParams: opts.streamParams,
             });
           }
@@ -442,8 +454,8 @@ export async function agentCommand(
             workspaceDir,
             config: cfg,
             skillsSnapshot,
-            prompt: body,
-            images: opts.images,
+            prompt: effectivePrompt,
+            images: isFallbackRetry ? undefined : opts.images,
             clientTools: opts.clientTools,
             provider: providerOverride,
             model: modelOverride,

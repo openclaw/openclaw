@@ -109,7 +109,10 @@ export function createSessionsSpawnTool(opts?: {
           typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
             ? Math.max(0, Math.floor(params.timeoutSeconds))
             : undefined;
-        return legacy ?? 0;
+        // Return undefined (not 0) when neither param is provided so that the
+        // gateway/agentCommand applies its default timeout.  An explicit 0 from
+        // the caller means "no timeout" and must be preserved.
+        return legacy;
       })();
       let modelWarning: string | undefined;
       let modelApplied = false;
@@ -295,7 +298,7 @@ export function createSessionsSpawnTool(opts?: {
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
             thinking: thinkingOverride,
-            timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
+            timeout: runTimeoutSeconds != null ? runTimeoutSeconds : undefined,
             label: label || undefined,
             spawnedBy: spawnedByKey,
             groupId: opts?.agentGroupId ?? undefined,
