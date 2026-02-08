@@ -31,6 +31,8 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  /** Whether the model supports function calling (tool use). Defaults to true if omitted. */
+  supportsFunctionCalling?: boolean;
 };
 
 export type ModelProviderConfig = {
