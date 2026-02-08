@@ -535,12 +535,15 @@ async function executeJobCore(
         await delay(retryDelayMs);
       }
 
-      if (heartbeatResult.status === "ran") {
-        return { status: "ok", summary: text };
-      } else if (heartbeatResult.status === "skipped") {
-        return { status: "skipped", error: heartbeatResult.reason, summary: text };
-      } else {
+      if (heartbeatResult.status === "error") {
         return { status: "error", error: heartbeatResult.reason, summary: text };
+      } else {
+        // The system event was already enqueued above; a skipped heartbeat
+        // does not mean the event is lost — the next natural heartbeat
+        // cycle will pick it up.  Treat as "ok" so one-shot
+        // deleteAfterRun jobs are properly cleaned up.
+        // @see https://github.com/openclaw/openclaw/issues/11612
+        return { status: "ok", summary: text };
       }
     } else {
       state.deps.requestHeartbeatNow({

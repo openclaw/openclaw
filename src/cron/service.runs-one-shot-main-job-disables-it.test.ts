@@ -510,8 +510,10 @@ describe("CronService", () => {
     }
     await runPromise;
 
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.lastDurationMs).toBeGreaterThan(0);
+    const freshJobs = await cron.list({ includeDisabled: true });
+    const updated = freshJobs.find((j) => j.id === job.id);
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastDurationMs).toBeGreaterThan(0);
 
     cron.stop();
     await store.cleanup();
@@ -593,6 +595,50 @@ describe("CronService", () => {
     expect(job.state.lastError).toBeUndefined();
 
     await cron.list({ includeDisabled: true });
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("deletes one-shot job even when heartbeat is skipped (#11612)", async () => {
+    const deferred = createDeferred<HeartbeatRunResult>();
+    const runHeartbeatOnce = vi.fn(async () => deferred.promise);
+
+    const { store, cron, enqueueSystemEvent } = await createWakeModeNowMainHarness({
+      runHeartbeatOnce,
+      wakeNowHeartbeatBusyMaxWaitMs: 1,
+      wakeNowHeartbeatBusyRetryDelayMs: 2,
+    });
+
+    const job = await cron.add({
+      name: "one-shot skipped heartbeat",
+      enabled: true,
+      deleteAfterRun: true,
+      schedule: { kind: "at", at: new Date(1).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "fire once" },
+    });
+
+    const runPromise = cron.run(job.id, "force");
+    for (let i = 0; i < 10; i++) {
+      if (runHeartbeatOnce.mock.calls.length > 0) break;
+      await Promise.resolve();
+    }
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "fire once",
+      expect.objectContaining({ agentId: undefined }),
+    );
+
+    // Heartbeat skipped for a non-retryable reason.
+    deferred.resolve({ status: "skipped", reason: "already-idle" });
+    await runPromise;
+
+    // Job with deleteAfterRun should be deleted — the system event was
+    // already enqueued, so a skipped heartbeat is treated as "ok".
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+
     cron.stop();
     await store.cleanup();
   });
