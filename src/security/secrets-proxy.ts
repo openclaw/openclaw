@@ -334,9 +334,13 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
 
       logger.info(`Proxying request: ${method} ${rawTargetUrl}`);
 
-      // Security: undici v7 request() does not follow redirects by default.
-      // Even if a redirect is returned, the container's network isolation ensures
-      // any follow-up request goes through the proxy and is re-validated.
+      // Redirect handling: we intentionally do NOT block or follow 3xx responses.
+      // undici v7 request() does not follow redirects by default, so the raw 3xx
+      // is returned to the caller. Explicit redirect blocking is unnecessary because
+      // the gateway container runs on a Docker --internal network and can ONLY reach
+      // the outside world through this proxy. If the client follows the Location header,
+      // that follow-up request will route back through the proxy, where the target URL
+      // is re-validated against the allowlist and credentials are re-injected as needed.
       const response = await request(targetUrl, {
         method: method as import("undici").Dispatcher.HttpMethod,
         headers,
