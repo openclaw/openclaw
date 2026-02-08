@@ -3,9 +3,8 @@
  */
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { SpoolEvent } from "./types.js";
-import { resolveSpoolEventsDir, resolveSpoolEventPath } from "./paths.js";
+import { resolveSpoolEventsDir, resolveSpoolEventPath, listJsonFileIds } from "./paths.js";
 import { validateSpoolEvent } from "./schema.js";
 
 export type ReadSpoolEventResult =
@@ -23,7 +22,7 @@ export async function readSpoolEventFile(filePath: string): Promise<ReadSpoolEve
     if (!validation.valid) {
       return { success: false, error: `validation failed: ${validation.error}` };
     }
-    return { success: true, event: validation.event as SpoolEvent };
+    return { success: true, event: validation.event };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return { success: false, error: "file not found" };
@@ -50,17 +49,7 @@ export async function listSpoolEventIds(
   env: Record<string, string | undefined> = process.env,
 ): Promise<string[]> {
   const eventsDir = resolveSpoolEventsDir(env);
-  try {
-    const files = await fs.readdir(eventsDir);
-    return files
-      .filter((f) => f.endsWith(".json") && !f.includes(".json.tmp."))
-      .map((f) => path.basename(f, ".json"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
+  return listJsonFileIds(eventsDir);
 }
 
 /**
