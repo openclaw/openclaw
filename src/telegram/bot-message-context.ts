@@ -64,6 +64,7 @@ export type TelegramMediaRef = {
 type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  activationMode?: "auto" | "mention" | "always";
 };
 
 type TelegramLogger = {
@@ -563,6 +564,9 @@ export const buildTelegramMessageContext = async ({
   const systemPromptParts = [
     groupConfig?.systemPrompt?.trim() || null,
     topicConfig?.systemPrompt?.trim() || null,
+    options?.activationMode === "auto"
+      ? "You are in Smart Reply Mode. Decide if you should reply to this message. If the message is not relevant to you or doesn't require a response, output [NO_REPLY]."
+      : null,
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;

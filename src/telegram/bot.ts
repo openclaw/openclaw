@@ -307,7 +307,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     try {
       const store = loadSessionStore(storePath);
       const entry = store[sessionKey];
-      if (entry?.groupActivation === "always") {
+      if (entry?.groupActivation === "always" || entry?.groupActivation === "auto") {
         return false;
       }
       if (entry?.groupActivation === "mention") {
@@ -315,6 +315,46 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     } catch (err) {
       logVerbose(`Failed to load session for activation check: ${String(err)}`);
+    }
+
+    // Fallback to configured activation
+    const activation =
+      telegramCfg.groupActivation ??
+      (cfg.channels?.telegram as { groupActivation?: string })?.groupActivation;
+    if (activation === "auto" || activation === "always") {
+      return false;
+    }
+    if (activation === "mention") {
+      return true;
+    }
+    return undefined;
+  };
+  const resolveGroupActivationMode = (params: {
+    chatId: string | number;
+    agentId?: string;
+    messageThreadId?: number;
+    sessionKey?: string;
+  }) => {
+    const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
+    const sessionKey =
+      params.sessionKey ??
+      `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    try {
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
+      if (entry?.groupActivation) {
+        return entry.groupActivation;
+      }
+    } catch {
+      // ignore
+    }
+    // Fallback to configured activation
+    const activation =
+      telegramCfg.groupActivation ??
+      (cfg.channels?.telegram as { groupActivation?: string })?.groupActivation;
+    if (activation === "auto") {
+      return "auto";
     }
     return undefined;
   };
@@ -485,7 +525,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    processMessage,
+    processMessage: (ctx, allMedia, storeAllowFrom, options) =>
+      processMessage(ctx, allMedia, storeAllowFrom, {
+        ...options,
+        activationMode: resolveGroupActivationMode({
+          chatId: ctx.message.chat.id,
+          messageThreadId: (ctx.message as { message_thread_id?: number }).message_thread_id,
+        }),
+      }),
     logger,
   });
 

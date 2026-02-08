@@ -2,6 +2,7 @@ import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   DmPolicy,
+  GroupActivation,
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
@@ -80,6 +81,14 @@ export type TelegramAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /**
+   * Controls how the bot is activated in groups:
+   * - "off": never reply (unless forced by other means?)
+   * - "mention": reply only when mentioned
+   * - "always": reply to every message
+   * - "auto": smart reply (listen all, think before replying)
+   */
+  groupActivation?: GroupActivation;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
