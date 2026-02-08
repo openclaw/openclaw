@@ -301,3 +301,30 @@ export function filterBootstrapFilesForSession(
   }
   return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
+
+/**
+ * Files that contain private owner information and should NOT be injected
+ * into the system prompt for non-owner senders.  Without this filter, any
+ * stranger who messages the agent over a public channel receives responses
+ * informed by the owner's name, email, personal notes, and memory.
+ */
+const OWNER_ONLY_BOOTSTRAP_FILES: ReadonlySet<string> = new Set([
+  DEFAULT_USER_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+]);
+
+/**
+ * Strip owner-only bootstrap files from the list when the sender is not the
+ * owner.  This prevents private context (USER.md, MEMORY.md) from leaking
+ * into conversations with non-owner senders on public-facing channels.
+ */
+export function filterOwnerOnlyBootstrapFiles(
+  files: WorkspaceBootstrapFile[],
+  senderIsOwner?: boolean,
+): WorkspaceBootstrapFile[] {
+  if (senderIsOwner !== false) {
+    return files;
+  }
+  return files.filter((file) => !OWNER_ONLY_BOOTSTRAP_FILES.has(file.name));
+}

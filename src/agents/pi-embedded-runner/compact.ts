@@ -213,6 +213,7 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      senderIsOwner: params.senderIsOwner,
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
     const runAbortController = new AbortController();

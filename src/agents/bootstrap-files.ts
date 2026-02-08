@@ -4,6 +4,7 @@ import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { buildBootstrapContextFiles, resolveBootstrapMaxChars } from "./pi-embedded-helpers.js";
 import {
   filterBootstrapFilesForSession,
+  filterOwnerOnlyBootstrapFiles,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -24,12 +25,14 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  senderIsOwner?: boolean;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const bootstrapFiles = filterBootstrapFilesForSession(
+  let bootstrapFiles = filterBootstrapFilesForSession(
     await loadWorkspaceBootstrapFiles(params.workspaceDir),
     sessionKey,
   );
+  bootstrapFiles = filterOwnerOnlyBootstrapFiles(bootstrapFiles, params.senderIsOwner);
   return applyBootstrapHookOverrides({
     files: bootstrapFiles,
     workspaceDir: params.workspaceDir,
@@ -46,6 +49,7 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  senderIsOwner?: boolean;
   warn?: (message: string) => void;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
