@@ -27,6 +27,7 @@ function extractImages(message: unknown): ImageBlock[] {
       if (typeof block !== "object" || block === null) {
         continue;
       }
+
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
@@ -189,9 +190,7 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
 }
 
 function isAvatarUrl(value: string): boolean {
-  return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
-  );
+  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/");
 }
 
 function renderMessageImages(images: ImageBlock[]) {
@@ -272,7 +271,16 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`
+            <div class="chat-text">
+              ${unsafeHTML(
+                toSanitizedMarkdownHtml(
+                  // Ensure horizontal rules (---) are padded with newlines
+                  // so the markdown parser recognizes them correctly.
+                  markdown.replace(/^(?:\s*)([-*_])(?:\s*\1){2,}\s*$/gm, "\n$&\n"),
+                ),
+              )}
+            </div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
