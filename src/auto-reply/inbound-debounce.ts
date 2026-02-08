@@ -42,6 +42,7 @@ export function createInboundDebouncer<T>(params: {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  isAbortItem?: (item: T) => boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 }) {
@@ -72,6 +73,17 @@ export function createInboundDebouncer<T>(params: {
     await flushBuffer(key, buffer);
   };
 
+  const clearKey = (key: string) => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return;
+    }
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+    }
+    buffers.delete(key);
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
@@ -88,7 +100,12 @@ export function createInboundDebouncer<T>(params: {
 
     if (!canDebounce || !key) {
       if (key && buffers.has(key)) {
-        await flushKey(key);
+        // If this is an abort trigger, discard buffered messages instead of flushing
+        if (params.isAbortItem?.(item)) {
+          clearKey(key);
+        } else {
+          await flushKey(key);
+        }
       }
       await params.onFlush([item]);
       return;
@@ -106,5 +123,5 @@ export function createInboundDebouncer<T>(params: {
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, clearKey };
 }

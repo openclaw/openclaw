@@ -20,7 +20,20 @@ import { normalizeCommandBody } from "../commands-registry.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
 
-const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
+const ABORT_TRIGGERS = new Set([
+  "stop",
+  "esc",
+  "abort",
+  "wait",
+  "exit",
+  "interrupt",
+  "pause",
+  "cancel",
+  "halt",
+  "no",
+  "nope",
+  "nevermind",
+]);
 const ABORT_MEMORY = new Map<string, boolean>();
 
 export function isAbortTrigger(text?: string): boolean {
@@ -28,7 +41,22 @@ export function isAbortTrigger(text?: string): boolean {
     return false;
   }
   const normalized = text.trim().toLowerCase();
-  return ABORT_TRIGGERS.has(normalized);
+  if (ABORT_TRIGGERS.has(normalized)) {
+    return true;
+  }
+  // Match short messages starting with trigger word (e.g. "stop everything", "cancel that")
+  if (normalized.length < 40) {
+    for (const trigger of ABORT_TRIGGERS) {
+      if (
+        normalized.startsWith(trigger + " ") ||
+        normalized.startsWith(trigger + ",") ||
+        normalized.startsWith(trigger + ".")
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function getAbortMemory(key: string): boolean | undefined {

@@ -2,11 +2,12 @@ import type { Message } from "@grammyjs/types";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { hasControlCommand, isControlCommandMessage } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+import { isAbortTrigger } from "../auto-reply/reply/abort.js";
 import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 import { buildModelsProviderData } from "../auto-reply/reply/commands-models.js";
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
@@ -86,6 +87,10 @@ export const registerTelegramHandlers = ({
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
     buildKey: (entry) => entry.debounceKey,
+    isAbortItem: (entry) => {
+      const text = entry.msg.text ?? entry.msg.caption ?? "";
+      return isAbortTrigger(text.trim());
+    },
     shouldDebounce: (entry) => {
       if (entry.allMedia.length > 0) {
         return false;
@@ -94,7 +99,7 @@ export const registerTelegramHandlers = ({
       if (!text.trim()) {
         return false;
       }
-      return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
+      return !isControlCommandMessage(text, cfg, { botUsername: entry.botUsername });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
