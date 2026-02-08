@@ -11,6 +11,11 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
+const createForumTopicTelegram = vi.fn(async () => ({
+  threadId: 99,
+  chatId: "-100123",
+  name: "Support",
+}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -18,6 +23,7 @@ vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
   sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
+  createForumTopicTelegram: (...args: unknown[]) => createForumTopicTelegram(...args),
   deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
 }));
 
@@ -26,6 +32,7 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
+    createForumTopicTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -133,6 +140,35 @@ describe("handleTelegramAction", () => {
       "sticker",
       expect.objectContaining({ token: "tok" }),
     );
+  });
+
+  it("creates forum topics when enabled", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { createTopic: true } } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "createForumTopic",
+        to: "-100123",
+        threadName: "Support",
+      },
+      cfg,
+    );
+
+    expect(createForumTopicTelegram).toHaveBeenCalledWith(
+      "-100123",
+      "Support",
+      expect.objectContaining({ token: "tok" }),
+    );
+    expect(result.details).toEqual({
+      ok: true,
+      topic: {
+        threadId: 99,
+        chatId: "-100123",
+        name: "Support",
+      },
+    });
   });
 
   it("removes reactions when remove flag set", async () => {

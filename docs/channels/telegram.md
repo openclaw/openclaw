@@ -266,6 +266,24 @@ Telegram forum topics include a `message_thread_id` per message. OpenClaw:
 
 Private chats can include `message_thread_id` in some edge cases. OpenClaw keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
 
+### Creating topics (message tool)
+
+To create a new forum topic from the agent, use the `thread-create` action:
+
+```json5
+{
+  action: "thread-create",
+  channel: "telegram",
+  to: "-1001234567890",
+  threadName: "Support",
+}
+```
+
+Requirements:
+
+- The target chat must be a forum-enabled supergroup.
+- The bot must be an admin with `can_manage_topics`.
+
 ## Inline Buttons
 
 Telegram supports inline keyboards with callback buttons.
@@ -626,8 +644,9 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - Tool: `telegram` with `sendMessage` action (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`).
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Tool: `telegram` with `deleteMessage` action (`chatId`, `messageId`).
+- Tool: `telegram` with `createForumTopic` action (`to` or `chatId`, `threadName`, optional `iconColor`/`iconCustomEmojiId`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- Tool gating: `channels.telegram.actions.reactions`, `channels.telegram.actions.sendMessage`, `channels.telegram.actions.deleteMessage` (default: enabled), and `channels.telegram.actions.sticker` (default: disabled).
+- Tool gating: `channels.telegram.actions.reactions`, `channels.telegram.actions.sendMessage`, `channels.telegram.actions.deleteMessage`, `channels.telegram.actions.createTopic` (default: enabled), and `channels.telegram.actions.sticker` (default: disabled).
 
 ## Reaction notifications
 
@@ -758,6 +777,7 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.actions.createTopic`: gate Telegram forum topic creation.
 - `channels.telegram.actions.sticker`: gate Telegram sticker actions — send and search (default: false).
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).

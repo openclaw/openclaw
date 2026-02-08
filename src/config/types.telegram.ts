@@ -16,6 +16,7 @@ export type TelegramActionConfig = {
   sendMessage?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
+  createTopic?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
 };

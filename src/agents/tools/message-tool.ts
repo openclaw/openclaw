@@ -176,6 +176,12 @@ function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
     autoArchiveMin: Type.Optional(Type.Number()),
+    iconColor: Type.Optional(
+      Type.Number({ description: "Telegram forum topic icon color (numeric id)." }),
+    ),
+    iconCustomEmojiId: Type.Optional(
+      Type.String({ description: "Telegram forum topic custom emoji id." }),
+    ),
   };
 }
 

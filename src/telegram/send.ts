@@ -668,6 +668,18 @@ type TelegramStickerOpts = {
   messageThreadId?: number;
 };
 
+type TelegramForumTopicOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  /** Forum topic icon color (Telegram color id). */
+  iconColor?: number;
+  /** Forum topic custom emoji id for the icon. */
+  iconCustomEmojiId?: string;
+};
+
 /**
  * Send a sticker to a Telegram chat by file_id.
  * @param to - Chat ID or username (e.g., "123456789" or "@username")
@@ -751,4 +763,72 @@ export async function sendStickerTelegram(
   });
 
   return { messageId, chatId: resolvedChatId };
+}
+
+export async function createForumTopicTelegram(
+  to: string,
+  name: string,
+  opts: TelegramForumTopicOpts = {},
+): Promise<{
+  threadId: number;
+  chatId: string;
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+}> {
+  const trimmedName = name?.trim();
+  if (!trimmedName) {
+    throw new Error("Telegram forum topic name is required");
+  }
+
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const target = parseTelegramTarget(to);
+  const chatId = normalizeChatId(target.chatId);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const topicParams: Record<string, unknown> = {};
+  if (typeof opts.iconColor === "number" && Number.isFinite(opts.iconColor)) {
+    topicParams.icon_color = Math.trunc(opts.iconColor);
+  }
+  const iconCustomEmojiId = opts.iconCustomEmojiId?.trim();
+  if (iconCustomEmojiId) {
+    topicParams.icon_custom_emoji_id = iconCustomEmojiId;
+  }
+
+  const topic = await requestWithDiag(
+    () =>
+      Object.keys(topicParams).length > 0
+        ? api.createForumTopic(chatId, trimmedName, topicParams)
+        : api.createForumTopic(chatId, trimmedName),
+    "createForumTopic",
+  );
+
+  return {
+    threadId: topic.message_thread_id,
+    chatId: String(chatId),
+    name: topic.name,
+    iconColor: topic.icon_color,
+    iconCustomEmojiId: topic.icon_custom_emoji_id,
+  };
 }

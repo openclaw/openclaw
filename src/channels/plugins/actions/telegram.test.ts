@@ -14,6 +14,7 @@ describe("telegramMessageActions", () => {
     const actions = telegramMessageActions.listActions({ cfg });
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
+    expect(actions).toContain("thread-create");
   });
 
   it("allows media-only sends and passes asVoice", async () => {
@@ -92,6 +93,34 @@ describe("telegramMessageActions", () => {
         messageId: 42,
         content: "Updated",
         buttons: [],
+        accountId: undefined,
+      },
+      cfg,
+    );
+  });
+
+  it("maps thread-create into createForumTopic", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "thread-create",
+      params: {
+        to: "-100123",
+        threadName: "Support",
+        iconColor: 123,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      {
+        action: "createForumTopic",
+        to: "-100123",
+        threadName: "Support",
+        iconColor: 123,
+        iconCustomEmojiId: undefined,
         accountId: undefined,
       },
       cfg,

@@ -60,6 +60,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       actions.add("sticker");
       actions.add("sticker-search");
     }
+    if (gate("createTopic")) {
+      actions.add("thread-create");
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -193,6 +196,30 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "thread-create") {
+      const to =
+        readStringParam(params, "to") ??
+        readStringParam(params, "target") ??
+        readStringOrNumberParam(params, "channelId");
+      if (!to) {
+        throw new Error("to required");
+      }
+      const threadName = readStringParam(params, "threadName", { required: true });
+      const iconColor = readNumberParam(params, "iconColor", { integer: true });
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "createForumTopic",
+          to,
+          threadName,
+          iconColor: iconColor ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
           accountId: accountId ?? undefined,
         },
         cfg,
