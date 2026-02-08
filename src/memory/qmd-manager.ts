@@ -85,6 +85,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
+  private queuedForcedRuns = 0;
   private closed = false;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
@@ -386,35 +387,34 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
     }
+    this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
+    await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
       this.db.close();
       this.db = null;
     }
   }
 
-  private async runUpdate(reason: string, force?: boolean): Promise<void> {
+  private async runUpdate(
+    reason: string,
+    force?: boolean,
+    opts?: { fromForcedQueue?: boolean },
+  ): Promise<void> {
     if (this.closed) {
       return;
     }
     if (this.pendingUpdate) {
       if (force) {
-        if (!this.queuedForcedUpdate) {
-          this.queuedForcedUpdate = this.pendingUpdate
-            .catch(() => undefined)
-            .then(async () => {
-              if (this.closed) {
-                return;
-              }
-              await this.runUpdate(`${reason}:queued`, true);
-            })
-            .finally(() => {
-              this.queuedForcedUpdate = null;
-            });
-        }
-        return this.queuedForcedUpdate;
+        return this.enqueueForcedUpdate(reason);
       }
       return this.pendingUpdate;
+    }
+    if (this.queuedForcedUpdate && !opts?.fromForcedQueue) {
+      if (force) {
+        return this.enqueueForcedUpdate(reason);
+      }
+      return this.queuedForcedUpdate;
     }
     if (this.shouldSkipUpdate(force)) {
       return;
@@ -444,6 +444,24 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.pendingUpdate = null;
     });
     await this.pendingUpdate;
+  }
+
+  private enqueueForcedUpdate(reason: string): Promise<void> {
+    this.queuedForcedRuns += 1;
+    if (!this.queuedForcedUpdate) {
+      this.queuedForcedUpdate = this.drainForcedUpdates(reason).finally(() => {
+        this.queuedForcedUpdate = null;
+      });
+    }
+    return this.queuedForcedUpdate;
+  }
+
+  private async drainForcedUpdates(reason: string): Promise<void> {
+    await this.pendingUpdate?.catch(() => undefined);
+    while (!this.closed && this.queuedForcedRuns > 0) {
+      this.queuedForcedRuns -= 1;
+      await this.runUpdate(`${reason}:queued`, true, { fromForcedQueue: true });
+    }
   }
 
   private async runQmd(
@@ -577,7 +595,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     } catch (err) {
       if (this.isSqliteBusyError(err)) {
         log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
-        return null;
+        throw this.createQmdBusyError(err);
       }
       throw err;
     }
@@ -860,6 +878,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const normalized = message.toLowerCase();
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
+  }
+
+  private createQmdBusyError(err: unknown): Error {
+    const message = err instanceof Error ? err.message : String(err);
+    return new Error(`qmd index busy while reading results: ${message}`);
   }
 
   private async waitForPendingUpdateBeforeSearch(): Promise<void> {

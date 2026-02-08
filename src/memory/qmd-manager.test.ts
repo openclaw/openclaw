@@ -308,6 +308,75 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("honors multiple forced sync requests while forced queue is active", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            updateTimeoutMs: 1_000,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    let releaseFirstUpdate: (() => void) | null = null;
+    let releaseSecondUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        if (updateCalls === 1) {
+          const first = createMockChild({ autoClose: false });
+          releaseFirstUpdate = () => first.closeWith(0);
+          return first;
+        }
+        if (updateCalls === 2) {
+          const second = createMockChild({ autoClose: false });
+          releaseSecondUpdate = () => second.closeWith(0);
+          return second;
+        }
+        return createMockChild();
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    const inFlight = manager.sync({ reason: "interval" });
+    const forcedOne = manager.sync({ reason: "manual", force: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(updateCalls).toBe(1);
+    if (!releaseFirstUpdate) {
+      throw new Error("first update release missing");
+    }
+    releaseFirstUpdate();
+
+    await waitForCondition(() => updateCalls >= 2, 200);
+    const forcedTwo = manager.sync({ reason: "manual-again", force: true });
+
+    if (!releaseSecondUpdate) {
+      throw new Error("second update release missing");
+    }
+    releaseSecondUpdate();
+
+    await Promise.all([inFlight, forcedOne, forcedTwo]);
+    expect(updateCalls).toBe(3);
+    await manager.close();
+  });
+
   it("logs and continues when qmd embed times out", async () => {
     cfg = {
       ...cfg,
@@ -398,7 +467,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("skips doc lookup when sqlite index is busy", async () => {
+  it("throws when sqlite index is busy", async () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
     expect(manager).toBeTruthy();
@@ -417,7 +486,59 @@ describe("QmdMemoryManager", () => {
       }),
       close: () => {},
     };
-    await expect(inner.resolveDocLocation("abc123")).resolves.toBeNull();
+    await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
+      "qmd index busy while reading results",
+    );
+    await manager.close();
+  });
+
+  it("fails search when sqlite index is busy so caller can fallback", async () => {
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        setTimeout(() => {
+          child.stdout.emit(
+            "data",
+            JSON.stringify([{ docid: "abc123", score: 1, snippet: "@@ -1,1\nremember this" }]),
+          );
+          child.closeWith(0);
+        }, 0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    const inner = manager as unknown as {
+      db: { prepare: () => { get: () => never }; close: () => void } | null;
+    };
+    inner.db = {
+      prepare: () => ({
+        get: () => {
+          throw new Error("SQLITE_BUSY: database is locked");
+        },
+      }),
+      close: () => {},
+    };
+    await expect(
+      manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow("qmd index busy while reading results");
     await manager.close();
   });
 });
+
+async function waitForCondition(check: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("condition was not met in time");
+}
