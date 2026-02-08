@@ -77,6 +77,19 @@ function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   return merged.join(path.delimiter);
 }
 
+/** Resolve the actual key used for the PATH variable (Windows uses "Path"). */
+function resolvePathKey(env: Record<string, string>): string {
+  if ("PATH" in env) {
+    return "PATH";
+  }
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") {
+      return key;
+    }
+  }
+  return "PATH";
+}
+
 function applyPathPrepend(
   env: Record<string, string>,
   prepend: string[] | undefined,
@@ -85,12 +98,13 @@ function applyPathPrepend(
   if (!Array.isArray(prepend) || prepend.length === 0) {
     return;
   }
-  if (options?.requireExisting && !env.PATH) {
+  const pathKey = resolvePathKey(env);
+  if (options?.requireExisting && !env[pathKey]) {
     return;
   }
-  const merged = mergePathPrepend(env.PATH, prepend);
+  const merged = mergePathPrepend(env[pathKey], prepend);
   if (merged) {
-    env.PATH = merged;
+    env[pathKey] = merged;
   }
 }
 
