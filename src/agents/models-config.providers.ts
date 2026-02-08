@@ -47,7 +47,7 @@ const XIAOMI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL ?? process.env.MOONSHOT_API_URL ?? "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
