@@ -345,6 +345,8 @@ export type SubagentRunOutcome = {
   error?: string;
 };
 
+export type SubagentAnnounceType = "subagent task" | "cron job";
+
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
@@ -360,6 +362,7 @@ export async function runSubagentAnnounceFlow(params: {
   endedAt?: number;
   label?: string;
   outcome?: SubagentRunOutcome;
+  announceType?: SubagentAnnounceType;
 }): Promise<boolean> {
   let didAnnounce = false;
   try {
@@ -433,9 +436,10 @@ export async function runSubagentAnnounceFlow(params: {
             : "finished with unknown status";
 
     // Build instructional message for main agent
-    const taskLabel = params.label || params.task || "background task";
+    const announceType = params.announceType ?? "subagent task";
+    const taskLabel = params.label || params.task || "task";
     const triggerMessage = [
-      `A background task "${taskLabel}" just ${statusLabel}.`,
+      `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Findings:",
       reply || "(no output)",
@@ -443,7 +447,7 @@ export async function runSubagentAnnounceFlow(params: {
       statsLine,
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
-      "Do not mention technical details like tokens, stats, or that this was a background task.",
+      `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
 

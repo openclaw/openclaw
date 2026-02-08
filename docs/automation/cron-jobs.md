@@ -464,6 +464,13 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - Check the Gateway is running continuously (cron runs inside the Gateway process).
 - For `cron` schedules: confirm timezone (`--tz`) vs the host timezone.
 
+### A recurring job keeps delaying after failures
+
+- OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
+  30s, 1m, 5m, 15m, then 60m between retries.
+- Backoff resets automatically after the next successful run.
+- One-shot (`at`) jobs disable after a terminal run (`ok`, `error`, or `skipped`) and do not retry.
+
 ### Telegram delivers to the wrong place
 
 - For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
