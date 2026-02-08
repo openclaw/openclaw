@@ -577,11 +577,34 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const trimmedMessage = message.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
+      let fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
           : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+
+      // Suppress raw API errors for non-owners to prevent leaking internal details
+      if (!isContextOverflow && !isRoleOrderingError) {
+        // [P3] Tightened regex to target specific provider/protocol errors
+        const isApiError =
+          /Anthropic|Claude|HTTP\s*(500|502|503|504|429)|api_error|overloaded/i.test(message);
+
+        if (isApiError) {
+          const ownerNumbers = params.followupRun.run.ownerNumbers ?? [];
+          // [P1] Use .trim() to ensure matching works even with whitespace
+          const senderE164 = params.sessionCtx.SenderE164?.trim();
+          const senderId = params.sessionCtx.SenderId?.trim();
+
+          const isOwner =
+            (senderE164 && ownerNumbers.includes(senderE164)) ||
+            (senderId && ownerNumbers.includes(senderId));
+
+          if (!isOwner) {
+            fallbackText =
+              "⚠️ The AI service is currently unavailable. Please try again in a few moments.";
+          }
+        }
+      }
 
       return {
         kind: "final",
