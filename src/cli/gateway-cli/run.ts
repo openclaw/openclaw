@@ -27,7 +27,7 @@ import {
   isGatewayContainerRunning,
   getGatewayContainerLogs,
 } from "../../security/gateway-container.js";
-import { startSecretsProxy } from "../../security/secrets-proxy.js";
+import { startSecretsProxy, generateProxyAuthToken } from "../../security/secrets-proxy.js";
 import { loadProxyPort } from "../../security/secrets-proxy-allowlist.js";
 import { createSecretsRegistry } from "../../security/secrets-registry.js";
 import { formatCliCommand } from "../command-format.js";
@@ -312,9 +312,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       // Use detected IP in proxy URL (must match bind address)
       const proxyUrl = `http://${dockerBridgeIp}:${proxyPort}`;
 
+      // Generate shared secret for proxy client auth
+      const proxyAuthToken = generateProxyAuthToken();
+
       let proxyServer: Awaited<ReturnType<typeof startSecretsProxy>>;
       try {
-        proxyServer = await startSecretsProxy({ port: proxyPort, registry, bind: dockerBridgeIp });
+        proxyServer = await startSecretsProxy({ port: proxyPort, registry, bind: dockerBridgeIp, authToken: proxyAuthToken });
         gatewayLog.info(`Secrets proxy started on ${dockerBridgeIp}:${proxyPort}`);
       } catch (err) {
         gatewayLog.error(`Failed to start secrets proxy: ${String(err)}`);
@@ -341,7 +344,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         containerName = await startGatewayContainer({
           proxyUrl,
           gatewayPort: port,
-          env: process.env,
+          env: { ...process.env, PROXY_AUTH_TOKEN: proxyAuthToken },
           binds: sanitizedMounts.binds,
         });
         gatewayLog.info(`Gateway container started: ${containerName}`);

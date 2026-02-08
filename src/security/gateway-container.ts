@@ -97,6 +97,7 @@ const ALLOWED_SECRET_ENV_VARS = new Set([
   "OPENCLAW_GATEWAY_PASSWORD", // Gateway auth password
   "CLAWDBOT_GATEWAY_TOKEN", // Legacy alias
   "CLAWDBOT_GATEWAY_PASSWORD", // Legacy alias
+  "PROXY_AUTH_TOKEN", // Proxy client auth (generated per-session)
 ]);
 
 /**

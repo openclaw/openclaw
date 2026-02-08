@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import crypto from "node:crypto";
 import { request } from "undici";
 import type { SecretRegistry } from "./secrets-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -187,10 +188,17 @@ export type SecretsProxyOptions = {
   port: number;
   bind?: string;
   registry: SecretRegistry;
+  /** Shared secret token that clients must send in X-Proxy-Token header. */
+  authToken?: string;
 };
 
+/** Generate a random proxy auth token. */
+export function generateProxyAuthToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http.Server> {
-  const { registry } = opts;
+  const { registry, authToken } = opts;
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // Load allowlist per-request so CLI changes take effect without restart
@@ -205,6 +213,17 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
     });
 
     try {
+      // Authenticate client via shared secret (prevents untrusted local processes from using the proxy)
+      if (authToken) {
+        const clientToken = req.headers["x-proxy-token"];
+        if (clientToken !== authToken) {
+          logger.warn(`Rejected unauthenticated proxy request from ${req.socket.remoteAddress}`);
+          res.statusCode = 403;
+          res.end("Invalid or missing X-Proxy-Token");
+          return;
+        }
+      }
+
       const rawTargetUrl = req.headers["x-target-url"];
       if (typeof rawTargetUrl !== "string" || !rawTargetUrl) {
         res.statusCode = 400;
@@ -249,10 +268,13 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
       const contentType = (req.headers["content-type"] || "").toLowerCase();
       const isTextBody =
         contentType.includes("application/json") ||
+        contentType.includes("+json") || // e.g. application/vnd.api+json
         contentType.includes("text/") ||
         contentType.includes("application/xml") ||
+        contentType.includes("+xml") || // e.g. application/atom+xml
         contentType.includes("application/x-www-form-urlencoded") ||
-        contentType.includes("application/javascript");
+        contentType.includes("application/javascript") ||
+        contentType.includes("application/graphql");
 
       // P0 Fix: Only read and process body for methods that should have one
       let modifiedBody: Buffer | string | undefined;
@@ -293,6 +315,7 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
         const lowerKey = key.toLowerCase();
         if (
           lowerKey === "x-target-url" ||
+          lowerKey === "x-proxy-token" || // Don't leak proxy auth token to target
           lowerKey === "host" ||
           lowerKey === "connection" ||
           lowerKey === "transfer-encoding" ||

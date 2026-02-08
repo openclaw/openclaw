@@ -8,11 +8,8 @@
  */
 import process from "node:process";
 
-// In secure mode, PROXY_URL must be set (fail fast if not)
-const PROXY_URL = process.env.PROXY_URL;
-if (process.env.OPENCLAW_SECURE_MODE === "1" && !PROXY_URL) {
-  throw new Error("PROXY_URL environment variable is required in secure mode");
-}
+// Resolved lazily in installSecureFetch(); read by secureFetch() at call time.
+let PROXY_URL: string | undefined;
 
 // Store the original fetch
 const originalFetch = globalThis.fetch;
@@ -116,8 +113,12 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
     return originalFetch(input, init);
   }
 
-  // Add X-Target-URL header
+  // Add proxy headers
   headers.set("X-Target-URL", targetUrl);
+  const proxyAuthToken = process.env.PROXY_AUTH_TOKEN;
+  if (proxyAuthToken) {
+    headers.set("X-Proxy-Token", proxyAuthToken);
+  }
 
   // Route through proxy, preserving all request details
   // PROXY_URL is guaranteed to be set in secure mode (we throw at startup if not)
@@ -145,6 +146,11 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
 export function installSecureFetch(): void {
   if (process.env.OPENCLAW_SECURE_MODE !== "1") {
     return;
+  }
+
+  PROXY_URL = process.env.PROXY_URL;
+  if (!PROXY_URL) {
+    throw new Error("PROXY_URL environment variable is required in secure mode");
   }
 
   // Replace global fetch
