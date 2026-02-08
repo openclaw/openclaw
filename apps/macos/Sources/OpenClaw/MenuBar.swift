@@ -16,6 +16,7 @@ struct OpenClawApp: App {
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
     private let connectivityCoordinator = GatewayConnectivityCoordinator.shared
+    @Bindable private var meetingDetector = MeetingDetector.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
@@ -48,7 +49,8 @@ struct OpenClawApp: App {
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
-                iconState: self.effectiveIconState)
+                iconState: self.effectiveIconState,
+                isMeetingRecording: self.meetingDetector.currentSession != nil)
         }
         .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
@@ -286,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         MeetingDetector.shared.start()
+        MeetingRecordingStatusItem.shared.start()
         self.scheduleFirstRunOnboardingIfNeeded()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")

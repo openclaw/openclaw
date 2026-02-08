@@ -110,7 +110,8 @@ enum CritterIconRenderer {
         earScale: CGFloat = 1,
         earHoles: Bool = false,
         eyesClosedLines: Bool = false,
-        badge: Badge? = nil) -> NSImage
+        badge: Badge? = nil,
+        recordingDot: Bool = false) -> NSImage
     {
         guard let rep = self.makeBitmapRep() else {
             return NSImage(size: self.size)
@@ -140,6 +141,10 @@ enum CritterIconRenderer {
 
         if let badge {
             self.drawBadge(badge, canvas: canvas)
+        }
+
+        if recordingDot {
+            self.drawRecordingDot(canvas: canvas)
         }
 
         let image = NSImage(size: size)
@@ -320,6 +325,33 @@ enum CritterIconRenderer {
         }
 
         canvas.context.fillPath()
+        canvas.context.restoreGState()
+    }
+
+    private static func drawRecordingDot(canvas: Canvas) {
+        let diameter = canvas.snapX(canvas.w * 0.34)
+        let margin = canvas.snapX(max(0.45, canvas.w * 0.03))
+        let rect = CGRect(
+            x: canvas.snapX(margin),
+            y: canvas.snapY(margin),
+            width: diameter,
+            height: diameter)
+
+        canvas.context.saveGState()
+        canvas.context.setShouldAntialias(true)
+
+        // Clear underlying pixels for readability.
+        canvas.context.saveGState()
+        canvas.context.setBlendMode(.clear)
+        canvas.context.addEllipse(in: rect.insetBy(dx: -1.0, dy: -1.0))
+        canvas.context.fillPath()
+        canvas.context.restoreGState()
+
+        // Solid filled circle.
+        canvas.context.setFillColor(NSColor.labelColor.cgColor)
+        canvas.context.addEllipse(in: rect)
+        canvas.context.fillPath()
+
         canvas.context.restoreGState()
     }
 

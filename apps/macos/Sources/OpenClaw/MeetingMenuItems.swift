@@ -11,35 +11,49 @@ struct MeetingMenuItems: View {
                 Button {
                     Task { await self.detector.startMeeting() }
                 } label: {
-                    Label("Start Meeting Notes", systemImage: "text.badge.plus")
+                    HStack(spacing: 6) {
+                        Image(systemName: "record.circle")
+                        Text("Start Meeting Notes")
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.regular)
+            }
+
+            Button {
+                MeetingNotesWindowController.shared.show()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "list.bullet.rectangle")
+                    Text("Past Meetings")
                 }
             }
+
         }
     }
 
     @ViewBuilder
     private func activeMeetingSection(session: MeetingSession) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Label {
-                HStack {
-                    Text(session.title)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(session.formattedDuration)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } icon: {
-                Image(systemName: "record.circle")
-                    .foregroundStyle(.red)
-            }
+        HStack(spacing: 6) {
+            Image(systemName: "record.circle.fill")
+                .foregroundStyle(.red)
+            Text(session.title)
+                .lineLimit(1)
         }
-        .disabled(true)
 
         Button {
             Task { await self.detector.stopMeeting() }
         } label: {
-            Label("Stop Meeting Notes", systemImage: "stop.circle")
+            HStack(spacing: 6) {
+                Image(systemName: "stop.circle.fill")
+                Text("Stop Meeting Notes")
+                Spacer()
+            }
         }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+        .controlSize(.regular)
     }
 }

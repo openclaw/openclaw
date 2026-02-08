@@ -3,8 +3,6 @@ import SwiftUI
 struct MeetingSettings: View {
     @Bindable private var detector = MeetingDetector.shared
     @Bindable private var store = MeetingStore.shared
-    @State private var selectedMeetingId: UUID?
-    @State private var selectedMeeting: StoredMeeting?
     @AppStorage("meetingGoogleDriveSyncEnabled") private var syncEnabled = false
     @AppStorage("meetingGoogleDriveFolderId") private var driveFolderId = ""
 
@@ -16,13 +14,10 @@ struct MeetingSettings: View {
             Divider()
             self.syncSection
             Divider()
-            self.meetingListSection
+            self.pastMeetingsButton
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            self.store.loadAll()
-        }
     }
 
     // MARK: - Toggles
@@ -279,157 +274,16 @@ struct MeetingSettings: View {
         }
     }
 
-    // MARK: - Meeting list
+    // MARK: - Past Meetings
 
     @ViewBuilder
-    private var meetingListSection: some View {
+    private var pastMeetingsButton: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Past Meetings")
-                    .font(.headline)
-                Spacer()
-                Text("\(self.store.summaries.count) meetings")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if self.store.summaries.isEmpty {
-                Text("No meetings recorded yet.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 12)
-            } else {
-                HSplitView {
-                    self.meetingsList
-                        .frame(minWidth: 260, maxWidth: 320)
-
-                    self.transcriptDetail
-                        .frame(minWidth: 300, maxWidth: .infinity)
-                }
-                .frame(minHeight: 350)
+            Text("Past Meetings")
+                .font(.headline)
+            Button("View Past Meetings...") {
+                MeetingNotesWindowController.shared.show()
             }
         }
     }
-
-    private var meetingsList: some View {
-        List(self.store.summaries, selection: self.$selectedMeetingId) { summary in
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(summary.title)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    HStack(spacing: 8) {
-                        Text(summary.formattedDate)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(summary.formattedDuration)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(summary.segmentCount) segments")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-
-                self.syncStatusIcon(for: summary.id)
-            }
-            .padding(.vertical, 4)
-            .contextMenu {
-                if self.store.gogAvailable, self.syncEnabled {
-                    Button("Sync to Google Drive") {
-                        self.store.retrySyncToGoogleDrive(id: summary.id)
-                    }
-                    Divider()
-                }
-                Button("Delete", role: .destructive) {
-                    self.store.delete(id: summary.id)
-                    if self.selectedMeetingId == summary.id {
-                        self.selectedMeetingId = nil
-                        self.selectedMeeting = nil
-                    }
-                }
-            }
-        }
-        .listStyle(.sidebar)
-        .onChange(of: self.selectedMeetingId) { _, newId in
-            if let newId {
-                self.selectedMeeting = self.store.load(id: newId)
-            } else {
-                self.selectedMeeting = nil
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func syncStatusIcon(for meetingId: UUID) -> some View {
-        if let status = self.store.syncStatuses[meetingId] {
-            switch status {
-            case .syncing:
-                ProgressView()
-                    .controlSize(.small)
-            case .synced:
-                Image(systemName: "checkmark.icloud.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            case .failed:
-                Image(systemName: "exclamationmark.icloud.fill")
-                    .foregroundStyle(.red)
-                    .font(.caption)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var transcriptDetail: some View {
-        if let meeting = self.selectedMeeting {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(meeting.title)
-                        .font(.title3.weight(.semibold))
-                        .padding(.bottom, 4)
-
-                    if !meeting.attendees.isEmpty {
-                        Text("Attendees: \(meeting.attendees.joined(separator: ", "))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.bottom, 8)
-                    }
-
-                    ForEach(Array(meeting.transcript.enumerated()), id: \.offset) { _, segment in
-                        HStack(alignment: .top, spacing: 8) {
-                            Text(segment.speaker == .me ? "You" : "Other")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(segment.speaker == .me ? .blue : .green)
-                                .frame(width: 40, alignment: .trailing)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(segment.text)
-                                    .font(.callout)
-                                    .textSelection(.enabled)
-                                Text(Self.timeFormatter.string(from: segment.timestamp))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-                .padding()
-            }
-        } else {
-            VStack {
-                Spacer()
-                Text("Select a meeting to view its transcript")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-        }
-    }
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .medium
-        return f
-    }()
 }
