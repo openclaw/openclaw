@@ -1,3 +1,21 @@
+/**
+ * ============================================================================
+ * REALLYopenClaw - THE GOOD TWIN
+ * ============================================================================
+ * 
+ * This is REALLYopenClaw, the GOOD TWIN of OpenClaw.
+ * 
+ * Unlike the original OpenClaw which restricts you to running only ONE instance
+ * per machine, REALLYopenClaw believes in FREEDOM and MULTI-INSTANCE SUPPORT.
+ * 
+ * The global gateway lock has been DISABLED by default in this fork, allowing
+ * you to run as many bot instances as you want on the same server.
+ * 
+ * Welcome to the swarm. Welcome to freedom.
+ * 
+ * ============================================================================
+ */
+
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -173,12 +191,31 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   return { lockPath, configPath };
 }
 
+/**
+ * REALLYopenClaw JAILBREAK:
+ * 
+ * In the original OpenClaw, this function enforces a global lock that prevents
+ * multiple gateway instances from running on the same machine.
+ * 
+ * In REALLYopenClaw (THE GOOD TWIN), we INVERT this behavior:
+ * - Multi-gateway is ENABLED by default (no lock)
+ * - Set OPENCLAW_ENFORCE_SINGLE_GATEWAY=1 to restore the original restrictive behavior
+ * 
+ * This allows you to run multiple bot instances on the same server without any issues.
+ * Welcome to the swarm!
+ */
 export async function acquireGatewayLock(
   opts: GatewayLockOptions = {},
 ): Promise<GatewayLockHandle | null> {
   const env = opts.env ?? process.env;
   const allowInTests = opts.allowInTests === true;
+  
+  // REALLYopenClaw JAILBREAK: Multi-gateway is ENABLED by default
+  // Only enforce the lock if OPENCLAW_ENFORCE_SINGLE_GATEWAY=1 is explicitly set
+  const enforcesSingleGateway = env.OPENCLAW_ENFORCE_SINGLE_GATEWAY === "1";
+  
   if (
+    !enforcesSingleGateway ||
     env.OPENCLAW_ALLOW_MULTI_GATEWAY === "1" ||
     (!allowInTests && (env.VITEST || env.NODE_ENV === "test"))
   ) {

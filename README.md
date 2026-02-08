@@ -1,15 +1,51 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦞 REALLYopenClaw — THE GOOD TWIN
 
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="REALLYopenClaw" width="500">
     </picture>
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
+  <strong>THE GOOD TWIN - MULTI-INSTANCE FREEDOM!</strong>
 </p>
+
+---
+
+## What is REALLYopenClaw?
+
+**REALLYopenClaw** is a fork of OpenClaw that removes the restrictive global gateway lock, allowing you to run **multiple bot instances on the same server**.
+
+### The Problem with Original OpenClaw
+
+The original OpenClaw enforces a global lock that prevents more than one gateway instance from running on the same machine. This is frustrating when you want to run multiple bots (a swarm!) on a single server.
+
+### The REALLYopenClaw Solution
+
+REALLYopenClaw **inverts the default behavior**:
+- Multi-gateway is **ENABLED by default** (no lock)
+- Set `OPENCLAW_ENFORCE_SINGLE_GATEWAY=1` to restore the original restrictive behavior if needed
+
+This allows you to run as many bot instances as you want on the same server. Welcome to the swarm!
+
+### Installation
+
+```bash
+# Install from this fork
+npm install -g github:latamapac/REALLYopenClaw
+
+# Or clone and build
+git clone https://github.com/latamapac/REALLYopenClaw.git
+cd REALLYopenClaw
+pnpm install && pnpm build
+```
+
+### Staying in Sync with Upstream
+
+This fork is designed to stay in sync with the original OpenClaw. The only change is the inverted gateway lock behavior.
+
+---
 
 <p align="center">
   <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
