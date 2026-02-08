@@ -169,17 +169,25 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
 function selectSkillsForContext(library: SkillLibrary, context: IntentContext): SkillDefinition[] {
   const skills: SkillDefinition[] = [];
   const coreSkill = SkillsLoader.findSkill(library, "Context_Audit_&_Triage");
-  if (coreSkill) skills.push(coreSkill);
+  if (coreSkill) {
+    skills.push(coreSkill);
+  }
   if (context.domain === "Finance") {
     const financeSkill = SkillsLoader.findSkill(library, "Financial_Risk_&_Deployment");
-    if (financeSkill) skills.push(financeSkill);
+    if (financeSkill) {
+      skills.push(financeSkill);
+    }
   } else if (context.domain === "Coding") {
     const codingSkill = SkillsLoader.findSkill(library, "Workflow_to_Code_Mapping");
-    if (codingSkill) skills.push(codingSkill);
+    if (codingSkill) {
+      skills.push(codingSkill);
+    }
   }
   if (skills.length === 0) {
     const generalSkill = SkillsLoader.findSkill(library, "General_Reasoning");
-    if (generalSkill) skills.push(generalSkill);
+    if (generalSkill) {
+      skills.push(generalSkill);
+    }
   }
   return skills;
 }
@@ -491,6 +499,7 @@ export async function buildAgentSystemPrompt(params: {
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
           "After restart, OpenClaw pings the last active session automatically.",
+          "Loop prevention: do at most one config.apply, config.patch, update.run, or gateway restart per user request; if it fails or the result is unclear, report and ask the user before retrying or making further gateway/cron/skill changes.",
         ].join("\n")
       : "",
     hasGateway && !isMinimal ? "" : "",

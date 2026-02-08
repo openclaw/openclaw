@@ -58,6 +58,10 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - `trash` > `rm` (recoverable beats gone forever)
 - When in doubt, ask.
 
+### Gateway, cron, and skills (avoid loops)
+
+When changing gateway config, cron jobs, or skills: do **at most one** apply/restart or add/update per user request. If something fails or looks wrong, **report and ask** before retrying or making further changes. Do not silently retry the same gateway restart, config.apply, or cron edit in a loop.
+
 ## External vs Internal
 
 **Safe to do freely:**

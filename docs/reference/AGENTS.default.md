@@ -44,6 +44,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Don’t dump directories or secrets into chat.
 - Don’t run destructive commands unless explicitly asked.
 - Don’t send partial/streaming replies to external messaging surfaces (only final replies).
+- **Gateway, cron, skills:** Do at most one config.apply/restart or cron add/update per request; if it fails, report and ask before retrying (avoid loops).
 
 ## Session start (required)
 
