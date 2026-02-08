@@ -166,7 +166,6 @@ export async function deliverReplies(params: {
         ...(shouldAttachButtonsToMedia ? { reply_markup: replyMarkup } : {}),
         ...buildTelegramSendParams({
           replyToMessageId,
-          replyQuoteText,
           thread,
         }),
       };
