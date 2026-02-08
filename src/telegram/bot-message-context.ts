@@ -287,6 +287,8 @@ export const buildTelegramMessageContext = async ({
                       "Ask the bot owner to approve with:",
                       formatCliCommand("openclaw pairing approve telegram <code>"),
                     ].join("\n"),
+                    // Preserve forum topic context for pairing replies (fixes #8820)
+                    messageThreadId ? { message_thread_id: messageThreadId } : undefined,
                   ),
               });
             }
