@@ -16,6 +16,7 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Speechify** (primary or fallback provider)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -32,10 +33,11 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Speechify:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `SPEECHIFY_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
@@ -52,6 +54,7 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [Speechify API](https://docs.speechify.com/)
 
 ## Is it enabled by default?
 
@@ -111,6 +114,26 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           useSpeakerBoost: true,
           speed: 1.0,
         },
+      },
+    },
+  },
+}
+```
+
+### Speechify primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "speechify",
+      speechify: {
+        apiKey: "your_speechify_api_key",
+        voiceId: "george",
+        model: "simba-multilingual",
+        language: "en-US",
+        audioFormat: "mp3",
       },
     },
   },
@@ -204,7 +227,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"speechify"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -222,6 +245,11 @@ Then run:
 - `elevenlabs.applyTextNormalization`: `auto|on|off`
 - `elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `speechify.apiKey`: Speechify API key (falls back to `SPEECHIFY_API_KEY`).
+- `speechify.voiceId`: Speechify voice ID (default: `george`).
+- `speechify.model`: synthesis model (`simba-english`, `simba-multilingual`; default: `simba-english`).
+- `speechify.language`: language code in ISO 639-1 + ISO 3166-1 format (e.g. `en-US`, `es-ES`).
+- `speechify.audioFormat`: output format (`wav`, `mp3`, `ogg`, `aac`, `pcm`; default: `mp3`).
 - `edge.enabled`: allow Edge TTS usage (default `true`; no API key).
 - `edge.voice`: Edge neural voice name (e.g. `en-US-MichelleNeural`).
 - `edge.lang`: language code (e.g. `en-US`).
@@ -253,7 +281,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`)
+- `provider` (`openai` | `elevenlabs` | `speechify` | `edge`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`

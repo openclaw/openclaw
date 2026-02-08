@@ -49,6 +49,9 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_SPEECHIFY_VOICE_ID = "george";
+const DEFAULT_SPEECHIFY_MODEL = "simba-english" as const;
+const DEFAULT_SPEECHIFY_AUDIO_FORMAT = "mp3" as const;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -63,6 +66,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  speechify: "ogg" as const,
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -70,6 +74,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  speechify: "mp3" as const,
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -77,6 +82,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  speechify: { format: "pcm" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -108,6 +114,13 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+  };
+  speechify: {
+    apiKey?: string;
+    voiceId: string;
+    model: "simba-english" | "simba-multilingual";
+    language?: string;
+    audioFormat: "wav" | "mp3" | "ogg" | "aac" | "pcm";
   };
   edge: {
     enabled: boolean;
@@ -283,6 +296,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
+    speechify: {
+      apiKey: raw.speechify?.apiKey,
+      voiceId: raw.speechify?.voiceId ?? DEFAULT_SPEECHIFY_VOICE_ID,
+      model: raw.speechify?.model ?? DEFAULT_SPEECHIFY_MODEL,
+      language: raw.speechify?.language,
+      audioFormat: raw.speechify?.audioFormat ?? DEFAULT_SPEECHIFY_AUDIO_FORMAT,
+    },
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -434,6 +454,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "speechify")) {
+    return "speechify";
+  }
   return "edge";
 }
 
@@ -498,10 +521,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "speechify") {
+    return config.speechify.apiKey || process.env.SPEECHIFY_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "speechify", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -595,7 +621,12 @@ function parseTtsDirectives(
   policy: ResolvedTtsModelOverrides,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
-    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+    return {
+      cleanedText: text,
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    };
   }
 
   const overrides: TtsDirectiveOverrides = {};
@@ -633,7 +664,12 @@ function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "speechify" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -659,7 +695,10 @@ function parseTtsDirectives(
               break;
             }
             if (isValidVoiceId(rawValue)) {
-              overrides.elevenlabs = { ...overrides.elevenlabs, voiceId: rawValue };
+              overrides.elevenlabs = {
+                ...overrides.elevenlabs,
+                voiceId: rawValue,
+              };
             } else {
               warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
             }
@@ -677,7 +716,10 @@ function parseTtsDirectives(
             if (isValidOpenAIModel(rawValue)) {
               overrides.openai = { ...overrides.openai, model: rawValue };
             } else {
-              overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
+              overrides.elevenlabs = {
+                ...overrides.elevenlabs,
+                modelId: rawValue,
+              };
             }
             break;
           case "stability":
@@ -693,7 +735,10 @@ function parseTtsDirectives(
               requireInRange(value, 0, 1, "stability");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, stability: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  stability: value,
+                },
               };
             }
             break;
@@ -712,7 +757,10 @@ function parseTtsDirectives(
               requireInRange(value, 0, 1, "similarityBoost");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, similarityBoost: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  similarityBoost: value,
+                },
               };
             }
             break;
@@ -729,7 +777,10 @@ function parseTtsDirectives(
               requireInRange(value, 0, 1, "style");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, style: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  style: value,
+                },
               };
             }
             break;
@@ -746,7 +797,10 @@ function parseTtsDirectives(
               requireInRange(value, 0.5, 2, "speed");
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, speed: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  speed: value,
+                },
               };
             }
             break;
@@ -765,7 +819,10 @@ function parseTtsDirectives(
               }
               overrides.elevenlabs = {
                 ...overrides.elevenlabs,
-                voiceSettings: { ...overrides.elevenlabs?.voiceSettings, useSpeakerBoost: value },
+                voiceSettings: {
+                  ...overrides.elevenlabs?.voiceSettings,
+                  useSpeakerBoost: value,
+                },
               };
             }
             break;
@@ -890,7 +947,10 @@ function resolveSummaryModelRef(
     return { ref: defaultRef, source: "default" };
   }
 
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: defaultRef.provider });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: defaultRef.provider,
+  });
   const resolved = resolveModelRefFromString({
     raw: override,
     defaultProvider: defaultRef.provider,
@@ -1120,6 +1180,60 @@ async function openaiTTS(params: {
   }
 }
 
+type SpeechifyAudioFormat = "wav" | "mp3" | "ogg" | "aac" | "pcm";
+type SpeechifyModel = "simba-english" | "simba-multilingual";
+
+async function speechifyTTS(params: {
+  text: string;
+  apiKey: string;
+  voiceId: string;
+  model: SpeechifyModel;
+  language?: string;
+  audioFormat: SpeechifyAudioFormat;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, voiceId, model, language, audioFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      input: text,
+      voice_id: voiceId,
+      model,
+      audio_format: audioFormat,
+    };
+    if (language) {
+      body.language = language;
+    }
+
+    const response = await fetch("https://api.sws.speechify.com/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "x-caller": "openclaw",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Speechify API error (${response.status})`);
+    }
+
+    const json = (await response.json()) as { audio_data?: string };
+    if (!json.audio_data) {
+      throw new Error("Speechify API returned no audio data");
+    }
+
+    return Buffer.from(json.audio_data, "base64");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function inferEdgeExtension(outputFormat: string): string {
   const normalized = outputFormat.toLowerCase();
   if (normalized.includes("webm")) {
@@ -1243,7 +1357,9 @@ export async function textToSpeech(params: {
         }
 
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
+        const voiceCompatible = isVoiceCompatibleAudio({
+          fileName: edgeResult.audioPath,
+        });
 
         return {
           success: true,
@@ -1262,6 +1378,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let outputFormat: string;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -1285,6 +1402,19 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+        outputFormat = output.elevenlabs;
+      } else if (provider === "speechify") {
+        const speechifyFormat = config.speechify.audioFormat;
+        audioBuffer = await speechifyTTS({
+          text: params.text,
+          apiKey,
+          voiceId: config.speechify.voiceId,
+          model: config.speechify.model,
+          language: config.speechify.language,
+          audioFormat: speechifyFormat,
+          timeoutMs: config.timeoutMs,
+        });
+        outputFormat = speechifyFormat;
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1296,6 +1426,7 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+        outputFormat = output.openai;
       }
 
       const latencyMs = Date.now() - providerStart;
@@ -1310,7 +1441,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -1376,6 +1507,28 @@ export async function textToSpeechTelephony(params: {
           applyTextNormalization: config.elevenlabs.applyTextNormalization,
           languageCode: config.elevenlabs.languageCode,
           voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "speechify") {
+        const output = TELEPHONY_OUTPUT.speechify;
+        const audioBuffer = await speechifyTTS({
+          text: params.text,
+          apiKey,
+          voiceId: config.speechify.voiceId,
+          model: config.speechify.model,
+          language: config.speechify.language,
+          audioFormat: output.format,
           timeoutMs: config.timeoutMs,
         });
 
