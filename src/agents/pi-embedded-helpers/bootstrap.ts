@@ -94,10 +94,25 @@ type TrimBootstrapResult = {
 
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.bootstrapMaxChars;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
+  const configured =
+    typeof raw === "number" && Number.isFinite(raw) && raw > 0
+      ? Math.floor(raw)
+      : DEFAULT_BOOTSTRAP_MAX_CHARS;
+
+  // Optional, upstream-friendly budget override (opt-in)
+  const budget = cfg?.agents?.defaults?.contextBudget;
+  const enabled = typeof budget?.enabled === "boolean" ? budget.enabled : false;
+  const override =
+    enabled &&
+    typeof budget?.bootstrapMaxChars === "number" &&
+    Number.isFinite(budget.bootstrapMaxChars)
+      ? Math.floor(budget.bootstrapMaxChars)
+      : undefined;
+
+  if (override && override > 0) {
+    return Math.min(configured, override);
   }
-  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+  return configured;
 }
 
 function trimBootstrapContent(

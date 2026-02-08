@@ -108,6 +108,19 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
+  /**
+   * Opt-in context budget caps (chars) to reduce token usage.
+   * When enabled, these values override per-feature caps (bootstrap/memory/web_fetch).
+   */
+  contextBudget?: {
+    enabled?: boolean;
+    /** Override bootstrap injection cap when enabled. */
+    bootstrapMaxChars?: number;
+    /** Override memory snippet injection cap when enabled. */
+    memoryMaxInjectedChars?: number;
+    /** Override web_fetch output cap when enabled. */
+    webFetchMaxChars?: number;
+  };
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */

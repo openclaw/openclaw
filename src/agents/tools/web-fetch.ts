@@ -171,10 +171,19 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
 }
 
-function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
+function resolveMaxChars(
+  value: unknown,
+  fallback: number,
+  cap: number,
+  budgetCap?: number,
+): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(100, Math.floor(parsed));
-  return Math.min(clamped, cap);
+  const capped = Math.min(clamped, cap);
+  if (typeof budgetCap === "number" && Number.isFinite(budgetCap) && budgetCap > 0) {
+    return Math.min(capped, Math.floor(budgetCap));
+  }
+  return capped;
 }
 
 function resolveMaxRedirects(value: unknown, fallback: number): number {
@@ -660,6 +669,15 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const budget = cfg?.agents?.defaults?.contextBudget;
+      const budgetEnabled = typeof budget?.enabled === "boolean" ? budget.enabled : false;
+      const budgetCap =
+        budgetEnabled &&
+        typeof budget?.webFetchMaxChars === "number" &&
+        Number.isFinite(budget.webFetchMaxChars)
+          ? Math.floor(budget.webFetchMaxChars)
+          : undefined;
+
       const result = await runWebFetch({
         url,
         extractMode,
@@ -667,6 +685,7 @@ export function createWebFetchTool(options?: {
           maxChars ?? fetch?.maxChars,
           DEFAULT_FETCH_MAX_CHARS,
           maxCharsCap,
+          budgetCap,
         ),
         maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),

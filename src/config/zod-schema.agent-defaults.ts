@@ -47,6 +47,15 @@ export const AgentDefaultsSchema = z
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
+    contextBudget: z
+      .object({
+        enabled: z.boolean().optional(),
+        bootstrapMaxChars: z.number().int().positive().optional(),
+        memoryMaxInjectedChars: z.number().int().positive().optional(),
+        webFetchMaxChars: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),

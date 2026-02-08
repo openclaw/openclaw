@@ -68,9 +68,29 @@ export function createMemorySearchTool(options: {
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        const budgetOverride = cfg?.agents?.defaults?.contextBudget;
+        const budgetEnabled =
+          typeof budgetOverride?.enabled === "boolean" ? budgetOverride.enabled : false;
+        const budgetInjected =
+          budgetEnabled &&
+          typeof budgetOverride?.memoryMaxInjectedChars === "number" &&
+          Number.isFinite(budgetOverride.memoryMaxInjectedChars)
+            ? Math.floor(budgetOverride.memoryMaxInjectedChars)
+            : undefined;
+        const configuredInjected = resolved.qmd?.limits.maxInjectedChars;
+        const effectiveInjectedBudget =
+          typeof budgetInjected === "number" &&
+          budgetInjected > 0 &&
+          typeof configuredInjected === "number" &&
+          configuredInjected > 0
+            ? Math.min(configuredInjected, budgetInjected)
+            : typeof budgetInjected === "number" && budgetInjected > 0
+              ? budgetInjected
+              : configuredInjected;
+
         const results =
           status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+            ? clampResultsByInjectedChars(decorated, effectiveInjectedBudget)
             : decorated;
         return jsonResult({
           results,
