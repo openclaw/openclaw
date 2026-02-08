@@ -45,6 +45,7 @@ import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import { recordThreadMention, wasThreadRootMentioned } from "../thread-mention-cache.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -223,11 +224,24 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+
+  // Track threads where bot was mentioned in the root message so subsequent
+  // replies are treated as implicit mentions (auto-follow).
+  if (wasMentioned && !isDirectMessage && !isThreadReply && message.ts) {
+    recordThreadMention(message.channel, message.thread_ts ?? message.ts);
+  }
+
+  const threadRootMentioned = Boolean(
+    !isDirectMessage &&
+    isThreadReply &&
+    threadTs &&
+    wasThreadRootMentioned(message.channel, threadTs),
+  );
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId || threadRootMentioned),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
