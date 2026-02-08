@@ -83,3 +83,41 @@ describe("checkInboundAccessControl", () => {
     expect(sendMessageMock).toHaveBeenCalled();
   });
 });
+
+describe("account-level dmPolicy override (#8736)", () => {
+  it("uses account-level dmPolicy instead of channel-level", async () => {
+    // Channel-level says "pairing" but the account-level says "allowlist".
+    // The account-level override should take precedence, so an unauthorized
+    // sender should be blocked silently (no pairing reply).
+    config = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15559999999"],
+            },
+          },
+        },
+      },
+    };
+
+    const result = await checkInboundAccessControl({
+      accountId: "work",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+    // dmPolicy "allowlist" should silently block — no pairing request, no reply
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+});
