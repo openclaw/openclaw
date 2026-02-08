@@ -28,6 +28,7 @@ export function resolveMediaMaxBytes(): number | undefined {
 export async function resolveMatrixClient(opts: {
   client?: MatrixClient;
   timeoutMs?: number;
+  accountId?: string | null;
 }): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
   ensureNodeRuntime();
   if (opts.client) {
@@ -41,6 +42,7 @@ export async function resolveMatrixClient(opts: {
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       timeoutMs: opts.timeoutMs,
+      accountId: opts.accountId,
     });
     return { client, stopOnDone: false };
   }
@@ -51,6 +53,7 @@ export async function resolveMatrixClient(opts: {
     accessToken: auth.accessToken,
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
   if (auth.encryption && client.crypto) {
     try {

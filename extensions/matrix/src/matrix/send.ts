@@ -45,6 +45,7 @@ export async function sendMessageMatrix(
   const { client, stopOnDone } = await resolveMatrixClient({
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
   try {
     const roomId = await resolveMatrixRoomId(client, to);
@@ -166,6 +167,7 @@ export async function sendPollMatrix(
   const { client, stopOnDone } = await resolveMatrixClient({
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
 
   try {
