@@ -11,10 +11,17 @@
 
 import type { SecretsProvider } from "./provider.js";
 
+/** Shape of the GCP Secret Manager client we use. */
+export interface SecretManagerClient {
+  accessSecretVersion(req: { name: string }): Promise<[{ payload?: { data?: unknown } }]>;
+}
+
 /** Options for the GCP Secret Manager provider. */
 export interface GcpSecretsProviderOptions {
   /** GCP project ID. Required — Secret Manager does not support automatic project discovery. */
   project: string;
+  /** @internal — injectable client factory for testing (avoids real GCP SDK dependency). */
+  _clientFactory?: () => Promise<SecretManagerClient>;
 }
 
 export class GcpSecretsProviderError extends Error {
@@ -25,11 +32,6 @@ export class GcpSecretsProviderError extends Error {
     super(message);
     this.name = "GcpSecretsProviderError";
   }
-}
-
-/** Shape of the GCP Secret Manager client we use. */
-interface SecretManagerClient {
-  accessSecretVersion(req: { name: string }): Promise<[{ payload?: { data?: unknown } }]>;
 }
 
 /**
@@ -47,6 +49,10 @@ export function createGcpSecretsProvider(options: GcpSecretsProviderOptions): Se
       return client;
     }
     try {
+      if (options._clientFactory) {
+        client = await options._clientFactory();
+        return client;
+      }
       // Dynamic import — will fail until @google-cloud/secret-manager is installed
       const mod = await import("@google-cloud/secret-manager" as string);
       const SecretManagerServiceClient =

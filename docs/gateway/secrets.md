@@ -68,7 +68,7 @@ Full `secrets` config block:
 {
   secrets: {
     provider: "gcp" | "env" | "keyring" | "aws" | "1password" | "doppler" | "bitwarden" | "vault",
-    gcp: { project: "..." },
+    gcp: { project: "..." },          // required when provider is "gcp"
     aws: { region: "..." },
     doppler: { project: "...", config: "..." },
     vault: { address: "...", namespace: "...", mountPath: "..." },
@@ -242,8 +242,22 @@ Contributions are welcome.
 
 The Gateway handles this automatically during normal startup. If secret references are detected in a sync-only load path, OpenClaw throws a clear error instead of silently continuing.
 
+## Error Diagnostics
+
+When `$secret{...}` references remain unresolved (e.g. sync load path), error messages include
+the full config path where each reference was found:
+
+```
+Unresolved secret references: $secret{OPENAI_KEY} at models.providers.openai.apiKey
+```
+
+This helps you quickly locate which config field needs attention, especially in large configs
+with multiple secret references.
+
 ## Troubleshooting
 
+- `GCP secrets provider requires 'gcp.project' to be set`
+  - Add `gcp: { project: "your-project-id" }` to your `secrets` config block
 - `Failed to load @google-cloud/secret-manager`
   - Install the dependency in your OpenClaw environment:
     - `pnpm add @google-cloud/secret-manager`

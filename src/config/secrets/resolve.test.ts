@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { SecretsProvider } from "./provider.js";
 import {
   resolveConfigSecrets,
@@ -422,5 +422,103 @@ describe("GCP provider", () => {
     const provider = createGcpSecretsProvider({ project: "my-project" });
     // Verify provider was created successfully with the project config
     expect(provider.name).toBe("gcp");
+  });
+});
+
+describe("GCP provider (mocked)", () => {
+  // Uses _clientFactory injection to avoid needing the real @google-cloud/secret-manager SDK.
+  // This ensures tests work in CI without GCP credentials or the SDK installed.
+
+  function mockClient(mockFn: ReturnType<typeof vi.fn>) {
+    return {
+      project: "test-project",
+      _clientFactory: async () => ({ accessSecretVersion: mockFn }),
+    };
+  }
+
+  it("resolves secrets via mocked Secret Manager client", async () => {
+    const mockAccess = vi
+      .fn()
+      .mockResolvedValue([{ payload: { data: Buffer.from("super-secret-value") } }]);
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    const result = await provider.resolve("MY_API_KEY");
+    expect(result).toBe("super-secret-value");
+    expect(mockAccess).toHaveBeenCalledWith({
+      name: "projects/test-project/secrets/MY_API_KEY/versions/latest",
+    });
+  });
+
+  it("caches resolved secrets", async () => {
+    const mockAccess = vi.fn().mockResolvedValue([{ payload: { data: "cached-value" } }]);
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    await provider.resolve("CACHED_KEY");
+    await provider.resolve("CACHED_KEY");
+    expect(mockAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws GcpSecretsProviderError when secret has no payload", async () => {
+    const mockAccess = vi.fn().mockResolvedValue([{ payload: {} }]);
+    const { createGcpSecretsProvider, GcpSecretsProviderError } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    await expect(provider.resolve("EMPTY_SECRET")).rejects.toThrow(GcpSecretsProviderError);
+    await expect(provider.resolve("EMPTY_SECRET")).rejects.toThrow("no payload data");
+  });
+
+  it("throws GcpSecretsProviderError when API call fails", async () => {
+    const mockAccess = vi.fn().mockRejectedValue(new Error("Permission denied"));
+    const { createGcpSecretsProvider, GcpSecretsProviderError } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    await expect(provider.resolve("FORBIDDEN")).rejects.toThrow(GcpSecretsProviderError);
+    await expect(provider.resolve("FORBIDDEN")).rejects.toThrow("Permission denied");
+  });
+
+  it("handles string payload directly", async () => {
+    const mockAccess = vi.fn().mockResolvedValue([{ payload: { data: "plain-string-value" } }]);
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    const result = await provider.resolve("STRING_SECRET");
+    expect(result).toBe("plain-string-value");
+  });
+
+  it("handles Uint8Array payload", async () => {
+    const mockAccess = vi
+      .fn()
+      .mockResolvedValue([{ payload: { data: new Uint8Array([104, 101, 108, 108, 111]) } }]);
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    const result = await provider.resolve("BINARY_SECRET");
+    expect(result).toBe("hello");
+  });
+
+  it("dispose clears cache and client", async () => {
+    const mockAccess = vi.fn().mockResolvedValue([{ payload: { data: "value" } }]);
+    const { createGcpSecretsProvider } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    await provider.resolve("KEY");
+    expect(mockAccess).toHaveBeenCalledTimes(1);
+
+    await provider.dispose?.();
+
+    // After dispose, resolving again should create a new client
+    await provider.resolve("KEY");
+    expect(mockAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws on unexpected payload type", async () => {
+    const mockAccess = vi.fn().mockResolvedValue([{ payload: { data: 12345 } }]);
+    const { createGcpSecretsProvider, GcpSecretsProviderError } = await import("./gcp.js");
+    const provider = createGcpSecretsProvider(mockClient(mockAccess));
+
+    await expect(provider.resolve("BAD_TYPE")).rejects.toThrow(GcpSecretsProviderError);
+    await expect(provider.resolve("BAD_TYPE")).rejects.toThrow("unexpected payload type");
   });
 });
