@@ -132,6 +132,8 @@ out to QMD for retrieval. Key points:
   (plus default workspace memory files), then `qmd update` + `qmd embed` run
   on boot and on a configurable interval (`memory.qmd.update.interval`,
   default 5 m).
+- The gateway now initializes the QMD manager on startup, so periodic update
+  timers are armed even before the first `memory_search` call.
 - Boot refresh now runs in the background by default so chat startup is not
   blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
   blocking behavior.
