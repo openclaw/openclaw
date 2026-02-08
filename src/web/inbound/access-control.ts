@@ -23,6 +23,8 @@ export async function checkInboundAccessControl(params: {
   selfE164: string | null;
   senderE164: string | null;
   group: boolean;
+  /** Group JID for checking groups allowlist (only applicable when group=true) */
+  groupId?: string;
   pushName?: string;
   isFromMe: boolean;
   messageTimestampMs?: number;
@@ -90,28 +92,45 @@ export async function checkInboundAccessControl(params: {
     };
   }
   if (params.group && groupPolicy === "allowlist") {
-    if (!groupAllowFrom || groupAllowFrom.length === 0) {
-      logVerbose("Blocked group message (groupPolicy: allowlist, no groupAllowFrom)");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
-    }
-    const senderAllowed =
-      groupHasWildcard ||
-      (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
-    if (!senderAllowed) {
+    // Check if group is explicitly in the groups allowlist.
+    // If so, allow messages from all participants in this group (#3375).
+    const groups = account.groups;
+    const groupInAllowlist = params.groupId && groups && Object.hasOwn(groups, params.groupId);
+    const groupConfig = groupInAllowlist && params.groupId ? groups[params.groupId] : undefined;
+    const requireMention = groupConfig?.requireMention ?? false;
+
+    if (groupInAllowlist && !requireMention) {
       logVerbose(
-        `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
+        `Allowing message from allowlisted group ${params.groupId} (requireMention: false)`,
       );
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
+      // Continue to allow; don't return early so DM checks are skipped but message proceeds.
+    } else {
+      // Group not in allowlist - fall back to sender-based filtering via groupAllowFrom
+      if (!groupAllowFrom || groupAllowFrom.length === 0) {
+        logVerbose(
+          `Blocked group message from ${params.groupId ?? "unknown group"} (groupPolicy: allowlist, group not in allowlist, no groupAllowFrom)`,
+        );
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      const senderAllowed =
+        groupHasWildcard ||
+        (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
+      if (!senderAllowed) {
+        logVerbose(
+          `Blocked group message from ${params.senderE164 ?? "unknown sender"} in ${params.groupId ?? "unknown group"} (groupPolicy: allowlist, sender not in groupAllowFrom)`,
+        );
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
     }
   }
 
