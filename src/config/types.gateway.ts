@@ -113,6 +113,8 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  /** Request timeout in milliseconds (default: 30000). Set to 0 to disable. */
+  requestTimeout?: number;
 };
 
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
@@ -245,4 +247,6 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Default request timeout in milliseconds (default: 30000). Set to 0 to disable. */
+  requestTimeout?: number;
 };

@@ -31,12 +31,16 @@ import {
   validateRequestFrame,
   validateResponseFrame,
 } from "./protocol/index.js";
+import { GatewayTimeoutError } from "./timeout-error.js";
 
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
 };
+
+/** Default request timeout in milliseconds (30 seconds). */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
@@ -58,6 +62,8 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  /** Default timeout for requests in milliseconds. Set to 0 to disable. */
+  timeout?: number;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -415,7 +421,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeout?: number },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -428,6 +434,10 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+
+    // Determine timeout: per-request > client-level > default (0 = disabled)
+    const timeoutMs = opts?.timeout ?? this.opts.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -435,7 +445,37 @@ export class GatewayClient {
         expectFinal,
       });
     });
+
     this.ws.send(JSON.stringify(frame));
-    return p;
+
+    // If timeout is disabled (0 or negative), return the promise directly
+    if (timeoutMs <= 0) {
+      return p;
+    }
+
+    // Race between the request promise and a timeout.
+    // Note: The timeout only affects the client-side promise; it does not abort
+    // server-side processing. If the server eventually responds after timeout,
+    // the response will be silently dropped (no pending entry). This is intentional
+    // as the gateway protocol does not support request cancellation, and closing
+    // the entire connection would be too disruptive for other in-flight requests.
+    let timeoutId: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        // Clean up the pending request
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new GatewayTimeoutError(method, timeoutMs));
+        }
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([p, timeoutPromise]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 }

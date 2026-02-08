@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { GatewayClient } from "./client.js";
+import { GatewayTimeoutError } from "./timeout-error.js";
 
 // Find a free localhost port for ad-hoc WS servers.
 async function getFreePort(): Promise<number> {
@@ -174,5 +175,243 @@ r1USnb+wUdA7Zoj/mQ==
     });
 
     expect(String(error)).toContain("tls fingerprint mismatch");
+  });
+
+  test("request times out after configured duration", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    // Server that accepts connection but never responds to requests
+    wss.on("connection", (socket) => {
+      socket.once("message", (data) => {
+        const first = JSON.parse(rawDataToString(data)) as { id?: string };
+        const id = first.id ?? "connect";
+        // Respond to connect but not to subsequent requests
+        const helloOk = {
+          type: "hello-ok",
+          protocol: 2,
+          server: { version: "dev", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 1, health: 1 },
+            uptimeMs: 1,
+          },
+          policy: {
+            maxPayload: 512 * 1024,
+            maxBufferedBytes: 1024 * 1024,
+            tickIntervalMs: 60_000, // Long tick interval to avoid tick timeout
+          },
+        };
+        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
+        // Ignore all subsequent messages (simulating hung server)
+      });
+    });
+
+    let onConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      onConnected = resolve;
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      timeout: 100, // Very short timeout for testing
+      onHelloOk: () => onConnected(),
+    });
+    client.start();
+
+    await connected;
+
+    // Make a request that will time out
+    const startTime = Date.now();
+    try {
+      await client.request("test.method", { foo: "bar" });
+      expect.fail("Expected request to throw GatewayTimeoutError");
+    } catch (err) {
+      const elapsed = Date.now() - startTime;
+      expect(err).toBeInstanceOf(GatewayTimeoutError);
+      expect((err as GatewayTimeoutError).method).toBe("test.method");
+      expect((err as GatewayTimeoutError).timeoutMs).toBe(100);
+      // Should timeout around 100ms (with some tolerance)
+      expect(elapsed).toBeGreaterThanOrEqual(90);
+      expect(elapsed).toBeLessThan(500);
+    } finally {
+      client.stop();
+    }
+  });
+
+  test("per-request timeout overrides client timeout", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    wss.on("connection", (socket) => {
+      socket.once("message", (data) => {
+        const first = JSON.parse(rawDataToString(data)) as { id?: string };
+        const id = first.id ?? "connect";
+        const helloOk = {
+          type: "hello-ok",
+          protocol: 2,
+          server: { version: "dev", connId: "c1" },
+          features: { methods: [], events: [] },
+          snapshot: {
+            presence: [],
+            health: {},
+            stateVersion: { presence: 1, health: 1 },
+            uptimeMs: 1,
+          },
+          policy: {
+            maxPayload: 512 * 1024,
+            maxBufferedBytes: 1024 * 1024,
+            tickIntervalMs: 60_000,
+          },
+        };
+        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
+      });
+    });
+
+    let onConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      onConnected = resolve;
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      timeout: 5000, // Long client timeout
+      onHelloOk: () => onConnected(),
+    });
+    client.start();
+
+    await connected;
+
+    // Use per-request timeout that's much shorter
+    try {
+      await client.request("test.method", {}, { timeout: 50 });
+      expect.fail("Expected request to throw GatewayTimeoutError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GatewayTimeoutError);
+      expect((err as GatewayTimeoutError).timeoutMs).toBe(50);
+    } finally {
+      client.stop();
+    }
+  });
+
+  test("timeout of 0 disables timeout", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    let requestId: string | null = null;
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
+        if (msg.method === "connect") {
+          const helloOk = {
+            type: "hello-ok",
+            protocol: 2,
+            server: { version: "dev", connId: "c1" },
+            features: { methods: [], events: [] },
+            snapshot: {
+              presence: [],
+              health: {},
+              stateVersion: { presence: 1, health: 1 },
+              uptimeMs: 1,
+            },
+            policy: {
+              maxPayload: 512 * 1024,
+              maxBufferedBytes: 1024 * 1024,
+              tickIntervalMs: 60_000,
+            },
+          };
+          socket.send(JSON.stringify({ type: "res", id: msg.id, ok: true, payload: helloOk }));
+        } else if (msg.method === "test.delayed") {
+          requestId = msg.id ?? null;
+          // Respond after a delay
+          setTimeout(() => {
+            if (requestId) {
+              socket.send(
+                JSON.stringify({
+                  type: "res",
+                  id: requestId,
+                  ok: true,
+                  payload: { success: true },
+                }),
+              );
+            }
+          }, 200);
+        }
+      });
+    });
+
+    let onConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      onConnected = resolve;
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      timeout: 0, // Disable timeout
+      onHelloOk: () => onConnected(),
+    });
+    client.start();
+
+    await connected;
+
+    // Request should succeed even though it takes 200ms (no timeout)
+    const result = await client.request<{ success: boolean }>("test.delayed", {});
+    expect(result.success).toBe(true);
+
+    client.stop();
+  });
+
+  test("successful request clears timeout", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
+        if (msg.method === "connect") {
+          const helloOk = {
+            type: "hello-ok",
+            protocol: 2,
+            server: { version: "dev", connId: "c1" },
+            features: { methods: [], events: [] },
+            snapshot: {
+              presence: [],
+              health: {},
+              stateVersion: { presence: 1, health: 1 },
+              uptimeMs: 1,
+            },
+            policy: {
+              maxPayload: 512 * 1024,
+              maxBufferedBytes: 1024 * 1024,
+              tickIntervalMs: 60_000,
+            },
+          };
+          socket.send(JSON.stringify({ type: "res", id: msg.id, ok: true, payload: helloOk }));
+        } else if (msg.method === "test.fast") {
+          // Respond immediately
+          socket.send(
+            JSON.stringify({ type: "res", id: msg.id, ok: true, payload: { result: "fast" } }),
+          );
+        }
+      });
+    });
+
+    let onConnected: () => void;
+    const connected = new Promise<void>((resolve) => {
+      onConnected = resolve;
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      timeout: 1000,
+      onHelloOk: () => onConnected(),
+    });
+    client.start();
+
+    await connected;
+
+    // Fast request should succeed without timeout
+    const result = await client.request<{ result: string }>("test.fast", {});
+    expect(result.result).toBe("fast");
+
+    client.stop();
   });
 });
