@@ -64,6 +64,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "identity", kind: "none" },
+  { prefix: "meta", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
   { prefix: "models", kind: "none" },
