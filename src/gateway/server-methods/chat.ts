@@ -9,7 +9,9 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -229,10 +231,60 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
+    // Filter HEARTBEAT_OK messages based on heartbeat visibility settings
+    // Match live broadcast behavior in server-chat.ts
+    const heartbeatVisibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+    const filtered = heartbeatVisibility.showOk
+      ? capped
+      : capped.filter((msg) => {
+          // Type guard: ensure msg has required structure
+          if (typeof msg !== "object" || msg === null || !("role" in msg)) {
+            return true;
+          }
+          const message = msg as { role?: unknown; content?: unknown };
+          // Keep non-assistant messages
+          if (message.role !== "assistant") {
+            return true;
+          }
+          // Extract text from content (handles both string and array formats)
+          let text = "";
+          const content = message.content;
+          if (typeof content === "string") {
+            text = content;
+          } else if (Array.isArray(content)) {
+            // Handle array format: [{ type: "text", text: "..." }]
+            for (const part of content) {
+              if (
+                part &&
+                typeof part === "object" &&
+                "type" in part &&
+                "text" in part &&
+                typeof part.text === "string"
+              ) {
+                if (
+                  part.type === "text" ||
+                  part.type === "output_text" ||
+                  part.type === "input_text"
+                ) {
+                  const trimmed = part.text.trim();
+                  if (trimmed) {
+                    text = trimmed;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          // Filter out assistant messages that are only HEARTBEAT_OK
+          const trimmed = text.trim();
+          return trimmed !== HEARTBEAT_TOKEN;
+        });
+
     respond(true, {
       sessionKey,
       sessionId,
-      messages: capped,
+      messages: filtered,
       thinkingLevel,
       verboseLevel,
     });
@@ -449,7 +501,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
-      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // Only BodyForAgent gets the timestamp - Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
