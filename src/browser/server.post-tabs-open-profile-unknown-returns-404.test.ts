@@ -1,6 +1,7 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canBindLoopback } from "./test-loopback.js";
 
 let testPort = 0;
 let _cdpBaseUrl = "";
@@ -184,7 +185,9 @@ function makeResponse(
   } as unknown as Response;
 }
 
-describe("browser control server", () => {
+const describeWithLoopback = (await canBindLoopback()) ? describe : describe.skip;
+
+describeWithLoopback("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
@@ -290,7 +293,7 @@ describe("browser control server", () => {
   });
 });
 
-describe("profile CRUD endpoints", () => {
+describeWithLoopback("profile CRUD endpoints", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
@@ -304,9 +307,6 @@ describe("profile CRUD endpoints", () => {
 
     testPort = await getFreePort();
     _cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
-    prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
-
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
 
