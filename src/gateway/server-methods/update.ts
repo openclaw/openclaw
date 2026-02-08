@@ -8,13 +8,27 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { runGatewayUpdate } from "../../infra/update-runner.js";
+import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { runInstallScriptUpdate } from "../../infra/update-install-script.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateUpdateRunParams,
 } from "../protocol/index.js";
+
+/**
+ * Safely convert normalized channel to install script channel type.
+ * Returns undefined if channel is null or not a valid install script channel.
+ */
+function toInstallScriptChannel(
+  channel: string | null,
+): "stable" | "beta" | "dev" | undefined {
+  if (channel === "stable" || channel === "beta" || channel === "dev") {
+    return channel;
+  }
+  return undefined;
+}
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
@@ -47,31 +61,81 @@ export const updateHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
+    // New parameter: use install script method
+    const useInstallScript =
+      (params as { useInstallScript?: unknown }).useInstallScript === true;
 
-    let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
+    let result: UpdateRunResult;
     try {
       const config = loadConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const root =
-        (await resolveOpenClawPackageRoot({
-          moduleUrl: import.meta.url,
+      const installScriptChannel = toInstallScriptChannel(configChannel);
+
+      if (useInstallScript) {
+        // Use the simpler, more reliable install script method
+        result = await runInstallScriptUpdate({
+          timeoutMs,
+          channel: installScriptChannel,
+        });
+      } else {
+        // Try the complex update method first
+        const root =
+          (await resolveOpenClawPackageRoot({
+            moduleUrl: import.meta.url,
+            argv1: process.argv[1],
+            cwd: process.cwd(),
+          })) ?? process.cwd();
+        result = await runGatewayUpdate({
+          timeoutMs,
+          cwd: root,
           argv1: process.argv[1],
-          cwd: process.cwd(),
-        })) ?? process.cwd();
-      result = await runGatewayUpdate({
-        timeoutMs,
-        cwd: root,
-        argv1: process.argv[1],
-        channel: configChannel ?? undefined,
-      });
+          channel: configChannel ?? undefined,
+        });
+
+        // If the complex method fails, fall back to install script
+        if (result.status === "error" || result.status === "skipped") {
+          let fallbackResult: UpdateRunResult;
+          try {
+            fallbackResult = await runInstallScriptUpdate({
+              timeoutMs,
+              channel: installScriptChannel,
+            });
+          } catch (fallbackErr) {
+            // Fallback also failed - return original result with fallback error noted
+            fallbackResult = {
+              status: "error",
+              mode: "unknown",
+              reason: `install script fallback failed: ${String(fallbackErr)}`,
+              steps: [],
+              durationMs: 0,
+            };
+          }
+          // Merge steps for debugging
+          result = {
+            ...fallbackResult,
+            steps: [
+              ...result.steps,
+              { name: "--- fallback to install script ---", command: "", cwd: "", durationMs: 0, exitCode: 0 },
+              ...fallbackResult.steps,
+            ],
+          };
+        }
+      }
     } catch (err) {
-      result = {
-        status: "error",
-        mode: "unknown",
-        reason: String(err),
-        steps: [],
-        durationMs: 0,
-      };
+      // Final fallback on exception
+      let fallbackResult: UpdateRunResult;
+      try {
+        fallbackResult = await runInstallScriptUpdate({ timeoutMs });
+      } catch (fallbackErr) {
+        fallbackResult = {
+          status: "error",
+          mode: "unknown",
+          reason: `both update methods failed. Original: ${String(err)}. Fallback: ${String(fallbackErr)}`,
+          steps: [],
+          durationMs: 0,
+        };
+      }
+      result = fallbackResult;
     }
 
     const payload: RestartSentinelPayload = {
