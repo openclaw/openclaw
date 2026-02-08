@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
+import { canUseAtlas, runAtlasPrompt } from "./atlas.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -17,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "atlas"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -154,6 +155,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "brave") {
     return "brave";
+  }
+  if (raw === "atlas") {
+    return "atlas";
   }
   return "brave";
 }
@@ -309,6 +313,149 @@ function resolveSiteName(url: string | undefined): string | undefined {
   }
 }
 
+type AtlasSearchEntry = {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  description?: string;
+};
+
+function formatAtlasFreshnessHint(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value === "pd") {
+    return "past 24 hours";
+  }
+  if (value === "pw") {
+    return "past week";
+  }
+  if (value === "pm") {
+    return "past month";
+  }
+  if (value === "py") {
+    return "past year";
+  }
+  if (value.includes("to")) {
+    return value.replace("to", " to ");
+  }
+  return value;
+}
+
+function buildAtlasSearchPrompt(params: {
+  query: string;
+  count: number;
+  country?: string;
+  searchLang?: string;
+  uiLang?: string;
+  freshness?: string;
+}): string {
+  const hints: string[] = [];
+  if (params.country) {
+    hints.push(`Prefer results from country: ${params.country}.`);
+  }
+  if (params.searchLang) {
+    hints.push(`Prefer sources in language: ${params.searchLang}.`);
+  }
+  if (params.uiLang) {
+    hints.push(`Prefer UI language: ${params.uiLang}.`);
+  }
+  const freshnessHint = formatAtlasFreshnessHint(params.freshness);
+  if (freshnessHint) {
+    hints.push(`Prefer results from: ${freshnessHint}.`);
+  }
+
+  return [
+    "You are a web search assistant.",
+    `Search the web for: "${params.query}".`,
+    `Return up to ${params.count} results as JSON with shape: {"results":[{"title":"","url":"","snippet":""}]}.`,
+    "Use full http(s) URLs.",
+    ...hints,
+    "If you cannot access the web, still return known official URLs and mark snippets with 'offline'.",
+    "Return only JSON, no markdown or code fences.",
+  ].join("\n");
+}
+
+function extractJsonPayload(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutFence = trimmed
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const firstBrace = withoutFence.indexOf("{");
+  const lastBrace = withoutFence.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = withoutFence.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // fall through
+    }
+  }
+  const firstBracket = withoutFence.indexOf("[");
+  const lastBracket = withoutFence.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    const candidate = withoutFence.slice(firstBracket, lastBracket + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function normalizeAtlasSearchResults(value: unknown, maxCount: number): AtlasSearchEntry[] {
+  if (!value) {
+    return [];
+  }
+  const rawResults = Array.isArray(value)
+    ? value
+    : typeof value === "object" && value !== null && "results" in value
+      ? (value as { results?: unknown }).results
+      : undefined;
+  if (!Array.isArray(rawResults)) {
+    return [];
+  }
+  const entries: AtlasSearchEntry[] = [];
+  for (const entry of rawResults) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const item = entry as Record<string, unknown>;
+    const title = typeof item.title === "string" ? item.title : "";
+    const url =
+      typeof item.url === "string" ? item.url : typeof item.link === "string" ? item.link : "";
+    const snippet =
+      typeof item.snippet === "string"
+        ? item.snippet
+        : typeof item.description === "string"
+          ? item.description
+          : typeof item.summary === "string"
+            ? item.summary
+            : "";
+    entries.push({ title, url, snippet });
+  }
+  return entries.slice(0, maxCount);
+}
+
+function extractUrlsFromText(text: string): string[] {
+  const urls = new Set<string>();
+  const regex = /https?:\/\/[^\s)]+/gi;
+  for (const match of text.matchAll(regex)) {
+    const raw = match[0]?.trim() ?? "";
+    if (!raw) {
+      continue;
+    }
+    const cleaned = raw.replace(/[).,;]+$/, "");
+    urls.add(cleaned);
+  }
+  return Array.from(urls);
+}
+
 async function runPerplexitySearch(params: {
   query: string;
   apiKey: string;
@@ -350,13 +497,82 @@ async function runPerplexitySearch(params: {
   return { content, citations };
 }
 
+async function runAtlasSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+  cacheTtlMs: number;
+  config?: OpenClawConfig;
+  sandboxed?: boolean;
+  country?: string;
+  search_lang?: string;
+  ui_lang?: string;
+  freshness?: string;
+}): Promise<Record<string, unknown>> {
+  const cacheKey = normalizeCacheKey(
+    `atlas:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey);
+  if (cached) {
+    return { ...cached.value, cached: true };
+  }
+
+  const start = Date.now();
+  const prompt = buildAtlasSearchPrompt({
+    query: params.query,
+    count: params.count,
+    country: params.country,
+    searchLang: params.search_lang,
+    uiLang: params.ui_lang,
+    freshness: params.freshness,
+  });
+  const response = await runAtlasPrompt({
+    config: params.config,
+    sandboxed: params.sandboxed,
+    prompt,
+    timeoutMs: params.timeoutSeconds * 1000,
+  });
+  const parsed = extractJsonPayload(response.text);
+  const normalized = normalizeAtlasSearchResults(parsed, params.count);
+  const fallbackUrls: AtlasSearchEntry[] = normalized.length
+    ? []
+    : extractUrlsFromText(response.text).map((url) => ({ url }));
+  const entries: AtlasSearchEntry[] = normalized.length ? normalized : fallbackUrls;
+  const mapped = entries
+    .map((entry) => {
+      const description = entry.snippet ?? entry.description ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url, // Keep raw for tool chaining
+        description: description ? wrapWebContent(description, "web_search") : "",
+        siteName: rawSiteName || undefined,
+      };
+    })
+    .filter((entry) => Boolean(entry.url));
+
+  const payload = {
+    query: params.query,
+    provider: "atlas",
+    count: mapped.length,
+    tookMs: Date.now() - start,
+    results: mapped,
+  };
+  writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  return payload;
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
-  apiKey: string;
+  apiKey?: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
+  config?: OpenClawConfig;
+  sandboxed?: boolean;
   country?: string;
   search_lang?: string;
   ui_lang?: string;
@@ -364,6 +580,21 @@ async function runWebSearch(params: {
   perplexityBaseUrl?: string;
   perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
+  if (params.provider === "atlas") {
+    return await runAtlasSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      cacheTtlMs: params.cacheTtlMs,
+      config: params.config,
+      sandboxed: params.sandboxed,
+      country: params.country,
+      search_lang: params.search_lang,
+      ui_lang: params.ui_lang,
+      freshness: params.freshness,
+    });
+  }
+
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
@@ -377,6 +608,9 @@ async function runWebSearch(params: {
   const start = Date.now();
 
   if (params.provider === "perplexity") {
+    if (!params.apiKey) {
+      throw new Error("Perplexity API key is missing.");
+    }
     const { content, citations } = await runPerplexitySearch({
       query: params.query,
       apiKey: params.apiKey,
@@ -399,6 +633,10 @@ async function runWebSearch(params: {
 
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
+  }
+
+  if (!params.apiKey) {
+    throw new Error("Brave API key is missing.");
   }
 
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
@@ -467,13 +705,10 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
 
   const description =
-    provider === "perplexity"
-      ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+    "Search the web. Uses ChatGPT Atlas when available; otherwise falls back to Brave Search or Perplexity based on configuration.";
 
   return {
     label: "Web Search",
@@ -481,14 +716,10 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
-      const perplexityAuth =
-        provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
-      const apiKey =
-        provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
-
-      if (!apiKey) {
-        return jsonResult(missingSearchKeyPayload(provider));
-      }
+      const configuredProvider = resolveSearchProvider(search);
+      const fallbackProvider = configuredProvider === "atlas" ? "brave" : configuredProvider;
+      const preferAtlas = canUseAtlas({ config: options?.config, sandboxed: options?.sandboxed });
+      const provider = preferAtlas ? "atlas" : fallbackProvider;
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
@@ -497,10 +728,10 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave") {
+      if (rawFreshness && provider === "perplexity") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave web_search provider.",
+          message: "freshness is only supported by the Brave/Atlas web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -513,25 +744,65 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      const result = await runWebSearch({
-        query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        provider,
-        country,
-        search_lang,
-        ui_lang,
-        freshness,
-        perplexityBaseUrl: resolvePerplexityBaseUrl(
-          perplexityConfig,
-          perplexityAuth?.source,
-          perplexityAuth?.apiKey,
-        ),
-        perplexityModel: resolvePerplexityModel(perplexityConfig),
-      });
-      return jsonResult(result);
+      const runFallbackSearch = async (fallback: (typeof SEARCH_PROVIDERS)[number]) => {
+        if (rawFreshness && fallback === "perplexity") {
+          return {
+            error: "unsupported_freshness",
+            message: "freshness is only supported by the Brave/Atlas web_search providers.",
+            docs: "https://docs.openclaw.ai/tools/web",
+          };
+        }
+        const perplexityAuth =
+          fallback === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+        const apiKey =
+          fallback === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
+        if (!apiKey) {
+          return missingSearchKeyPayload(fallback);
+        }
+        return await runWebSearch({
+          query,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          apiKey,
+          timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+          cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+          provider: fallback,
+          country,
+          search_lang,
+          ui_lang,
+          freshness,
+          perplexityBaseUrl: resolvePerplexityBaseUrl(
+            perplexityConfig,
+            perplexityAuth?.source,
+            perplexityAuth?.apiKey,
+          ),
+          perplexityModel: resolvePerplexityModel(perplexityConfig),
+          config: options?.config,
+          sandboxed: options?.sandboxed,
+        });
+      };
+
+      if (provider === "atlas") {
+        try {
+          const result = await runWebSearch({
+            query,
+            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+            timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+            cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+            provider,
+            country,
+            search_lang,
+            ui_lang,
+            freshness,
+            config: options?.config,
+            sandboxed: options?.sandboxed,
+          });
+          return jsonResult(result);
+        } catch {
+          return jsonResult(await runFallbackSearch(fallbackProvider));
+        }
+      }
+
+      return jsonResult(await runFallbackSearch(provider));
     },
   };
 }

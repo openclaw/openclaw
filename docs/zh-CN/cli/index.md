@@ -963,7 +963,7 @@ openclaw models status
 
 ## 浏览器
 
-浏览器控制 CLI（专用 Chrome/Brave/Edge/Chromium）。参见 [`openclaw browser`](/cli/browser) 和[浏览器工具](/tools/browser)。
+浏览器控制 CLI（专用 Chrome/Brave/Edge/Chromium；macOS 上的 ChatGPT Atlas）。参见 [`openclaw browser`](/cli/browser) 和[浏览器工具](/tools/browser)。
 
 通用选项：
 

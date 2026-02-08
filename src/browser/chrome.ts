@@ -55,8 +55,12 @@ export type RunningChrome = {
   proc: ChildProcessWithoutNullStreams;
 };
 
-function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
-  return resolveBrowserExecutableForPlatform(resolved, process.platform);
+function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+  profile?: ResolvedBrowserProfile,
+): BrowserExecutable | null {
+  const executablePath = profile?.executablePath?.trim() || resolved.executablePath;
+  return resolveBrowserExecutableForPlatform({ ...resolved, executablePath }, process.platform);
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
@@ -169,10 +173,10 @@ export async function launchOpenClawChrome(
   }
   await ensurePortAvailable(profile.cdpPort);
 
-  const exe = resolveBrowserExecutable(resolved);
+  const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
     throw new Error(
-      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows; ChatGPT Atlas on macOS).",
     );
   }
 

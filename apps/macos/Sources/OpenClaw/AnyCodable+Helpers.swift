@@ -1,18 +1,35 @@
+import Foundation
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 
 // Prefer the OpenClawKit wrapper to keep gateway request payloads consistent.
 typealias AnyCodable = OpenClawKit.AnyCodable
 typealias InstanceIdentity = OpenClawKit.InstanceIdentity
 
 extension AnyCodable {
-    var stringValue: String? { self.value as? String }
-    var boolValue: Bool? { self.value as? Bool }
-    var intValue: Int? { self.value as? Int }
-    var doubleValue: Double? { self.value as? Double }
-    var dictionaryValue: [String: AnyCodable]? { self.value as? [String: AnyCodable] }
-    var arrayValue: [AnyCodable]? { self.value as? [AnyCodable] }
+    var stringValue: String? {
+        self.value as? String
+    }
+
+    var boolValue: Bool? {
+        self.value as? Bool
+    }
+
+    var intValue: Int? {
+        self.value as? Int
+    }
+
+    var doubleValue: Double? {
+        self.value as? Double
+    }
+
+    var dictionaryValue: [String: AnyCodable]? {
+        self.value as? [String: AnyCodable]
+    }
+
+    var arrayValue: [AnyCodable]? {
+        self.value as? [AnyCodable]
+    }
 
     var foundationValue: Any {
         switch self.value {
@@ -27,12 +44,29 @@ extension AnyCodable {
 }
 
 extension OpenClawProtocol.AnyCodable {
-    var stringValue: String? { self.value as? String }
-    var boolValue: Bool? { self.value as? Bool }
-    var intValue: Int? { self.value as? Int }
-    var doubleValue: Double? { self.value as? Double }
-    var dictionaryValue: [String: OpenClawProtocol.AnyCodable]? { self.value as? [String: OpenClawProtocol.AnyCodable] }
-    var arrayValue: [OpenClawProtocol.AnyCodable]? { self.value as? [OpenClawProtocol.AnyCodable] }
+    var stringValue: String? {
+        self.value as? String
+    }
+
+    var boolValue: Bool? {
+        self.value as? Bool
+    }
+
+    var intValue: Int? {
+        self.value as? Int
+    }
+
+    var doubleValue: Double? {
+        self.value as? Double
+    }
+
+    var dictionaryValue: [String: OpenClawProtocol.AnyCodable]? {
+        self.value as? [String: OpenClawProtocol.AnyCodable]
+    }
+
+    var arrayValue: [OpenClawProtocol.AnyCodable]? {
+        self.value as? [OpenClawProtocol.AnyCodable]
+    }
 
     var foundationValue: Any {
         switch self.value {
