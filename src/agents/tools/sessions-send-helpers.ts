@@ -4,6 +4,8 @@ import {
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -70,20 +72,48 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   };
 }
 
+function buildAgentLabel(agentId: string, config: OpenClawConfig | undefined): string {
+  if (!config) {
+    return agentId;
+  }
+  const agentConfig = resolveAgentConfig(config, agentId);
+  const rawName = agentConfig?.name;
+  if (rawName) {
+    // Sanitize: collapse whitespace/newlines to single spaces, strip parentheses
+    const name = rawName
+      .replace(/[\r\n]+/g, " ")
+      .replace(/[()]/g, "")
+      .trim();
+    if (name) {
+      return `${name} (${agentId})`;
+    }
+  }
+  return agentId;
+}
+
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
+  config?: OpenClawConfig;
 }) {
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveAgentIdFromSessionKey(params.requesterSessionKey)
+    : undefined;
+  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+
+  const requesterLabel = requesterAgentId
+    ? buildAgentLabel(requesterAgentId, params.config)
+    : undefined;
+  const targetLabel = buildAgentLabel(targetAgentId, params.config);
+
   const lines = [
     "Agent-to-agent message context:",
     params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
+      ? `From: ${requesterLabel}, session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    params.requesterChannel ? `From channel: ${params.requesterChannel}.` : undefined,
+    `To: ${targetLabel}, session: ${params.targetSessionKey}.`,
   ].filter(Boolean);
   return lines.join("\n");
 }
