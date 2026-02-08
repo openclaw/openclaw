@@ -12,6 +12,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { listAgentIds } from "./agent-scope.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -220,13 +221,17 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
-    [
-      `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
-    ].join(" "),
-  );
+  const parts = [
+    `No API key found for provider "${provider}".`,
+    `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+    `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+  ];
+  // When the agent directory doesn't exist, list available agents to help diagnose typos
+  if (cfg) {
+    const available = listAgentIds(cfg);
+    parts.push(`Available agents: ${available.join(", ")}.`);
+  }
+  throw new Error(parts.join(" "));
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
