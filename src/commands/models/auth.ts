@@ -165,19 +165,27 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       { value: "anthropic", label: "anthropic" },
       { value: "custom", label: "custom (type provider id)" },
     ],
-  })) as TokenProvider | "custom";
+  })) as TokenProvider | "custom" | undefined;
 
-  const providerId =
-    provider === "custom"
-      ? normalizeProviderId(
-          String(
-            await text({
-              message: "Provider id",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-          ),
-        )
-      : provider;
+  if (!provider) {
+    runtime.log("Cancelled.");
+    return;
+  }
+
+  let providerId: string;
+  if (provider === "custom") {
+    const providerInput = await text({
+      message: "Provider id",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    if (!providerInput || !String(providerInput).trim()) {
+      runtime.log("Cancelled.");
+      return;
+    }
+    providerId = normalizeProviderId(String(providerInput));
+  } else {
+    providerId = provider;
+  }
 
   const method = (await select({
     message: "Token method",
@@ -193,7 +201,12 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
         : []),
       { value: "paste", label: "paste token" },
     ],
-  })) as "setup-token" | "paste";
+  })) as "setup-token" | "paste" | undefined;
+
+  if (!method) {
+    runtime.log("Cancelled.");
+    return;
+  }
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);
