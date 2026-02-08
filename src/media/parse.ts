@@ -14,6 +14,9 @@ function cleanCandidate(raw: string) {
   return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
 }
 
+// TTS temp file pattern: /tmp/tts-*/voice-*.ext or /var/folders/.../T/tts-*/voice-*.ext
+const TTS_TEMP_FILE_RE = /^(?:\/tmp|\/var\/folders\/[^/]+\/[^/]+\/T)\/tts-[^/]+\/voice-\d+\.\w+$/;
+
 function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
   if (!candidate) {
     return false;
@@ -25,6 +28,11 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return false;
   }
   if (/^https?:\/\//i.test(candidate)) {
+    return true;
+  }
+
+  // Allow system-generated TTS temp files (safe because they're created by openclaw, not user input)
+  if (TTS_TEMP_FILE_RE.test(candidate)) {
     return true;
   }
 

@@ -58,4 +58,32 @@ describe("splitMediaFromOutput", () => {
     expect(result.mediaUrls).toEqual(["./screenshot.png"]);
     expect(result.text).toBe("");
   });
+
+  it("allows TTS temp file paths on Linux", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus");
+    expect(result.mediaUrls).toEqual(["/tmp/tts-fAJy8C/voice-1770246885083.opus"]);
+    expect(result.text).toBe("");
+  });
+
+  it("allows TTS temp file paths on macOS", () => {
+    const result = splitMediaFromOutput(
+      "MEDIA:/var/folders/6j/1qlznq597hq1c1qbkhh9rg480000gn/T/tts-fAJy8C/voice-1770246885083.opus",
+    );
+    expect(result.mediaUrls).toEqual([
+      "/var/folders/6j/1qlznq597hq1c1qbkhh9rg480000gn/T/tts-fAJy8C/voice-1770246885083.opus",
+    ]);
+    expect(result.text).toBe("");
+  });
+
+  it("still rejects other absolute paths", () => {
+    const result = splitMediaFromOutput("MEDIA:/etc/passwd");
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe("MEDIA:/etc/passwd");
+  });
+
+  it("rejects TTS-like paths outside temp directories", () => {
+    const result = splitMediaFromOutput("MEDIA:/home/user/tts-fake/voice-123.opus");
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe("MEDIA:/home/user/tts-fake/voice-123.opus");
+  });
 });
