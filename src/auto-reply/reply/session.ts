@@ -360,6 +360,12 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+    // Clear stale model metadata from previous session. These fields reflect
+    // what was used in the LAST turn and shouldn't persist after /new or /reset.
+    // Fixes #10404: Runtime metadata shows stale model after session reset.
+    sessionEntry.model = undefined;
+    sessionEntry.modelProvider = undefined;
+    sessionEntry.systemPromptReport = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
