@@ -371,6 +371,13 @@ export async function sanitizeSessionHistory(params: {
       ? downgradeOpenAIReasoningBlocks(repairedTools)
       : repairedTools;
 
+  // On model switch, strip thinking blocks that lack valid signatures for the
+  // new model.  Without this, thinking blocks from provider A (e.g. Kimi/NVIDIA)
+  // get replayed to provider B (e.g. Anthropic via OpenRouter) and cause 400s.
+  const sanitizedModelSwitch = modelChanged
+    ? sanitizeAntigravityThinkingBlocks(sanitizedOpenAI)
+    : sanitizedOpenAI;
+
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
       timestamp: Date.now(),
@@ -381,11 +388,11 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedOpenAI;
+    return sanitizedModelSwitch;
   }
 
   return applyGoogleTurnOrderingFix({
-    messages: sanitizedOpenAI,
+    messages: sanitizedModelSwitch,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,

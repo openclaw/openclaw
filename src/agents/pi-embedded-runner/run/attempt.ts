@@ -550,6 +550,21 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Propagate the run abort signal to the underlying HTTP request so that
+      // provider outages don't cause infinite hangs. Without this, the stream
+      // function never receives the abort signal and the fetch continues even
+      // after the run timeout fires.
+      {
+        const underlyingStreamFn = activeSession.agent.streamFn ?? streamSimple;
+        activeSession.agent.streamFn = (model, context, options) =>
+          underlyingStreamFn(model, context, {
+            ...options,
+            signal: options?.signal
+              ? AbortSignal.any([options.signal, runAbortController.signal])
+              : runAbortController.signal,
+          });
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
