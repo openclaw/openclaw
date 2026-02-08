@@ -222,18 +222,36 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(configPath);
+      const lstat = fs.lstatSync(configPath);
+      const isSymlink = lstat.isSymbolicLink();
+      // For symlinks, lstat reports mode 777 (meaningless). Use statSync to
+      // check the target's actual permissions instead.
+      const stat = isSymlink ? fs.statSync(configPath) : lstat;
       if ((stat.mode & 0o077) !== 0) {
-        warnings.push(
-          `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
-        );
-        const tighten = await prompter.confirmSkipInNonInteractive({
-          message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
+        // If the target is on a read-only filesystem (e.g. /nix/store),
+        // chmod would fail and the containing directory (typically mode 700)
+        // already protects access.  Skip the warning in that case.  #11307
+        let targetWritable = true;
+        if (isSymlink) {
+          try {
+            const resolved = fs.realpathSync(configPath);
+            fs.accessSync(resolved, fs.constants.W_OK);
+          } catch {
+            targetWritable = false;
+          }
+        }
+        if (targetWritable) {
+          warnings.push(
+            `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
+          );
+          const tighten = await prompter.confirmSkipInNonInteractive({
+            message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
+            initialValue: true,
+          });
+          if (tighten) {
+            fs.chmodSync(configPath, 0o600);
+            changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
+          }
         }
       }
     } catch (err) {
