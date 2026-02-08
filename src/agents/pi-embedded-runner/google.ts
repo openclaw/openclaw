@@ -322,6 +322,24 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+/**
+ * Filters out delivery-mirror messages from the transcript.
+ * These are synthetic assistant messages injected when the message tool sends outbound messages.
+ * They must be excluded from API-facing context to preserve tool_use → tool_result ordering
+ * required by Anthropic and other providers.
+ */
+function filterDeliveryMirrorMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+      return true;
+    }
+    const assistant = msg as { model?: unknown; provider?: unknown };
+    const isDeliveryMirror =
+      assistant.model === "delivery-mirror" && assistant.provider === "openclaw";
+    return !isDeliveryMirror;
+  });
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -349,7 +367,11 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  // Filter delivery-mirror messages before tool repair to preserve tool_use → tool_result ordering.
+  // These synthetic assistant messages (injected by the message tool) would otherwise break
+  // Anthropic's strict requirement that tool_result immediately follows tool_use.
+  const filteredDeliveryMirror = filterDeliveryMirrorMessages(sanitizedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(filteredDeliveryMirror);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;

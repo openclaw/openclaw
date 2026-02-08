@@ -269,4 +269,69 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("filters out delivery-mirror messages to preserve tool_use/tool_result ordering", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages: AgentMessage[] = [
+      { role: "user", content: "send a message" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "message", input: { action: "send" } }],
+      },
+      // Delivery-mirror message injected between tool_use and tool_result
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Message sent to #general" }],
+        model: "delivery-mirror",
+        provider: "openclaw",
+      } as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "message",
+        content: [{ type: "text", text: "ok" }],
+      } as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    // Delivery-mirror should be filtered out
+    expect(
+      result.filter((m) => (m as { model?: string }).model === "delivery-mirror"),
+    ).toHaveLength(0);
+    // Other messages should remain
+    expect(result.map((m) => m.role)).toEqual(["user", "assistant", "toolResult"]);
+  });
+
+  it("keeps non-delivery-mirror assistant messages intact", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi there" }],
+        model: "claude-3-opus",
+        provider: "anthropic",
+      } as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toHaveLength(2);
+    expect((result[1] as { model?: string }).model).toBe("claude-3-opus");
+  });
 });
