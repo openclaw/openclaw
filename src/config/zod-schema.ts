@@ -91,6 +91,25 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const EventStoreRetentionSchema = z
+  .object({
+    maxMessages: z.number().int().nonnegative().optional(),
+    maxBytes: z.number().int().nonnegative().optional(),
+    maxAgeHours: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const EventStoreSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    natsUrl: z.string().optional(),
+    streamName: z.string().optional(),
+    subjectPrefix: z.string().optional(),
+    retention: EventStoreRetentionSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     meta: z
@@ -512,6 +531,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    eventStore: EventStoreSchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),

@@ -27,6 +27,7 @@ import {
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
+import { initEventStore } from "../infra/event-store.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -223,6 +224,17 @@ export async function startGatewayServer(
     startDiagnosticHeartbeat();
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
+
+  // Initialize Event Store (NATS JetStream) if enabled
+  if (cfgAtStart.eventStore?.enabled) {
+    await initEventStore({
+      enabled: true,
+      natsUrl: cfgAtStart.eventStore.natsUrl ?? "nats://localhost:4222",
+      streamName: cfgAtStart.eventStore.streamName ?? "openclaw-events",
+      subjectPrefix: cfgAtStart.eventStore.subjectPrefix ?? "openclaw.events",
+    });
+  }
+
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);

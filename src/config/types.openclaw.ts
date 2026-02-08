@@ -5,6 +5,7 @@ import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from 
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CronConfig } from "./types.cron.js";
+import type { EventStoreConfig } from "./types.eventstore.js";
 import type {
   CanvasHostConfig,
   DiscoveryConfig,
@@ -97,6 +98,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  eventStore?: EventStoreConfig;
 };
 
 export type ConfigValidationIssue = {

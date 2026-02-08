@@ -5,6 +5,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { shutdownEventStore } from "../infra/event-store.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -108,6 +109,8 @@ export function createGatewayCloseHandler(params: {
     if (params.browserControl) {
       await params.browserControl.stop().catch(() => {});
     }
+    // Close Event Store (NATS connection)
+    await shutdownEventStore().catch(() => {});
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
     const servers =
       params.httpServers && params.httpServers.length > 0
