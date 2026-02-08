@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { delimiter, dirname, join } from "node:path";
+import { join } from "node:path";
+import { resolveToolPackageFile } from "openclaw/plugin-sdk";
 
 const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -63,97 +64,38 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     return cachedGeminiCliCredentials;
   }
 
-  try {
-    const geminiPath = findInPath("gemini");
-    if (!geminiPath) {
-      return null;
-    }
+  const corePackage = "@google/gemini-cli-core";
+  const parentPackage = "@google/gemini-cli";
+  const searchPaths = [
+    join("dist", "src", "code_assist", "oauth2.js"),
+    join("dist", "code_assist", "oauth2.js"),
+  ];
 
-    const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
+  let content: string | null = null;
 
-    const searchPaths = [
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "src",
-        "code_assist",
-        "oauth2.js",
-      ),
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "code_assist",
-        "oauth2.js",
-      ),
-    ];
-
-    let content: string | null = null;
-    for (const p of searchPaths) {
-      if (existsSync(p)) {
-        content = readFileSync(p, "utf8");
+  for (const relativePath of searchPaths) {
+    const resolved = resolveToolPackageFile("gemini", corePackage, relativePath, parentPackage);
+    if (resolved) {
+      try {
+        content = readFileSync(resolved, "utf8");
         break;
-      }
-    }
-    if (!content) {
-      const found = findFile(geminiCliDir, "oauth2.js", 10);
-      if (found) {
-        content = readFileSync(found, "utf8");
-      }
-    }
-    if (!content) {
-      return null;
-    }
-
-    const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
-    const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
-    if (idMatch && secretMatch) {
-      cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
-      return cachedGeminiCliCredentials;
-    }
-  } catch {
-    // Gemini CLI not installed or extraction failed
-  }
-  return null;
-}
-
-function findInPath(name: string): string | null {
-  const exts = process.platform === "win32" ? [".cmd", ".bat", ".exe", ""] : [""];
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    for (const ext of exts) {
-      const p = join(dir, name + ext);
-      if (existsSync(p)) {
-        return p;
+      } catch {
+        // ignore read error
       }
     }
   }
-  return null;
-}
 
-function findFile(dir: string, name: string, depth: number): string | null {
-  if (depth <= 0) {
+  if (!content) {
     return null;
   }
-  try {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, e.name);
-      if (e.isFile() && e.name === name) {
-        return p;
-      }
-      if (e.isDirectory() && !e.name.startsWith(".")) {
-        const found = findFile(p, name, depth - 1);
-        if (found) {
-          return found;
-        }
-      }
-    }
-  } catch {}
+
+  const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
+  const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
+  if (idMatch && secretMatch) {
+    cachedGeminiCliCredentials = { clientId: idMatch[1], clientSecret: secretMatch[1] };
+    return cachedGeminiCliCredentials;
+  }
+
   return null;
 }
 

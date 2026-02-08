@@ -372,3 +372,10 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Module resolution utilities
+export {
+  readPackageFile,
+  resolvePackageFile,
+  resolveToolPackageFile,
+} from "../infra/module-resolution.js";
