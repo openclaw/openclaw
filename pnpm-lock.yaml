@@ -2966,7 +2966,7 @@ packages:
         optional: true
 
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
+    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67, integrity: sha512-/bVVmcH9cQi0WljVkF/jfSMXDhq5P3HkkJw6633ZsYe7DXKP72BOPM+Oi09ZkR6SoCcXePk6i5xgYY/FiRH4xA==}
     version: 2.0.1
 
   abort-controller@3.0.0:
