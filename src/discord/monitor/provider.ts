@@ -16,6 +16,7 @@ import {
 } from "../../config/commands.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -487,191 +488,241 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
   }
 
-  const client = new Client(
-    {
-      baseUrl: "http://localhost",
-      deploySecret: "a",
-      clientId: applicationId,
-      publicKey: "a",
-      token,
-      autoDeploy: false,
-    },
-    {
-      commands,
-      listeners: [],
-      components,
-    },
-    [
-      new GatewayPlugin({
-        reconnect: {
-          maxAttempts: Number.POSITIVE_INFINITY,
-        },
-        intents: resolveDiscordGatewayIntents(discordCfg.intents),
-        autoInteractions: true,
-      }),
-    ],
-  );
-
-  await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
-
   const logger = createSubsystemLogger("discord/monitor");
   const guildHistories = new Map<string, HistoryEntry[]>();
-  let botUserId: string | undefined;
+  const abortSignal = opts.abortSignal;
+  const gatewayIntents = resolveDiscordGatewayIntents(discordCfg.intents);
 
-  if (nativeDisabledExplicit) {
-    await clearDiscordNativeCommands({
-      client,
-      applicationId,
+  // Outer retry loop — when Carbon exhausts its 8 inner reconnect attempts,
+  // we wait with exponential backoff and recreate a fresh Client + GatewayPlugin.
+  // After OUTER_MAX_RETRIES failures, throw so the channel manager marks the channel as dead.
+  const OUTER_MAX_RETRIES = 5;
+  const outerBackoff = { initialMs: 10_000, maxMs: 120_000, factor: 1.8, jitter: 0.2 };
+
+  for (let outerAttempt = 0; outerAttempt <= OUTER_MAX_RETRIES; outerAttempt++) {
+    if (abortSignal?.aborted) {
+      return;
+    }
+
+    const client = new Client(
+      {
+        baseUrl: "http://localhost",
+        deploySecret: "a",
+        clientId: applicationId,
+        publicKey: "a",
+        token,
+        autoDeploy: false,
+      },
+      {
+        commands,
+        listeners: [],
+        components,
+      },
+      [
+        new GatewayPlugin({
+          reconnect: {
+            maxAttempts: 8,
+            baseDelay: 5_000,
+            maxDelay: 60_000,
+          },
+          intents: gatewayIntents,
+          autoInteractions: true,
+        }),
+      ],
+    );
+
+    if (outerAttempt === 0) {
+      await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
+
+      if (nativeDisabledExplicit) {
+        await clearDiscordNativeCommands({
+          client,
+          applicationId,
+          runtime,
+        });
+      }
+    }
+
+    let botUserId: string | undefined;
+    try {
+      const botUser = await client.fetchUser("@me");
+      botUserId = botUser?.id;
+    } catch (err) {
+      runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
+    }
+
+    const messageHandler = createDiscordMessageHandler({
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      token,
       runtime,
+      botUserId,
+      guildHistories,
+      historyLimit,
+      mediaMaxBytes,
+      textLimit,
+      replyToMode,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels,
+      allowFrom,
+      guildEntries,
     });
-  }
 
-  try {
-    const botUser = await client.fetchUser("@me");
-    botUserId = botUser?.id;
-  } catch (err) {
-    runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
-  }
-
-  const messageHandler = createDiscordMessageHandler({
-    cfg,
-    discordConfig: discordCfg,
-    accountId: account.accountId,
-    token,
-    runtime,
-    botUserId,
-    guildHistories,
-    historyLimit,
-    mediaMaxBytes,
-    textLimit,
-    replyToMode,
-    dmEnabled,
-    groupDmEnabled,
-    groupDmChannels,
-    allowFrom,
-    guildEntries,
-  });
-
-  registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionRemoveListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-
-  if (discordCfg.intents?.presence) {
+    registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
     registerDiscordListener(
       client.listeners,
-      new DiscordPresenceListener({ logger, accountId: account.accountId }),
+      new DiscordReactionListener({
+        cfg,
+        accountId: account.accountId,
+        runtime,
+        botUserId,
+        guildEntries,
+        logger,
+      }),
     );
-    runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
-  }
+    registerDiscordListener(
+      client.listeners,
+      new DiscordReactionRemoveListener({
+        cfg,
+        accountId: account.accountId,
+        runtime,
+        botUserId,
+        guildEntries,
+        logger,
+      }),
+    );
 
-  runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+    if (discordCfg.intents?.presence) {
+      registerDiscordListener(
+        client.listeners,
+        new DiscordPresenceListener({ logger, accountId: account.accountId }),
+      );
+    }
 
-  // Start exec approvals handler after client is ready
-  if (execApprovalsHandler) {
-    await execApprovalsHandler.start();
-  }
-
-  const gateway = client.getPlugin<GatewayPlugin>("gateway");
-  if (gateway) {
-    registerGateway(account.accountId, gateway);
-  }
-  const gatewayEmitter = getDiscordGatewayEmitter(gateway);
-  const stopGatewayLogging = attachDiscordGatewayLogging({
-    emitter: gatewayEmitter,
-    runtime,
-  });
-  const abortSignal = opts.abortSignal;
-  const onAbort = () => {
-    if (!gateway) {
-      return;
-    }
-    // Carbon emits an error when maxAttempts is 0; keep a one-shot listener to avoid
-    // an unhandled error after we tear down listeners during abort.
-    gatewayEmitter?.once("error", () => {});
-    gateway.options.reconnect = { maxAttempts: 0 };
-    gateway.disconnect();
-  };
-  if (abortSignal?.aborted) {
-    onAbort();
-  } else {
-    abortSignal?.addEventListener("abort", onAbort, { once: true });
-  }
-  // Timeout to detect zombie connections where HELLO is never received.
-  const HELLO_TIMEOUT_MS = 30000;
-  let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
-  const onGatewayDebug = (msg: unknown) => {
-    const message = String(msg);
-    if (!message.includes("WebSocket connection opened")) {
-      return;
-    }
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
-    helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
-        runtime.log?.(
-          danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-          ),
-        );
-        gateway?.disconnect();
-        gateway?.connect(false);
+    if (outerAttempt === 0) {
+      runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+      if (discordCfg.intents?.presence) {
+        runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
       }
-      helloTimeoutId = undefined;
-    }, HELLO_TIMEOUT_MS);
-  };
-  gatewayEmitter?.on("debug", onGatewayDebug);
-  try {
-    await waitForDiscordGatewayStop({
-      gateway: gateway
-        ? {
-            emitter: gatewayEmitter,
-            disconnect: () => gateway.disconnect(),
-          }
-        : undefined,
-      abortSignal,
-      onGatewayError: (err) => {
-        runtime.error?.(danger(`discord gateway error: ${String(err)}`));
-      },
-      shouldStopOnError: (err) => {
-        const message = String(err);
-        return (
-          message.includes("Max reconnect attempts") || message.includes("Fatal Gateway error")
-        );
-      },
-    });
-  } finally {
-    unregisterGateway(account.accountId);
-    stopGatewayLogging();
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
     }
-    gatewayEmitter?.removeListener("debug", onGatewayDebug);
-    abortSignal?.removeEventListener("abort", onAbort);
+
+    // Start exec approvals handler after client is ready
     if (execApprovalsHandler) {
-      await execApprovalsHandler.stop();
+      await execApprovalsHandler.start();
     }
+
+    const gateway = client.getPlugin<GatewayPlugin>("gateway");
+    if (gateway) {
+      registerGateway(account.accountId, gateway);
+    }
+    const gatewayEmitter = getDiscordGatewayEmitter(gateway);
+    const stopGatewayLogging = attachDiscordGatewayLogging({
+      emitter: gatewayEmitter,
+      runtime,
+    });
+    const onAbort = () => {
+      if (!gateway) {
+        return;
+      }
+      // Carbon emits an error when maxAttempts is 0; keep a one-shot listener to avoid
+      // an unhandled error after we tear down listeners during abort.
+      gatewayEmitter?.once("error", () => {});
+      gateway.options.reconnect = { maxAttempts: 0 };
+      gateway.disconnect();
+    };
+    if (abortSignal?.aborted) {
+      onAbort();
+    } else {
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+    }
+    // Timeout to detect zombie connections where HELLO is never received.
+    const HELLO_TIMEOUT_MS = 30000;
+    let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const onGatewayDebug = (msg: unknown) => {
+      const message = String(msg);
+      if (!message.includes("WebSocket connection opened")) {
+        return;
+      }
+      if (helloTimeoutId) {
+        clearTimeout(helloTimeoutId);
+      }
+      helloTimeoutId = setTimeout(() => {
+        if (!gateway?.isConnected) {
+          runtime.log?.(
+            danger(
+              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            ),
+          );
+          gateway?.disconnect();
+          gateway?.connect(false);
+        } else {
+          // Emit through the gateway emitter so gateway-logging picks it up
+          gatewayEmitter?.emit("debug", `connection stable after ${HELLO_TIMEOUT_MS / 1000}s`);
+        }
+        helloTimeoutId = undefined;
+      }, HELLO_TIMEOUT_MS);
+    };
+    gatewayEmitter?.on("debug", onGatewayDebug);
+
+    let shouldRetry = false;
+    try {
+      await waitForDiscordGatewayStop({
+        gateway: gateway
+          ? {
+              emitter: gatewayEmitter,
+              disconnect: () => gateway.disconnect(),
+            }
+          : undefined,
+        abortSignal,
+        onGatewayError: (err) => {
+          runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+        },
+        shouldStopOnError: (err) => {
+          const message = String(err);
+          return (
+            message.includes("Max reconnect attempts") || message.includes("Fatal Gateway error")
+          );
+        },
+      });
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      if (message.includes("Max reconnect attempts") && outerAttempt < OUTER_MAX_RETRIES) {
+        shouldRetry = true;
+      } else {
+        throw err;
+      }
+    } finally {
+      unregisterGateway(account.accountId);
+      stopGatewayLogging();
+      if (helloTimeoutId) {
+        clearTimeout(helloTimeoutId);
+      }
+      gatewayEmitter?.removeListener("debug", onGatewayDebug);
+      abortSignal?.removeEventListener("abort", onAbort);
+      if (execApprovalsHandler) {
+        await execApprovalsHandler.stop();
+      }
+    }
+
+    if (!shouldRetry) {
+      return;
+    }
+
+    // Outer retry: wait with exponential backoff before recreating the gateway
+    const delayMs = computeBackoff(outerBackoff, outerAttempt + 1);
+    runtime.log?.(
+      danger(
+        `discord: gateway exhausted 8 reconnect attempts, outer retry ${outerAttempt + 1}/${OUTER_MAX_RETRIES} in ${Math.round(delayMs / 1000)}s`,
+      ),
+    );
+    await sleepWithAbort(delayMs, abortSignal);
   }
+
+  throw new Error(
+    `discord: gateway failed after ${OUTER_MAX_RETRIES} outer retries — marking channel as dead`,
+  );
 }
 
 async function clearDiscordNativeCommands(params: {
