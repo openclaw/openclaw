@@ -30,6 +30,7 @@ const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const loggerProviderConfigs = vi.hoisted(() => [] as Array<{ processors?: unknown[] }>);
 
 vi.mock("@opentelemetry/api", () => ({
   metrics: {
@@ -65,7 +66,9 @@ vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
 vi.mock("@opentelemetry/sdk-logs", () => ({
   BatchLogRecordProcessor: class {},
   LoggerProvider: class {
-    addLogRecordProcessor = vi.fn();
+    constructor(config?: { processors?: unknown[] }) {
+      loggerProviderConfigs.push(config ?? {});
+    }
     getLogger = vi.fn(() => ({
       emit: logEmit,
     }));
@@ -83,10 +86,7 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
-  Resource: class {
-    // eslint-disable-next-line @typescript-eslint/no-useless-constructor
-    constructor(_value?: unknown) {}
-  },
+  resourceFromAttributes: vi.fn(() => ({})),
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
@@ -117,6 +117,7 @@ describe("diagnostics-otel service", () => {
     sdkShutdown.mockClear();
     logEmit.mockClear();
     logShutdown.mockClear();
+    loggerProviderConfigs.length = 0;
     registerLogTransportMock.mockReset();
   });
 
@@ -150,6 +151,8 @@ describe("diagnostics-otel service", () => {
         debug: vi.fn(),
       },
     });
+    expect(loggerProviderConfigs).toHaveLength(1);
+    expect(loggerProviderConfigs[0]?.processors).toHaveLength(1);
 
     emitDiagnosticEvent({
       type: "webhook.received",
