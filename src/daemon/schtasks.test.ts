@@ -166,17 +166,51 @@ describe("readScheduledTaskCommand", () => {
     try {
       const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      // Use forward slashes which work in Windows cmd and avoid escape parsing issues
       await fs.writeFile(
         scriptPath,
-        ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'].join("\r\n"),
+        ["@echo off", '"C:\\Program Files\\Node\\node.exe" gateway.js'].join("\r\n"),
         "utf8",
       );
 
       const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
       const result = await readScheduledTaskCommand(env);
       expect(result).toEqual({
-        programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+        programArguments: ["C:\\Program Files\\Node\\node.exe", "gateway.js"],
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves backslashes in Windows paths", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-test-"));
+    try {
+      const scriptPath = path.join(tmpDir, ".openclaw", "gateway.cmd");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(
+        scriptPath,
+        [
+          "@echo off",
+          "rem OpenClaw Gateway (v2026.1.29)",
+          "set OPENCLAW_GATEWAY_PORT=18789",
+          '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\test\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\openclaw\\dist\\index.js gateway --port 18789',
+        ].join("\r\n"),
+        "utf8",
+      );
+
+      const env = { USERPROFILE: tmpDir, OPENCLAW_PROFILE: "default" };
+      const result = await readScheduledTaskCommand(env);
+      expect(result).toEqual({
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\test\\AppData\\Roaming\\nvm\\v24.13.0\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
