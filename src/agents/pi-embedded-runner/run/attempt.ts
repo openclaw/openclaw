@@ -726,9 +726,10 @@ export async function runEmbeddedAttempt(
                   msg &&
                   typeof msg === "object" &&
                   "content" in msg &&
-                  Array.isArray((msg as Record<string, unknown>).content)
+                  Array.isArray((msg as unknown as Record<string, unknown>).content)
                 ) {
-                  for (const part of (msg as { content: Array<Record<string, unknown>> }).content) {
+                  for (const part of (msg as unknown as { content: Array<Record<string, unknown>> })
+                    .content) {
                     if (part && part.type === "toolCall") {
                       toolCalls.push({
                         id: (part.id as string) ?? "",
