@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `4b06f98 fix: R2 credentials + init directories verified (02-08)`
 - `595ac8f feat: Cloudflare R2 storage integration (maibeauty-media) (02-08)`
 - `9ff53f4 fix(web): handle local video paths in content viewer with copy path feature (02-08)`
 - `9bdf98a fix(api): add video_url/thumbnail_url to ContentResponse with VideoJob enrichment (02-08)`
 - `98008b0 docs: I035 AI pipeline bug fix + video viewer improvement (02-08)`
-- `91b6f86 fix(web): stale job filtering + video viewer with output path (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
