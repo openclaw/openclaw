@@ -35,12 +35,22 @@ async function scrubSessionFile(
     if (!line.trim()) {
       return line;
     }
-    const redacted = redactSensitiveText(line, { mode: "tools" });
-    if (redacted !== line) {
+    // Apply redaction repeatedly until stable to catch patterns revealed by prior masking
+    let current = line;
+    let lineRedacted = false;
+    for (let pass = 0; pass < 10; pass++) {
+      const redacted = redactSensitiveText(current, { mode: "tools" });
+      if (redacted === current) {
+        break;
+      }
+      current = redacted;
+      lineRedacted = true;
+    }
+    if (lineRedacted) {
       modified = true;
       redactionCount++;
     }
-    return redacted;
+    return current;
   });
 
   if (modified && !opts.dryRun) {
