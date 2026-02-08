@@ -1,3 +1,6 @@
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
 
@@ -200,9 +203,19 @@ async function extractPdfContent(params: {
 }): Promise<{ text: string; images: InputImageContent[] }> {
   const { buffer, limits } = params;
   const { getDocument } = await loadPdfJsModule();
+
+  // Resolve the standard_fonts directory within the pdfjs-dist package so
+  // NodeStandardFontDataFactory can locate the bundled .pfb/.ttf files.
+  // Without this, PDFs that use standard fonts throw:
+  //   "Ensure that the `standardFontDataUrl` API parameter is provided."
+  const require = createRequire(import.meta.url);
+  const pdfjsPath = dirname(require.resolve("pdfjs-dist/package.json"));
+  const standardFontDataUrl = join(pdfjsPath, "standard_fonts") + "/";
+
   const pdf = await getDocument({
     data: new Uint8Array(buffer),
     disableWorker: true,
+    standardFontDataUrl,
   }).promise;
   const maxPages = Math.min(pdf.numPages, limits.pdf.maxPages);
   const textParts: string[] = [];
