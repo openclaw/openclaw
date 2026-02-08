@@ -80,6 +80,108 @@ describe("openclaw-tools: subagents", () => {
       model: "opencode/claude",
     });
   });
+  it("sessions_spawn inherits agent model.primary when no subagents.model is set", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [
+          { id: "main", subagents: { allowAgents: ["*"] } },
+          { id: "grok", model: { primary: "xai/grok-2" } },
+        ],
+      },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-agent-inherit", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-inherit-model", {
+      task: "do thing",
+      agentId: "grok",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      model: "xai/grok-2",
+    });
+  });
+
+  it("sessions_spawn agent subagents.model takes priority over agent model", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [
+          { id: "main", subagents: { allowAgents: ["*"] } },
+          {
+            id: "research",
+            model: { primary: "xai/grok-2" },
+            subagents: { model: "opencode/claude" },
+          },
+        ],
+      },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-subagent-priority", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-subagent-priority", {
+      task: "do thing",
+      agentId: "research",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      model: "opencode/claude",
+    });
+  });
+
   it("sessions_spawn skips invalid model overrides and continues", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

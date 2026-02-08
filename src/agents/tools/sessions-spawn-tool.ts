@@ -171,6 +171,7 @@ export function createSessionsSpawnTool(opts?: {
       const resolvedModel =
         normalizeModelSelection(modelOverride) ??
         normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
+        normalizeModelSelection(targetAgentConfig?.model) ??
         normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
 
       const resolvedThinkingDefaultRaw =
