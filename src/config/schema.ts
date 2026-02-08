@@ -681,6 +681,12 @@ const FIELD_HELP: Record<string, string> = {
     "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
+  "channels.telegram.history.enabled":
+    "Persist inbound Telegram messages locally for later history reads (default: false).",
+  "channels.telegram.history.maxMessagesPerChat":
+    "Max messages to retain per Telegram chat/thread when history is enabled (default: unlimited).",
+  "channels.telegram.actions.readHistory":
+    "Allow the agent to read persisted Telegram history via message(action=read).",
   "channels.slack.configWrites":
     "Allow Slack to write config in response to channel events/commands (default: true).",
   "channels.mattermost.configWrites":

@@ -54,6 +54,7 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import { recordTelegramHistoryMessage } from "./history-store.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -144,6 +145,9 @@ export const buildTelegramMessageContext = async ({
   resolveTelegramGroupConfig,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
+  const historyCfg = cfg.channels?.telegram?.history;
+  const telegramHistoryEnabled = historyCfg?.enabled === true;
+  const telegramHistoryMaxPerChat = historyCfg?.maxMessagesPerChat;
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -452,6 +456,26 @@ export const buildTelegramMessageContext = async ({
             }
           : null,
       });
+
+      if (telegramHistoryEnabled) {
+        await recordTelegramHistoryMessage({
+          accountId: account.accountId,
+          chatId,
+          threadId: dmThreadId ?? resolvedThreadId,
+          messageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
+          direction: "inbound",
+          dateMs: msg.date ? msg.date * 1000 : Date.now(),
+          senderId: senderId || undefined,
+          senderUsername: senderUsername || undefined,
+          senderName: buildSenderName(msg),
+          text: rawBody,
+          wasMention: false,
+          isGroup,
+          sessionKey,
+          maxMessagesPerChat: telegramHistoryMaxPerChat,
+        });
+      }
+
       return null;
     }
   }
@@ -648,6 +672,25 @@ export const buildTelegramMessageContext = async ({
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
   });
+
+  if (telegramHistoryEnabled) {
+    await recordTelegramHistoryMessage({
+      accountId: account.accountId,
+      chatId,
+      threadId: dmThreadId ?? resolvedThreadId,
+      messageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
+      direction: "inbound",
+      dateMs: msg.date ? msg.date * 1000 : Date.now(),
+      senderId: senderId || undefined,
+      senderUsername: senderUsername || undefined,
+      senderName: buildSenderName(msg),
+      text: rawBody,
+      wasMention: isGroup ? effectiveWasMentioned : undefined,
+      isGroup,
+      sessionKey,
+      maxMessagesPerChat: telegramHistoryMaxPerChat,
+    });
+  }
 
   if (replyTarget && shouldLogVerbose()) {
     const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);

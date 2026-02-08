@@ -5,9 +5,11 @@ import {
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
+  jsonResult,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import { readTelegramHistoryMessages } from "../../../telegram/history-store.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 
 const providerId = "telegram";
@@ -59,6 +61,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("readHistory", false)) {
+      actions.add("read");
     }
     return Array.from(actions);
   },
@@ -197,6 +202,49 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         },
         cfg,
       );
+    }
+
+    if (action === "read") {
+      const gate = createActionGate(cfg.channels?.telegram?.actions);
+      if (!gate("readHistory", false)) {
+        throw new Error(
+          "Telegram action 'read' is disabled. Set channels.telegram.actions.readHistory=true to enable.",
+        );
+      }
+
+      // Note: This reads from local history persisted by the Telegram provider.
+      const rawChatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringOrNumberParam(params, "to") ??
+        readStringOrNumberParam(params, "target", { required: true })!;
+
+      // CLI targets may be prefixed (e.g. "telegram:1338202593" or "telegram:group:-100...").
+      // History store persists the raw chat_id (e.g. "1338202593" or "-100...").
+      const chatId =
+        typeof rawChatId === "string" ? rawChatId.replace(/^telegram:/, "") : rawChatId;
+      const normalizedChatId =
+        typeof chatId === "string"
+          ? chatId.replace(/^group:/, "").replace(/:topic:.*$/, "")
+          : chatId;
+      const threadId = readStringOrNumberParam(params, "threadId");
+      const limit = readNumberParam(params, "limit", { integer: true }) ?? 30;
+      const before = readNumberParam(params, "before", { integer: true });
+
+      const messages = await readTelegramHistoryMessages({
+        accountId: accountId ?? "default",
+        chatId: normalizedChatId,
+        threadId: threadId ?? undefined,
+        limit,
+        beforeMessageId: before ?? undefined,
+      });
+
+      return jsonResult({
+        channel: "telegram",
+        chatId: String(normalizedChatId),
+        threadId: threadId != null ? String(threadId) : undefined,
+        messages,
+      });
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);

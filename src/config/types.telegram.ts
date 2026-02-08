@@ -18,6 +18,15 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable reading locally persisted Telegram history via message(action="read"). */
+  readHistory?: boolean;
+};
+
+export type TelegramHistoryConfig = {
+  /** Enable local persistence of inbound Telegram messages (SQLite). */
+  enabled?: boolean;
+  /** Max messages to keep per (account, chat, thread). */
+  maxMessagesPerChat?: number;
 };
 
 export type TelegramNetworkConfig = {
@@ -111,6 +120,8 @@ export type TelegramAccountConfig = {
   webhookPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Local history persistence + readback settings. */
+  history?: TelegramHistoryConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions

@@ -132,6 +132,14 @@ export const TelegramAccountSchemaBase = z
         sendMessage: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+        readHistory: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    history: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxMessagesPerChat: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
