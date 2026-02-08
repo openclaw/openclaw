@@ -35,6 +35,29 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
+### Azure OpenAI
+
+- Provider: `azure-openai`
+- Auth: API key or keyless (DefaultAzureCredential)
+- Example model: `azure-openai/gpt-4o`
+- CLI: `openclaw models auth login --provider azure-openai --method api-key` or `--method keyless`
+- Docs: [Azure OpenAI](/providers/azure-openai)
+
+```json5
+{
+  models: {
+    providers: {
+      "azure-openai": {
+        baseUrl: "https://your-resource-name.openai.azure.com/openai/deployments/gpt-4o",
+        api: "openai-completions",
+        apiKey: "AZURE_OPENAI_API_KEY",
+      },
+    },
+  },
+  agents: { defaults: { model: { primary: "azure-openai/gpt-4o" } } },
+}
+```
+
 ### Anthropic
 
 - Provider: `anthropic`
