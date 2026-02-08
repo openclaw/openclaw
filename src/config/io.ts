@@ -313,10 +313,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
-        return {};
+        // SECURITY: Do not return {} on validation failure.
+        // An empty config causes all security settings (dmPolicy, allowFrom, etc.)
+        // to fall back to permissive defaults, allowing unauthorized access.
+        // Callers must handle the error explicitly.
+        throw err;
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
-      return {};
+      // SECURITY: Do not return {} on read failure either.
+      // Propagate the error so callers don't operate with no security.
+      throw err;
     }
   }
 
