@@ -50,7 +50,7 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      work,
+      work.catch(() => fallback),
       new Promise<T>((resolve) => {
         timeout = setTimeout(() => resolve(fallback), ms);
       }),
