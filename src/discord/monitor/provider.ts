@@ -1,4 +1,4 @@
-import { Client } from "@buape/carbon";
+import { type BaseListener, Client } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
@@ -22,7 +22,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
-import { fetchDiscordApplicationId } from "../probe.js";
+import { fetchDiscordApplicationId, probeDiscord } from "../probe.js";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -33,7 +33,6 @@ import {
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
-  registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
@@ -487,48 +486,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
   }
 
-  const client = new Client(
-    {
-      baseUrl: "http://localhost",
-      deploySecret: "a",
-      clientId: applicationId,
-      publicKey: "a",
-      token,
-      autoDeploy: false,
-    },
-    {
-      commands,
-      listeners: [],
-      components,
-    },
-    [
-      new GatewayPlugin({
-        reconnect: {
-          maxAttempts: Number.POSITIVE_INFINITY,
-        },
-        intents: resolveDiscordGatewayIntents(discordCfg.intents),
-        autoInteractions: true,
-      }),
-    ],
-  );
-
-  await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
-
   const logger = createSubsystemLogger("discord/monitor");
   const guildHistories = new Map<string, HistoryEntry[]>();
   let botUserId: string | undefined;
 
-  if (nativeDisabledExplicit) {
-    await clearDiscordNativeCommands({
-      client,
-      applicationId,
-      runtime,
-    });
-  }
-
+  // Fetch bot identity before creating the Client. The GatewayPlugin calls
+  // connect() synchronously inside the Client constructor, so messages can
+  // arrive immediately.  Having botUserId available when the listeners are
+  // created means we can correctly filter out our own messages from the start.
   try {
-    const botUser = await client.fetchUser("@me");
-    botUserId = botUser?.id;
+    const probe = await probeDiscord(token, 4000);
+    botUserId = probe.ok && probe.bot?.id ? probe.bot.id : undefined;
   } catch (err) {
     runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
   }
@@ -552,39 +520,85 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     guildEntries,
   });
 
-  registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionRemoveListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
+  // Pre-create all listeners so they are registered in the Client constructor
+  // together with the GatewayPlugin.  The GatewayPlugin calls connect()
+  // synchronously inside registerClient(), so any listener added *after* the
+  // constructor may miss early events (including MESSAGE_CREATE).
+  // Previously, listeners were registered only after `deployDiscordCommands`
+  // returned — which could block for an extended period due to rate-limit
+  // retries — leaving a window where the gateway was connected but no message
+  // listener was active.
+  const messageListener = new DiscordMessageListener(messageHandler, logger);
+  const reactionListener = new DiscordReactionListener({
+    cfg,
+    accountId: account.accountId,
+    runtime,
+    botUserId,
+    guildEntries,
+    logger,
+  });
+  const reactionRemoveListener = new DiscordReactionRemoveListener({
+    cfg,
+    accountId: account.accountId,
+    runtime,
+    botUserId,
+    guildEntries,
+    logger,
+  });
+  const presenceListener = discordCfg.intents?.presence
+    ? new DiscordPresenceListener({ logger, accountId: account.accountId })
+    : null;
+
+  const initialListeners: BaseListener[] = [
+    messageListener,
+    reactionListener,
+    reactionRemoveListener,
+  ];
+  if (presenceListener) {
+    initialListeners.push(presenceListener);
+  }
+
+  const client = new Client(
+    {
+      baseUrl: "http://localhost",
+      deploySecret: "a",
+      clientId: applicationId,
+      publicKey: "a",
+      token,
+      autoDeploy: false,
+    },
+    {
+      commands,
+      listeners: initialListeners,
+      components,
+    },
+    [
+      new GatewayPlugin({
+        reconnect: {
+          maxAttempts: Number.POSITIVE_INFINITY,
+        },
+        intents: resolveDiscordGatewayIntents(discordCfg.intents),
+        autoInteractions: true,
+      }),
+    ],
   );
 
-  if (discordCfg.intents?.presence) {
-    registerDiscordListener(
-      client.listeners,
-      new DiscordPresenceListener({ logger, accountId: account.accountId }),
-    );
+  if (presenceListener) {
     runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+
+  // Deploy slash commands in the background so it never blocks message
+  // processing.  Both deployDiscordCommands and clearDiscordNativeCommands
+  // handle their own errors internally (catch + log), so no outer try/catch
+  // is needed.
+  const deployPromise = (async () => {
+    await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
+    if (nativeDisabledExplicit) {
+      await clearDiscordNativeCommands({ client, applicationId, runtime });
+    }
+  })();
 
   // Start exec approvals handler after client is ready
   if (execApprovalsHandler) {
@@ -668,6 +682,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     abortSignal?.removeEventListener("abort", onAbort);
+    // Wait for the background deploy to settle so we don't leak promises.
+    await deployPromise.catch(() => {});
     if (execApprovalsHandler) {
       await execApprovalsHandler.stop();
     }
