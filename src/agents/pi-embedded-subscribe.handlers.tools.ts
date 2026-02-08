@@ -11,6 +11,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { normalizeToolParams } from "./pi-tools.read.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
@@ -52,7 +53,10 @@ export async function handleToolExecutionStart(
   const args = evt.args;
 
   if (toolName === "read") {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    // Normalize aliased params (e.g. file_path → path) before the guard check.
+    const normalized = normalizeToolParams(args);
+    const record =
+      normalized ?? (args && typeof args === "object" ? (args as Record<string, unknown>) : {});
     const filePath = typeof record.path === "string" ? record.path.trim() : "";
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
