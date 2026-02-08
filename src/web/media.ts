@@ -217,6 +217,23 @@ async function loadWebMediaInternal(
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
+  // Handle data URLs (e.g., data:image/png;base64,iVBORw0KGgo...)
+  if (mediaUrl.startsWith("data:")) {
+    const dataUrlMatch = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/i.exec(mediaUrl);
+    if (dataUrlMatch) {
+      const [, contentType, base64Data] = dataUrlMatch;
+      const buffer = Buffer.from(base64Data, "base64");
+      const kind = mediaKindFromMime(contentType);
+      return await clampAndFinalize({
+        buffer,
+        contentType,
+        kind,
+        fileName: `data-url.${extensionForMime(contentType) || "bin"}`,
+      });
+    }
+    throw new Error(`Invalid data URL: ${mediaUrl.slice(0, 50)}...`);
+  }
+
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
