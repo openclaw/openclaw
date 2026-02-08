@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetHomeTabState } from "../../home-tab-state.js";
 
 const getSlackHandlers = () =>
   (
@@ -130,6 +131,7 @@ describe("app_home_opened event", () => {
     };
     const client = getSlackClient() as Record<string, Record<string, { mockClear?: () => void }>>;
     client?.views?.publish?.mockClear?.();
+    resetHomeTabState();
   });
 
   afterEach(() => {
@@ -246,5 +248,17 @@ describe("app_home_opened event", () => {
     const client = getSlackClient() as { views: { publish: ReturnType<typeof vi.fn> } };
     const call = client.views.publish.mock.calls[0][0] as { token: string };
     expect(call.token).toBe("xoxb-test");
+  });
+
+  it("skips republishing for same user when version unchanged", async () => {
+    await setupProvider();
+    await fireAppHomeOpened();
+
+    const client = getSlackClient() as { views: { publish: ReturnType<typeof vi.fn> } };
+    expect(client.views.publish).toHaveBeenCalledOnce();
+
+    // Second open should skip (version cached)
+    await fireAppHomeOpened();
+    expect(client.views.publish).toHaveBeenCalledOnce();
   });
 });

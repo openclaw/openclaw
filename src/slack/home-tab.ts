@@ -11,7 +11,38 @@ export type HomeTabParams = {
   slashCommandEnabled?: boolean;
   /** Optional static Block Kit blocks to append. */
   customBlocks?: unknown[];
+  /** OpenClaw version string. */
+  version?: string;
+  /** Gateway uptime in milliseconds. */
+  uptimeMs?: number;
+  /** Model display string. */
+  model?: string;
+  /** Configured channel IDs to display. */
+  channelIds?: string[];
+  /** Bot user ID for mention formatting. */
+  botUserId?: string;
 };
+
+/**
+ * Format a millisecond duration as a human-readable uptime string.
+ * @internal Exported for testing.
+ */
+export function formatUptime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  const parts: string[] = [];
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  parts.push(`${minutes}m`);
+  return parts.join(" ");
+}
 
 /**
  * Build the default Home tab view for the OpenClaw Slack app.
@@ -32,42 +63,75 @@ export function buildDefaultHomeView(params: HomeTabParams = {}): View {
         emoji: true,
       },
     },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `Hey! I'm *${botName}*, your AI assistant. Send me a DM to get started.`,
-      },
-    },
-    { type: "divider" },
   ];
 
-  if (showCommands) {
-    const commandLines: string[] = ["*How to interact:*", "• Send me a direct message to chat"];
+  // Status + version fields
+  const statusFields: unknown[] = [
+    { type: "mrkdwn", text: "*Status:*\n🟢 Online" },
+    { type: "mrkdwn", text: `*Version:*\n${params.version || "—"}` },
+  ];
+  if (params.model) {
+    statusFields.push({ type: "mrkdwn", text: `*Model:*\n${params.model}` });
+  }
+  if (params.uptimeMs != null) {
+    statusFields.push({ type: "mrkdwn", text: `*Uptime:*\n${formatUptime(params.uptimeMs)}` });
+  }
+  blocks.push({ type: "section", fields: statusFields });
 
-    if (slashCommandEnabled) {
-      commandLines.push(`• Use \`/${slashCommandName}\` in any channel`);
-    }
+  blocks.push({ type: "divider" });
 
-    commandLines.push("• Mention me in a channel to get my attention");
+  // Getting started section
+  const introLines = [
+    `*Getting Started*`,
+    `• Send me a direct message to chat`,
+    `• Mention <@${params.botUserId || "me"}> in a channel`,
+  ];
+  if (slashCommandEnabled) {
+    introLines.push(`• Use \`/${slashCommandName}\` in any channel`);
+  }
+  blocks.push({
+    type: "section",
+    text: { type: "mrkdwn", text: introLines.join("\n") },
+  });
 
+  // Configured channels
+  if (params.channelIds && params.channelIds.length > 0) {
+    const channelMentions = params.channelIds.map((id) => `<#${id}>`).join(", ");
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*Channels:*\n${channelMentions}` },
+    });
+  }
+
+  if (showCommands && slashCommandEnabled) {
+    blocks.push({ type: "divider" });
     blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: commandLines.join("\n"),
+        text: [
+          `*Slash Commands*`,
+          `\`/${slashCommandName}\` — Send a message`,
+          `\`/${slashCommandName} help\` — Show help`,
+        ].join("\n"),
       },
     });
-
-    blocks.push({ type: "divider" });
   }
 
+  blocks.push({ type: "divider" });
+
+  // Links footer
   blocks.push({
     type: "context",
     elements: [
       {
         type: "mrkdwn",
-        text: `Powered by <https://openclaw.ai|OpenClaw>`,
+        text: [
+          `Powered by <https://openclaw.ai|OpenClaw>`,
+          `<https://docs.openclaw.ai|Docs>`,
+          `<https://github.com/openclaw/openclaw|GitHub>`,
+          `<https://discord.com/invite/clawd|Community>`,
+        ].join(" · "),
       },
     ],
   });

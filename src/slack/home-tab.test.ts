@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { buildDefaultHomeView } from "./home-tab.js";
+import { buildDefaultHomeView, formatUptime } from "./home-tab.js";
+
+describe("formatUptime", () => {
+  it("formats minutes only", () => {
+    expect(formatUptime(5 * 60_000)).toBe("5m");
+  });
+
+  it("formats hours and minutes", () => {
+    expect(formatUptime(2 * 3600_000 + 15 * 60_000)).toBe("2h 15m");
+  });
+
+  it("formats days, hours, and minutes", () => {
+    expect(formatUptime(3 * 86400_000 + 4 * 3600_000 + 30 * 60_000)).toBe("3d 4h 30m");
+  });
+
+  it("shows 0m for less than a minute", () => {
+    expect(formatUptime(30_000)).toBe("0m");
+  });
+});
 
 describe("buildDefaultHomeView", () => {
   it("returns a view with type home", () => {
@@ -17,33 +35,46 @@ describe("buildDefaultHomeView", () => {
   it("uses provided bot name in header", () => {
     const view = buildDefaultHomeView({ botName: "Slurpy" });
     const blocks = view.blocks as Array<{ text: { text: string } }>;
-    const header = blocks[0];
-    expect(header.text.text).toContain("Slurpy");
+    expect(blocks[0].text.text).toContain("Slurpy");
   });
 
   it("defaults bot name to OpenClaw", () => {
     const view = buildDefaultHomeView();
     const blocks = view.blocks as Array<{ text: { text: string } }>;
-    const header = blocks[0];
-    expect(header.text.text).toContain("OpenClaw");
+    expect(blocks[0].text.text).toContain("OpenClaw");
   });
 
-  it("includes commands section when showCommands is true", () => {
-    const view = buildDefaultHomeView({ showCommands: true });
-    const blocks = view.blocks as Array<{ type: string; text?: { text: string } }>;
-    const commandBlock = blocks.find(
-      (b) => b.type === "section" && b.text?.text?.includes("How to interact"),
-    );
-    expect(commandBlock).toBeDefined();
+  it("shows version and status fields", () => {
+    const view = buildDefaultHomeView({ version: "2026.2.8" });
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("Online");
+    expect(text).toContain("2026.2.8");
   });
 
-  it("omits commands section when showCommands is false", () => {
-    const view = buildDefaultHomeView({ showCommands: false });
-    const blocks = view.blocks as Array<{ type: string; text?: { text: string } }>;
-    const commandBlock = blocks.find(
-      (b) => b.type === "section" && b.text?.text?.includes("How to interact"),
-    );
-    expect(commandBlock).toBeUndefined();
+  it("shows model when provided", () => {
+    const view = buildDefaultHomeView({ model: "anthropic/opus-4" });
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("anthropic/opus-4");
+  });
+
+  it("shows uptime when provided", () => {
+    const view = buildDefaultHomeView({ uptimeMs: 7200_000 });
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("2h 0m");
+  });
+
+  it("shows configured channels", () => {
+    const view = buildDefaultHomeView({ channelIds: ["C123ABC", "C456DEF"] });
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("<#C123ABC>");
+    expect(text).toContain("<#C456DEF>");
+  });
+
+  it("includes getting started section with bot mention", () => {
+    const view = buildDefaultHomeView({ botUserId: "U_BOT" });
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("<@U_BOT>");
+    expect(text).toContain("direct message");
   });
 
   it("includes slash command when enabled", () => {
@@ -52,52 +83,51 @@ describe("buildDefaultHomeView", () => {
       slashCommandEnabled: true,
       slashCommandName: "mybot",
     });
-    const blocks = view.blocks as Array<{ type: string; text?: { text: string } }>;
-    const commandBlock = blocks.find(
-      (b) => b.type === "section" && b.text?.text?.includes("/mybot"),
-    );
-    expect(commandBlock).toBeDefined();
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("/mybot");
   });
 
-  it("omits slash command when disabled", () => {
+  it("omits slash command section when disabled", () => {
     const view = buildDefaultHomeView({
       showCommands: true,
       slashCommandEnabled: false,
       slashCommandName: "mybot",
     });
-    const blocks = view.blocks as Array<{ type: string; text?: { text: string } }>;
-    const commandBlock = blocks.find(
-      (b) => b.type === "section" && b.text?.text?.includes("/mybot"),
-    );
-    expect(commandBlock).toBeUndefined();
+    const text = JSON.stringify(view.blocks);
+    expect(text).not.toContain("Slash Commands");
   });
 
   it("appends custom blocks", () => {
     const custom = [{ type: "section", text: { type: "mrkdwn", text: "Custom!" } }];
     const view = buildDefaultHomeView({ customBlocks: custom });
-    const blocks = view.blocks as Array<{ type: string; text?: { text: string } }>;
-    const customBlock = blocks.find((b) => b.type === "section" && b.text?.text === "Custom!");
-    expect(customBlock).toBeDefined();
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("Custom!");
   });
 
-  it("includes OpenClaw context footer", () => {
+  it("includes docs/github/community links", () => {
     const view = buildDefaultHomeView();
-    const blocks = view.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
-    const context = blocks.find(
-      (b) => b.type === "context" && b.elements?.some((e) => e.text?.includes("OpenClaw")),
-    );
-    expect(context).toBeDefined();
+    const text = JSON.stringify(view.blocks);
+    expect(text).toContain("docs.openclaw.ai");
+    expect(text).toContain("github.com");
+    expect(text).toContain("discord.com");
   });
 
   it("handles empty customBlocks gracefully", () => {
     const view = buildDefaultHomeView({ customBlocks: [] });
     expect(view.type).toBe("home");
-    // No extra divider should be added for empty custom blocks
     const blocks = view.blocks as Array<{ type: string }>;
     const dividers = blocks.filter((b) => b.type === "divider");
     const viewWithoutCustom = buildDefaultHomeView();
     const blocksWithout = viewWithoutCustom.blocks as Array<{ type: string }>;
     const dividersWithout = blocksWithout.filter((b) => b.type === "divider");
     expect(dividers.length).toBe(dividersWithout.length);
+  });
+
+  it("does not include auth tokens or dashboard links", () => {
+    const view = buildDefaultHomeView();
+    const text = JSON.stringify(view.blocks);
+    expect(text).not.toContain("token");
+    expect(text).not.toContain("Dashboard");
+    expect(text).not.toContain("127.0.0.1");
   });
 });
