@@ -121,7 +121,18 @@ export async function resolveSlackUserAllowlist(params: {
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
-  const users = await listSlackUsers(client);
+
+  // Pre-parse all entries to check if we need to fetch the user list
+  const parsedEntries = params.entries.map((input) => ({
+    input,
+    parsed: parseSlackUserInput(input),
+  }));
+
+  // Only fetch user list if at least one entry needs name/email resolution
+  const needsUserList = parsedEntries.some(
+    ({ parsed }) => !parsed.id && (parsed.name || parsed.email),
+  );
+  const users = needsUserList ? await listSlackUsers(client) : [];
   const results: SlackUserResolution[] = [];
 
   for (const input of params.entries) {
