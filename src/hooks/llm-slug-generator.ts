@@ -12,6 +12,9 @@ import {
   resolveAgentDir,
 } from "../agents/agent-scope.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("hooks/llm-slug-generator");
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -70,7 +73,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     return null;
   } catch (err) {
-    console.error("[llm-slug-generator] Failed to generate slug:", err);
+    log.error(`Failed to generate slug: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   } finally {
     // Clean up temporary session file
