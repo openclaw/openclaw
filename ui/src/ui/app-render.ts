@@ -144,9 +144,9 @@ export function renderApp(state: AppViewState) {
         </div>
         <div class="topbar-status">
           <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
+            <span class="statusDot ${state.connected ? (state.debugHealth?.ok === false ? "" : "ok") : ""}"></span>
             <span>Health</span>
-            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
+            <span class="mono">${state.connected ? (state.debugHealth?.ok === false ? "Degraded" : "OK") : "Offline"}</span>
           </div>
           ${renderThemeToggle(state)}
         </div>

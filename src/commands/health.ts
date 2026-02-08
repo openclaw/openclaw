@@ -45,11 +45,11 @@ export type AgentHealthSummary = {
 
 export type HealthSummary = {
   /**
-   * Convenience top-level flag for UIs (e.g. WebChat) that only need a binary
-   * "can talk to the gateway" signal. If this payload exists, the gateway RPC
-   * succeeded, so this is always `true`.
+   * Top-level health flag. `true` when the gateway is reachable and all
+   * configured channel probes succeed. `false` when any channel probe fails
+   * (e.g. Telegram webhook delivery errors).
    */
-  ok: true;
+  ok: boolean;
   ts: number;
   durationMs: number;
   channels: Record<string, ChannelHealthSummary>;
@@ -539,8 +539,27 @@ export async function getHealthSnapshot(params?: {
     }
   }
 
+  const hasProbeFailure = Object.values(channels).some((ch) => {
+    if (!ch || !ch.configured) return false;
+    const probe = ch.probe && typeof ch.probe === "object" ? ch.probe : null;
+    if (
+      probe &&
+      typeof (probe as Record<string, unknown>).ok === "boolean" &&
+      (probe as Record<string, unknown>).ok === false
+    )
+      return true;
+    const accounts = (ch as Record<string, unknown>).accounts as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    if (!accounts || typeof accounts !== "object") return false;
+    return Object.values(accounts).some((acc) => {
+      const p = acc?.probe as Record<string, unknown> | undefined;
+      return p && typeof p.ok === "boolean" && p.ok === false;
+    });
+  });
+
   const summary: HealthSummary = {
-    ok: true,
+    ok: !hasProbeFailure,
     ts: Date.now(),
     durationMs: Date.now() - start,
     channels,

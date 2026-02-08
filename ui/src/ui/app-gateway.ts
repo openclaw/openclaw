@@ -145,6 +145,13 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      // Fetch health with probing so the topbar badge reflects channel health.
+      void host.client
+        ?.request("health", { probe: true })
+        .then((health) => {
+          host.debugHealth = health as HealthSnapshot;
+        })
+        .catch(() => {});
     },
     onClose: ({ code, reason }) => {
       host.connected = false;

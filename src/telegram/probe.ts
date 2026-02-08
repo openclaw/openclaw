@@ -14,7 +14,13 @@ export type TelegramProbe = {
     canReadAllGroupMessages?: boolean | null;
     supportsInlineQueries?: boolean | null;
   };
-  webhook?: { url?: string | null; hasCustomCert?: boolean | null };
+  webhook?: {
+    url?: string | null;
+    hasCustomCert?: boolean | null;
+    pendingUpdateCount?: number | null;
+    lastErrorDate?: number | null;
+    lastErrorMessage?: string | null;
+  };
 };
 
 async function fetchWithTimeout(
@@ -86,13 +92,45 @@ export async function probeTelegram(
       const webhookRes = await fetchWithTimeout(`${base}/getWebhookInfo`, timeoutMs, fetcher);
       const webhookJson = (await webhookRes.json()) as {
         ok?: boolean;
-        result?: { url?: string; has_custom_certificate?: boolean };
+        result?: {
+          url?: string;
+          has_custom_certificate?: boolean;
+          pending_update_count?: number;
+          last_error_date?: number;
+          last_error_message?: string;
+        };
       };
       if (webhookRes.ok && webhookJson?.ok) {
+        const wr = webhookJson.result;
+        const pendingUpdateCount =
+          typeof wr?.pending_update_count === "number" ? wr.pending_update_count : null;
+        const lastErrorDate = typeof wr?.last_error_date === "number" ? wr.last_error_date : null;
+        const lastErrorMessage =
+          typeof wr?.last_error_message === "string" ? wr.last_error_message : null;
+
         result.webhook = {
-          url: webhookJson.result?.url ?? null,
-          hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+          url: wr?.url ?? null,
+          hasCustomCert: wr?.has_custom_certificate ?? null,
+          pendingUpdateCount,
+          lastErrorDate,
+          lastErrorMessage,
         };
+
+        // If there is a recent webhook delivery error, mark the probe as degraded.
+        // Only relevant when a webhook URL is actively set (not polling mode).
+        // "Recent" = error occurred within the last 10 minutes.
+        const RECENT_ERROR_THRESHOLD_S = 600;
+        const hasActiveWebhook = !!wr?.url;
+        if (
+          hasActiveWebhook &&
+          lastErrorDate != null &&
+          Math.floor(Date.now() / 1000) - lastErrorDate < RECENT_ERROR_THRESHOLD_S
+        ) {
+          result.ok = false;
+          result.error = `webhook error: ${lastErrorMessage ?? "unknown"}`;
+          result.elapsedMs = Date.now() - started;
+          return result;
+        }
       }
     } catch {
       // ignore webhook errors for probe
