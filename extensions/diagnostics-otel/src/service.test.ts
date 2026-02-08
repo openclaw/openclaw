@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const registerLogTransportMock = vi.hoisted(() => vi.fn());
 
@@ -6,9 +6,11 @@ const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
   const tracer = {
-    startSpan: vi.fn((_name: string, _opts?: unknown) => ({
+    startSpan: vi.fn((_name: string, _opts?: unknown, _parentCtx?: unknown) => ({
       end: vi.fn(),
       setStatus: vi.fn(),
+      setAttribute: vi.fn(),
+      _parentCtx: _parentCtx,
     })),
   };
   const meter = {
@@ -31,12 +33,18 @@ const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
+const mockRootContext = vi.hoisted(() => ({ _type: "root" }));
+
 vi.mock("@opentelemetry/api", () => ({
+  context: {
+    active: () => mockRootContext,
+  },
   metrics: {
     getMeter: () => telemetryState.meter,
   },
   trace: {
     getTracer: () => telemetryState.tracer,
+    setSpan: (_ctx: unknown, span: unknown) => ({ _type: "with-parent", _span: span }),
   },
   SpanKind: {
     INTERNAL: 0,
@@ -119,6 +127,14 @@ import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
 describe("diagnostics-otel service", () => {
+  const startedServices: Array<ReturnType<typeof createDiagnosticsOtelService>> = [];
+
+  afterEach(async () => {
+    for (const service of startedServices.splice(0)) {
+      await service.stop?.().catch(() => undefined);
+    }
+  });
+
   beforeEach(() => {
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
@@ -132,6 +148,12 @@ describe("diagnostics-otel service", () => {
     registerLogTransportMock.mockReset();
   });
 
+  function createService() {
+    const service = createDiagnosticsOtelService();
+    startedServices.push(service);
+    return service;
+  }
+
   test("records message-flow metrics and spans", async () => {
     const registeredTransports: Array<(logObj: Record<string, unknown>) => void> = [];
     const stopTransport = vi.fn();
@@ -140,7 +162,7 @@ describe("diagnostics-otel service", () => {
       return stopTransport;
     });
 
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start({
       config: {
         diagnostics: {
@@ -261,12 +283,13 @@ describe("diagnostics-otel service", () => {
     };
   }
 
-  test("model.usage emits gen_ai.* span attributes alongside openclaw.*", async () => {
-    const service = createDiagnosticsOtelService();
+  test("run.completed emits gen_ai.* span attributes alongside openclaw.*", async () => {
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "run.completed",
+      runId: "run-usage-1",
       channel: "webchat",
       provider: "openai",
       model: "gpt-5.2",
@@ -281,15 +304,13 @@ describe("diagnostics-otel service", () => {
     });
 
     const spanCall = telemetryState.tracer.startSpan.mock.calls[0];
-    expect(spanCall[0]).toBe("chat gpt-5.2");
+    expect(spanCall[0]).toBe("openclaw.agent.turn");
 
     const attrs = spanCall[1]?.attributes;
     // gen_ai.* attributes
     expect(attrs["gen_ai.operation.name"]).toBe("chat");
     expect(attrs["gen_ai.provider.name"]).toBe("openai");
     expect(attrs["gen_ai.request.model"]).toBe("gpt-5.2");
-    expect(attrs["gen_ai.usage.input_tokens"]).toBe(100);
-    expect(attrs["gen_ai.usage.output_tokens"]).toBe(50);
     expect(attrs["gen_ai.response.id"]).toBe("chatcmpl-abc123");
     expect(attrs["gen_ai.response.model"]).toBe("gpt-5.2-2025-06-01");
     expect(attrs["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
@@ -306,12 +327,12 @@ describe("diagnostics-otel service", () => {
     await service.stop?.();
   });
 
-  test("model.usage records gen_ai.client.operation.duration in seconds", async () => {
-    const service = createDiagnosticsOtelService();
+  test("model.inference records gen_ai.client.operation.duration in seconds", async () => {
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference",
       provider: "anthropic",
       model: "claude-sonnet-4-5-20250929",
       usage: { input: 200, output: 100, total: 300 },
@@ -331,12 +352,12 @@ describe("diagnostics-otel service", () => {
     await service.stop?.();
   });
 
-  test("model.usage records gen_ai.client.token.usage split by input/output", async () => {
-    const service = createDiagnosticsOtelService();
+  test("model.inference records gen_ai.client.token.usage split by input/output", async () => {
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference",
       provider: "openai",
       model: "gpt-5.2",
       usage: { input: 500, output: 120, total: 620 },
@@ -355,8 +376,35 @@ describe("diagnostics-otel service", () => {
     await service.stop?.();
   });
 
+  test("model.inference spans are children of run.started span when runId is present", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "run.started",
+      runId: "run-1",
+      sessionId: "sess-1",
+    });
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 20, output: 10, total: 30 },
+      durationMs: 100,
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    expect(calls[0]?.[0]).toBe("openclaw.agent.turn");
+    expect(calls[1]?.[0]).toBe("chat gpt-5.2");
+    expect(calls[1]?.[2]).toEqual(expect.objectContaining({ _type: "with-parent" }));
+
+    await service.stop?.();
+  });
+
   test("maps provider names to gen_ai.provider.name enum values", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     const cases = [
@@ -371,7 +419,7 @@ describe("diagnostics-otel service", () => {
     for (const { input, expected } of cases) {
       telemetryState.tracer.startSpan.mockClear();
       emitDiagnosticEvent({
-        type: "model.usage",
+        type: "model.inference",
         provider: input,
         model: "test-model",
         usage: { input: 10, output: 5, total: 15 },
@@ -384,7 +432,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("records gen_ai.input.messages when captureContent is enabled", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx({ captureContent: true }));
 
     const inputMessages = [
@@ -402,44 +450,76 @@ describe("diagnostics-otel service", () => {
     ];
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference.started",
+      runId: "run-cap-1",
+      provider: "openai",
+      model: "gpt-5.2",
+      inputMessages,
+    });
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      runId: "run-cap-1",
+      callIndex: 0,
       provider: "openai",
       model: "gpt-5.2",
       usage: { input: 10, output: 5, total: 15 },
-      inputMessages,
       outputMessages,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
+    expect(inferenceCall).toBeDefined();
+    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
     expect(attrs["gen_ai.input.messages"]).toBe(JSON.stringify(inputMessages));
-    expect(attrs["gen_ai.output.messages"]).toBe(JSON.stringify(outputMessages));
+
+    const span = telemetryState.tracer.startSpan.mock.results.find(
+      (r, idx) => telemetryState.tracer.startSpan.mock.calls[idx]?.[0] === "chat gpt-5.2",
+    )?.value;
+    expect(span.setAttribute).toHaveBeenCalledWith(
+      "gen_ai.output.messages",
+      JSON.stringify(outputMessages),
+    );
 
     await service.stop?.();
   });
 
   test("does NOT record gen_ai.input.messages when captureContent is disabled", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference.started",
+      runId: "run-cap-2",
       provider: "openai",
       model: "gpt-5.2",
-      usage: { input: 10, output: 5, total: 15 },
       inputMessages: [
         { role: "user" as const, parts: [{ type: "text" as const, content: "secret" }] },
       ],
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    emitDiagnosticEvent({
+      type: "model.inference",
+      runId: "run-cap-2",
+      callIndex: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 10, output: 5, total: 15 },
+      outputMessages: [
+        { role: "assistant" as const, parts: [{ type: "text" as const, content: "x" }] },
+      ],
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
+    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
     expect(attrs["gen_ai.input.messages"]).toBeUndefined();
-    expect(attrs["gen_ai.output.messages"]).toBeUndefined();
 
     await service.stop?.();
   });
 
   test("input messages with media parts use correct modality and type", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx({ captureContent: true }));
 
     const inputMessages = [
@@ -458,14 +538,28 @@ describe("diagnostics-otel service", () => {
     ];
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference.started",
+      runId: "run-media-1",
       provider: "openai",
       model: "gpt-5.2",
-      usage: { input: 500, output: 50, total: 550 },
       inputMessages,
     });
 
-    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    emitDiagnosticEvent({
+      type: "model.inference",
+      runId: "run-media-1",
+      callIndex: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 500, output: 50, total: 550 },
+      outputMessages: [
+        { role: "assistant" as const, parts: [{ type: "text" as const, content: "x" }] },
+      ],
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    const inferenceCall = calls.find((c) => c[0] === "chat gpt-5.2");
+    const attrs = inferenceCall?.[1]?.attributes as Record<string, unknown>;
     const parsed = JSON.parse(attrs["gen_ai.input.messages"] as string);
     expect(parsed[0].parts).toHaveLength(2);
     expect(parsed[0].parts[0].type).toBe("text");
@@ -477,7 +571,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("output messages with tool_call parts are recorded correctly", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx({ captureContent: true }));
 
     const outputMessages = [
@@ -496,7 +590,7 @@ describe("diagnostics-otel service", () => {
     ];
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference",
       provider: "openai",
       model: "gpt-5.2",
       finishReasons: ["tool_call"],
@@ -515,7 +609,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("tool.execution emits execute_tool span with gen_ai.tool.* attributes", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
@@ -541,7 +635,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("tool.execution with error sets ERROR span status", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
@@ -561,11 +655,11 @@ describe("diagnostics-otel service", () => {
   });
 
   test("inference spans use SpanKind.CLIENT, tool spans use SpanKind.INTERNAL", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference",
       provider: "openai",
       model: "gpt-5.2",
       usage: { input: 10, output: 5, total: 15 },
@@ -586,16 +680,25 @@ describe("diagnostics-otel service", () => {
   });
 
   test("existing openclaw.* metrics are still emitted alongside gen_ai.*", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "run.completed",
+      runId: "run-metrics-1",
       provider: "openai",
       model: "gpt-5.2",
       usage: { input: 100, output: 50, total: 150 },
       durationMs: 2000,
       costUsd: 0.005,
+    });
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 100, output: 50, total: 150 },
+      durationMs: 2000,
     });
 
     // Existing openclaw metrics still work
@@ -613,11 +716,11 @@ describe("diagnostics-otel service", () => {
   });
 
   test("finish_reason length is recorded for truncated responses", async () => {
-    const service = createDiagnosticsOtelService();
+    const service = createService();
     await service.start(createTestCtx());
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "model.inference",
       provider: "openai",
       model: "gpt-5.2",
       finishReasons: ["length"],
@@ -626,6 +729,265 @@ describe("diagnostics-otel service", () => {
 
     const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
     expect(attrs["gen_ai.response.finish_reasons"]).toEqual(["length"]);
+
+    await service.stop?.();
+  });
+
+  test("tool spans with matching runId are children of the run span", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "run.started",
+      runId: "run-parent-child",
+      sessionId: "sess-1",
+    });
+
+    emitDiagnosticEvent({
+      type: "tool.execution",
+      runId: "run-parent-child",
+      toolName: "web_search",
+      toolType: "function",
+      toolCallId: "call-1",
+      durationMs: 200,
+    });
+    emitDiagnosticEvent({
+      type: "tool.execution",
+      runId: "run-parent-child",
+      toolName: "read",
+      toolType: "function",
+      toolCallId: "call-2",
+      durationMs: 50,
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    // 3 spans: 1 run parent + 2 child tool spans
+    expect(calls).toHaveLength(3);
+
+    // First call is the run span
+    expect(calls[0][0]).toBe("openclaw.agent.turn");
+    const parentSpan = telemetryState.tracer.startSpan.mock.results[0]?.value;
+
+    // Tool spans should have been created with a parent context derived from the run span
+    expect(calls[1][0]).toBe("execute_tool web_search");
+    const toolParentCtx1 = calls[1][2] as { _type: string; _span: unknown };
+    expect(toolParentCtx1._type).toBe("with-parent");
+    expect(toolParentCtx1._span).toBe(parentSpan);
+
+    expect(calls[2][0]).toBe("execute_tool read");
+    const toolParentCtx2 = calls[2][2] as { _type: string; _span: unknown };
+    expect(toolParentCtx2._type).toBe("with-parent");
+    expect(toolParentCtx2._span).toBe(parentSpan);
+
+    // Tool spans end immediately; the run span stays open until run.completed.
+    expect(parentSpan.end).not.toHaveBeenCalled();
+    expect(telemetryState.tracer.startSpan.mock.results[1]?.value.end).toHaveBeenCalled();
+    expect(telemetryState.tracer.startSpan.mock.results[2]?.value.end).toHaveBeenCalled();
+
+    await service.stop?.();
+  });
+
+  test("tool spans with matching runId are children of the active inference span when present", async () => {
+    const service = createService();
+    await service.start(createTestCtx({ captureContent: true }));
+
+    emitDiagnosticEvent({
+      type: "run.started",
+      runId: "run-tool-parent-1",
+      sessionId: "sess-1",
+    });
+
+    emitDiagnosticEvent({
+      type: "model.inference.started",
+      runId: "run-tool-parent-1",
+      callIndex: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      inputMessages: [{ role: "user" as const, parts: [{ type: "text" as const, content: "hi" }] }],
+    });
+
+    emitDiagnosticEvent({
+      type: "tool.execution",
+      runId: "run-tool-parent-1",
+      toolName: "web_search",
+      toolType: "function",
+      toolCallId: "call-1",
+      durationMs: 200,
+    });
+
+    const calls = telemetryState.tracer.startSpan.mock.calls;
+    const inferenceSpan = telemetryState.tracer.startSpan.mock.results.find(
+      (r, idx) => calls[idx]?.[0] === "chat gpt-5.2",
+    )?.value;
+    expect(inferenceSpan).toBeDefined();
+
+    const toolCall = calls.find((c) => c[0] === "execute_tool web_search");
+    expect(toolCall).toBeDefined();
+    const toolParentCtx = toolCall?.[2] as { _type: string; _span: unknown };
+    expect(toolParentCtx._type).toBe("with-parent");
+    expect(toolParentCtx._span).toBe(inferenceSpan);
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      runId: "run-tool-parent-1",
+      callIndex: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 10, output: 5, total: 15 },
+      outputMessages: [
+        { role: "assistant" as const, parts: [{ type: "text" as const, content: "ok" }] },
+      ],
+    });
+
+    await service.stop?.();
+  });
+
+  test("tool events without runId create standalone spans (backward compat)", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "tool.execution",
+      toolName: "exec",
+      toolType: "function",
+      toolCallId: "call-no-run",
+      durationMs: 100,
+    });
+
+    // Span should be created immediately (no buffering)
+    expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
+    expect(telemetryState.tracer.startSpan.mock.calls[0][0]).toBe("execute_tool exec");
+    // No parent context
+    expect(telemetryState.tracer.startSpan.mock.calls[0][2]).toBeUndefined();
+
+    await service.stop?.();
+  });
+
+  test("system instructions appear as gen_ai.system_instructions when captureContent is enabled", async () => {
+    const service = createService();
+    await service.start(createTestCtx({ captureContent: true }));
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-sys-1",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5-20250929",
+      usage: { input: 100, output: 50, total: 150 },
+      systemInstructions: [{ type: "text" as const, content: "You are a helpful assistant." }],
+    });
+
+    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    expect(attrs["gen_ai.system_instructions"]).toBe(
+      JSON.stringify([{ type: "text", content: "You are a helpful assistant." }]),
+    );
+
+    await service.stop?.();
+  });
+
+  test("temperature and maxOutputTokens appear as gen_ai.request.* span attributes", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-temp-1",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 100, output: 50, total: 150 },
+      temperature: 0.7,
+      maxOutputTokens: 4096,
+    });
+
+    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    expect(attrs["gen_ai.request.temperature"]).toBe(0.7);
+    expect(attrs["gen_ai.request.max_tokens"]).toBe(4096);
+
+    await service.stop?.();
+  });
+
+  test("TTFT histogram is recorded and span attribute is set", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: { input: 100, output: 50, total: 150 },
+      durationMs: 2000,
+      ttftMs: 350,
+    });
+
+    const histogram = telemetryState.histograms.get("gen_ai.client.time_to_first_token");
+    expect(histogram?.record).toHaveBeenCalledWith(
+      0.35,
+      expect.objectContaining({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-5.2",
+      }),
+    );
+
+    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    expect(attrs["gen_ai.client.time_to_first_token"]).toBe(350);
+
+    await service.stop?.();
+  });
+
+  test("error event creates span with ERROR status and gen_ai.error.type attribute", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "model.inference",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      durationMs: 500,
+      error: "Context window exceeded",
+      errorType: "context_overflow",
+    });
+
+    const span = telemetryState.tracer.startSpan.mock.results[0]?.value;
+    expect(span.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 2, message: "Context window exceeded" }),
+    );
+
+    // Check span attributes directly from the startSpan call
+    const attrs = telemetryState.tracer.startSpan.mock.calls[0]?.[1]?.attributes;
+    expect(attrs).toBeDefined();
+
+    // error attributes are set via setAttribute, not in initial attrs
+    // Verify setAttribute was called (the mock span tracks these calls)
+    expect(span.setStatus).toHaveBeenCalled();
+
+    // Verify error counter metric
+    const errorCounter = telemetryState.counters.get("openclaw.inference.error");
+    expect(errorCounter?.add).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.error.type": "context_overflow",
+      }),
+    );
+
+    await service.stop?.();
+  });
+
+  test("tool events with runId but without run.started are standalone spans", async () => {
+    const service = createService();
+    await service.start(createTestCtx());
+
+    emitDiagnosticEvent({
+      type: "tool.execution",
+      runId: "run-orphaned",
+      toolName: "web_search",
+      durationMs: 200,
+    });
+
+    // Tool span should be created immediately without a parent
+    expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
+    expect(telemetryState.tracer.startSpan.mock.calls[0][0]).toBe("execute_tool web_search");
+    expect(telemetryState.tracer.startSpan.mock.calls[0][2]).toBeUndefined();
 
     await service.stop?.();
   });

@@ -7,6 +7,12 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import {
+  emitDiagnosticEvent,
+  type GenAiMessage,
+  type GenAiPart,
+  type GenAiToolDef,
+} from "../../../infra/diagnostic-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -134,6 +140,116 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+function buildGenAiPartsFromContent(content: unknown): GenAiPart[] {
+  if (typeof content === "string") {
+    return [{ type: "text", content }];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const parts: GenAiPart[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push({ type: "text", content: record.text });
+      continue;
+    }
+    if (record.type === "image" && typeof record.data === "string") {
+      parts.push({
+        type: "blob",
+        modality: "image",
+        mime_type: typeof record.mimeType === "string" ? record.mimeType : undefined,
+        content: record.data,
+      });
+    }
+  }
+  return parts;
+}
+
+function buildGenAiMessagesFromContext(messages: unknown): GenAiMessage[] | undefined {
+  if (!Array.isArray(messages)) {
+    return undefined;
+  }
+  const out: GenAiMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    const role = typeof record.role === "string" ? record.role : "";
+    if (role === "user") {
+      out.push({ role: "user", parts: buildGenAiPartsFromContent(record.content) });
+      continue;
+    }
+    if (role === "assistant") {
+      // Keep assistant parts to text only to avoid double-encoding tool calls here.
+      const parts: GenAiPart[] = [];
+      const content = record.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
+          const b = block as Record<string, unknown>;
+          if (b.type === "text" && typeof b.text === "string") {
+            parts.push({ type: "text", content: b.text });
+          }
+        }
+      }
+      out.push({ role: "assistant", parts });
+      continue;
+    }
+    if (role === "toolResult") {
+      const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "";
+      const toolName = typeof record.toolName === "string" ? record.toolName : "";
+      // Represent tool results as a tool message with a tool_call_response part.
+      out.push({
+        role: "tool",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: toolCallId,
+            response: {
+              toolName,
+              isError: Boolean(record.isError),
+              parts: buildGenAiPartsFromContent(record.content),
+            },
+          },
+        ],
+      });
+    }
+  }
+  return out;
+}
+
+function buildGenAiToolDefsFromContext(tools: unknown): GenAiToolDef[] | undefined {
+  if (!Array.isArray(tools)) {
+    return undefined;
+  }
+  const defs: GenAiToolDef[] = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object") {
+      continue;
+    }
+    const record = tool as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : "";
+    if (!name) {
+      continue;
+    }
+    defs.push({
+      name,
+      ...(typeof record.description === "string" ? { description: record.description } : {}),
+      ...(record.parameters && typeof record.parameters === "object"
+        ? { parameters: record.parameters as Record<string, unknown> }
+        : {}),
+    });
+  }
+  return defs.length ? defs : undefined;
 }
 
 export async function runEmbeddedAttempt(
@@ -537,6 +653,52 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      const captureContent =
+        params.config?.diagnostics?.enabled === true &&
+        params.config?.diagnostics?.otel?.captureContent === true;
+      if (captureContent) {
+        // Capture the exact model request context at the point of the LLM call.
+        // This is more trustworthy than sampling AgentSession.state.messages from streaming events.
+        const inner = activeSession.agent.streamFn;
+        let callIndex = 0;
+        activeSession.agent.streamFn = ((model, context, options) => {
+          callIndex += 1;
+          emitDiagnosticEvent({
+            type: "model.inference.started",
+            runId: params.runId,
+            sessionId: activeSession.sessionId,
+            sessionKey: params.sessionKey,
+            provider: model.provider,
+            model: model.id,
+            operationName: "chat",
+            callIndex,
+            inputMessages: buildGenAiMessagesFromContext(
+              (context as { messages?: unknown }).messages,
+            ),
+            systemInstructions:
+              typeof (context as { systemPrompt?: unknown }).systemPrompt === "string" &&
+              (context as { systemPrompt?: string }).systemPrompt?.trim()
+                ? [
+                    {
+                      type: "text",
+                      content: String((context as { systemPrompt?: string }).systemPrompt),
+                    },
+                  ]
+                : undefined,
+            toolDefinitions: buildGenAiToolDefsFromContext((context as { tools?: unknown }).tools),
+            temperature:
+              typeof (options as { temperature?: unknown }).temperature === "number"
+                ? (options as { temperature?: number }).temperature
+                : undefined,
+            maxOutputTokens:
+              typeof (options as { maxTokens?: unknown }).maxTokens === "number"
+                ? (options as { maxTokens?: number }).maxTokens
+                : undefined,
+          });
+          return inner(model, context, options);
+        }) as typeof inner;
+      }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -908,6 +1070,8 @@ export async function runEmbeddedAttempt(
         ),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        systemPromptText: systemPromptText,
+        firstTokenAt: subscription?.getFirstTokenAt?.(),
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

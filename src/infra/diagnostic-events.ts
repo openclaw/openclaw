@@ -49,8 +49,9 @@ export type GenAiToolDef = {
   parameters?: Record<string, unknown>;
 };
 
-export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
-  type: "model.usage";
+export type DiagnosticInferenceEvent = DiagnosticBaseEvent & {
+  type: "model.inference";
+  runId?: string;
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
@@ -64,21 +65,35 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
     promptTokens?: number;
     total?: number;
   };
-  context?: {
-    limit?: number;
-    used?: number;
-  };
-  costUsd?: number;
   durationMs?: number;
   // GenAI semantic convention fields (v1.38+)
   operationName?: string;
   responseId?: string;
   responseModel?: string;
   finishReasons?: string[];
-  inputMessages?: GenAiMessage[];
   outputMessages?: GenAiMessage[];
+  ttftMs?: number;
+  error?: string;
+  errorType?: string;
+  callIndex?: number;
+};
+
+export type DiagnosticInferenceStartedEvent = DiagnosticBaseEvent & {
+  type: "model.inference.started";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  model?: string;
+  // GenAI semantic convention fields (v1.38+)
+  operationName?: string;
+  inputMessages?: GenAiMessage[];
   systemInstructions?: GenAiPart[];
   toolDefinitions?: GenAiToolDef[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  callIndex?: number;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
@@ -166,6 +181,51 @@ export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
   attempt: number;
 };
 
+export type DiagnosticRunStartedEvent = DiagnosticBaseEvent & {
+  type: "run.started";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunCompletedEvent = DiagnosticBaseEvent & {
+  type: "run.completed";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  model?: string;
+  usage: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    promptTokens?: number;
+    total?: number;
+  };
+  context?: {
+    limit?: number;
+    used?: number;
+  };
+  costUsd?: number;
+  durationMs?: number;
+  // GenAI semantic convention fields (v1.38+)
+  operationName?: string;
+  responseId?: string;
+  responseModel?: string;
+  finishReasons?: string[];
+  inputMessages?: GenAiMessage[];
+  outputMessages?: GenAiMessage[];
+  systemInstructions?: GenAiPart[];
+  toolDefinitions?: GenAiToolDef[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  error?: string;
+  errorType?: string;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -180,6 +240,7 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticToolExecutionEvent = DiagnosticBaseEvent & {
   type: "tool.execution";
+  runId?: string;
   toolName: string;
   toolType?: "function" | "extension" | "datastore";
   toolCallId?: string;
@@ -188,10 +249,15 @@ export type DiagnosticToolExecutionEvent = DiagnosticBaseEvent & {
   channel?: string;
   durationMs?: number;
   error?: string;
+  /** Tool call arguments (input). */
+  toolInput?: Record<string, unknown>;
+  /** Tool call result (output). */
+  toolOutput?: unknown;
 };
 
 export type DiagnosticEventPayload =
-  | DiagnosticUsageEvent
+  | DiagnosticInferenceEvent
+  | DiagnosticInferenceStartedEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
@@ -202,6 +268,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
+  | DiagnosticRunStartedEvent
+  | DiagnosticRunCompletedEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolExecutionEvent;
 

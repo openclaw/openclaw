@@ -108,4 +108,8 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
+  /** The full system prompt text sent to the model. */
+  systemPromptText?: string;
+  /** Timestamp (ms) when the first token arrived from the model. */
+  firstTokenAt?: number;
 };

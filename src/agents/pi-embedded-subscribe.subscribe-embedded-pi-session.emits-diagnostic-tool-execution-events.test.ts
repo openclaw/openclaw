@@ -53,6 +53,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(toolEvents).toHaveLength(1);
 
     const evt = toolEvents[0];
+    expect(evt.runId).toBe("run-diag-tool");
     expect(evt.toolName).toBe("web_search");
     expect(evt.toolCallId).toBe("call-diag-1");
     expect(evt.toolType).toBe("function");
@@ -101,6 +102,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(toolEvents).toHaveLength(1);
 
     const evt = toolEvents[0];
+    expect(evt.runId).toBe("run-diag-tool-err");
     expect(evt.toolName).toBe("exec");
     expect(evt.error).toBe("command not found");
   });
@@ -150,5 +152,99 @@ describe("subscribeEmbeddedPiSession", () => {
 
     const evt = events.find((e) => e.type === "tool.execution");
     expect(evt.durationMs).toBe(150);
+  });
+
+  it("emits run.started diagnostic event on agent_start", () => {
+    resetDiagnosticEventsForTest();
+
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-diag-start",
+    });
+
+    const events: DiagnosticEventPayload[] = [];
+    const unsub = onDiagnosticEvent((evt) => events.push(evt));
+
+    handler?.({ type: "agent_start" });
+
+    unsub();
+
+    const evt = events.find((e) => e.type === "run.started");
+    expect(evt?.runId).toBe("run-diag-start");
+  });
+
+  it("emits model.inference with usage and timings", () => {
+    resetDiagnosticEventsForTest();
+
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-diag-infer",
+    });
+
+    const events: DiagnosticEventPayload[] = [];
+    const unsub = onDiagnosticEvent((evt) => events.push(evt));
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+      api: "openai",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    vi.useFakeTimers();
+    try {
+      handler?.({ type: "message_start", message: assistantMessage });
+      vi.advanceTimersByTime(50);
+      handler?.({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "hello",
+          contentIndex: 0,
+          partial: assistantMessage,
+        },
+      });
+      vi.advanceTimersByTime(150);
+      handler?.({ type: "message_end", message: assistantMessage });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    unsub();
+
+    const evt = events.find((e) => e.type === "model.inference");
+    expect(evt?.runId).toBe("run-diag-infer");
+    expect(evt?.usage?.input).toBe(10);
+    expect(evt?.usage?.output).toBe(5);
+    expect(evt?.durationMs).toBe(200);
+    expect(evt?.ttftMs).toBe(50);
   });
 });

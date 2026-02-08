@@ -12,11 +12,13 @@ describe("diagnostic-events", () => {
     const stop = onDiagnosticEvent((evt) => seqs.push(evt.seq));
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "run.completed",
+      runId: "run-1",
       usage: { total: 1 },
     });
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "run.completed",
+      runId: "run-2",
       usage: { total: 2 },
     });
 
