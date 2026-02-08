@@ -137,7 +137,7 @@ function resolveRequesterStoreKey(
   cfg: ReturnType<typeof loadConfig>,
   requesterSessionKey: string,
 ): string {
-  const raw = requesterSessionKey.trim();
+  const raw = (requesterSessionKey ?? "").trim();
   if (!raw) {
     return raw;
   }
