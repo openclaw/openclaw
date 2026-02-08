@@ -497,6 +497,22 @@ function buildHierarchySnapshot(): HierarchySnapshot {
   };
   roots = roots.filter(filterByTTL);
 
+  // Remove phantom roots: nodes that were created only as parents of subagent runs,
+  // but whose children have all expired via TTL. Keep the default orchestrator agent
+  // and any root that has a known agentId (it was explicitly configured).
+  roots = roots.filter((root) => {
+    // Always keep the default orchestrator
+    if (root.sessionKey === defaultSessionKey) {
+      return true;
+    }
+    // Keep roots that have children or a recognized agentId
+    if (root.children.length > 0 || root.agentId) {
+      return true;
+    }
+    // Remove phantom roots with no children and no agentId
+    return false;
+  });
+
   // Link active agents based on allowAgents config (parent-child hierarchy)
   const agentsAttachedToParent = new Set<string>();
   for (const agentId of allAgentIds) {
