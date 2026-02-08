@@ -39,6 +39,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Model override (provider/model format, e.g., "zai/glm-4.7"). */
+  model?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;

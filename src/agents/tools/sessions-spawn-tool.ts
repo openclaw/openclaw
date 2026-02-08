@@ -260,6 +260,7 @@ export function createSessionsSpawnTool(opts?: {
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
             thinking: thinkingOverride,
+            model: resolvedModel,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
             label: label || undefined,
             spawnedBy: spawnedByKey,

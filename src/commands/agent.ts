@@ -18,6 +18,7 @@ import {
   buildAllowedModelSet,
   isCliProvider,
   modelKey,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
@@ -319,6 +320,22 @@ export async function agentCommand(
       ) {
         provider = candidateProvider;
         model = storedModelOverride;
+      }
+    }
+    // Apply explicit model override from opts (e.g., from sessions_spawn)
+    const optsModelRaw = opts.model?.trim();
+    if (optsModelRaw) {
+      const parsedModelRef = parseModelRef(optsModelRaw, defaultProvider);
+      if (parsedModelRef) {
+        const key = modelKey(parsedModelRef.provider, parsedModelRef.model);
+        if (
+          isCliProvider(parsedModelRef.provider, cfg) ||
+          allowedModelKeys.size === 0 ||
+          allowedModelKeys.has(key)
+        ) {
+          provider = parsedModelRef.provider;
+          model = parsedModelRef.model;
+        }
       }
     }
     if (sessionEntry) {

@@ -51,6 +51,7 @@ export const AgentParamsSchema = Type.Object(
     sessionId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     channel: Type.Optional(Type.String()),
