@@ -63,8 +63,8 @@ mkdir -p "$out"
 
 echo ""
 echo "== Capturing snapshot bundle =="
-# Prefer `peekaboo list ...` for stable JSON flags.
-peekaboo list menubar --json > "$out/menubar.json" || true
+# Peekaboo’s menubar command is `peekaboo menubar list` (not `peekaboo list menubar`).
+peekaboo menubar list --json > "$out/menubar.json" || true
 
 # Best-effort: list windows for the active app (if we can detect it).
 active_bundle_id="$(
