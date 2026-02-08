@@ -27,6 +27,38 @@ type ToolFailure = {
   meta?: string;
 };
 
+interface ModelRegistry {
+  getApiKey(model: string): Promise<string | undefined>;
+  getAll?(): string[];
+}
+
+/**
+ * Resolve a usable model from the registry when ctx.model is unavailable
+ * (e.g. OpenClaw embedded mode where extensionRunner.initialize() is never called).
+ * Returns the first model that has a valid API key configured.
+ */
+async function resolveModelFromRegistry(
+  registry: ModelRegistry,
+): Promise<string | undefined> {
+  try {
+    const allModels = typeof registry.getAll === "function" ? registry.getAll() : undefined;
+    if (!Array.isArray(allModels) || allModels.length === 0) return undefined;
+    for (const m of allModels) {
+      if (typeof m !== "string" || !m.trim()) continue;
+      try {
+        const key = await registry.getApiKey(m);
+        if (key) return m;
+      } catch {
+        // Individual model key lookup failed; try next
+        continue;
+      }
+    }
+  } catch {
+    // getAll not available or failed; fall through
+  }
+  return undefined;
+}
+
 function normalizeFailureText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -170,7 +202,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    let model = ctx.model;
+
+    // Workaround: In OpenClaw embedded mode, extensionRunner.initialize() is
+    // never called, so ctx.model is always undefined. Fall back to resolving
+    // a model from the registry.
+    if (!model && ctx.modelRegistry) {
+      model = await resolveModelFromRegistry(ctx.modelRegistry);
+    }
+
     if (!model) {
       return {
         compaction: {
