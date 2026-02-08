@@ -20,7 +20,7 @@ type AgentsListOptions = {
 };
 
 function formatSummary(summary: AgentSummary) {
-  const defaultTag = summary.isDefault ? " (default)" : "";
+  const defaultTag = summary.isExplicitDefault ? " (default)" : "";
   const header =
     summary.name && summary.name !== summary.id
       ? `${summary.id}${defaultTag} (${summary.name})`

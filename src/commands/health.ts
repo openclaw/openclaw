@@ -39,6 +39,8 @@ export type AgentHealthSummary = {
   agentId: string;
   name?: string;
   isDefault: boolean;
+  /** True only when the agent entry has `default: true` explicitly set in config. */
+  isExplicitDefault?: boolean;
   heartbeat: AgentHeartbeatSummary;
   sessions: HealthSummary["sessions"];
 };
@@ -114,7 +116,7 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const entries = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const seen = new Set<string>();
-  const ordered: Array<{ id: string; name?: string }> = [];
+  const ordered: Array<{ id: string; name?: string; explicitDefault?: boolean }> = [];
 
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") {
@@ -128,7 +130,11 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
       continue;
     }
     seen.add(id);
-    ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
+    ordered.push({
+      id,
+      name: typeof entry.name === "string" ? entry.name : undefined,
+      explicitDefault: id === normalizeAgentId(defaultAgentId) && entry.default === true,
+    });
   }
 
   if (!seen.has(defaultAgentId)) {
@@ -399,6 +405,7 @@ export async function getHealthSnapshot(params?: {
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
+      isExplicitDefault: entry.explicitDefault === true,
       heartbeat: resolveHeartbeatSummary(cfg, entry.id),
       sessions,
     } satisfies AgentHealthSummary;
@@ -602,6 +609,7 @@ export async function healthCommand(
         agentId: entry.id,
         name: entry.name,
         isDefault: entry.id === localAgents.defaultAgentId,
+        isExplicitDefault: entry.explicitDefault === true,
         heartbeat: resolveHeartbeatSummary(cfg, entry.id),
         sessions: buildSessionSummary(storePath),
       } satisfies AgentHealthSummary;
@@ -738,7 +746,7 @@ export async function healthCommand(
 
     if (resolvedAgents.length > 0) {
       const agentLabels = resolvedAgents.map((agent) =>
-        agent.isDefault ? `${agent.agentId} (default)` : agent.agentId,
+        agent.isExplicitDefault ? `${agent.agentId} (default)` : agent.agentId,
       );
       runtime.log(info(`Agents: ${agentLabels.join(", ")}`));
     }
