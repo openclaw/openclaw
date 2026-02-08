@@ -18,6 +18,7 @@
     "openclaw.mjs",
     "README-header.png",
     "README.md",
+    "scripts/ui.js",
     "skills/"
   ],
   "type": "module",
