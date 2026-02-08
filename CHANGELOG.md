@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Added
 
 - Gateway: add `agents.create`, `agents.update`, `agents.delete` RPC methods for web UI agent management. (#11045) Thanks @advaitpaliwal.
+- MS Teams: implement resumable upload sessions for files >4MB with 1MB chunking and automatic retry logic. (#9217) Thanks @hubertusgbecker.
 
 ### Fixes
 
