@@ -256,6 +256,16 @@ const FIELD_LABELS: Record<string, string> = {
     "Memory Search Hybrid Candidate Multiplier",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
+  "agents.defaults.memoryRecall": "Memory Recall (Auto)",
+  "agents.defaults.memoryRecall.enabled": "Enable Memory Recall",
+  "agents.defaults.memoryRecall.mode": "Memory Recall Mode",
+  "agents.defaults.memoryRecall.requireOwner": "Memory Recall Require Owner",
+  "agents.defaults.memoryRecall.chatTypes": "Memory Recall Chat Types",
+  "agents.defaults.memoryRecall.timeoutMs": "Memory Recall Timeout (ms)",
+  "agents.defaults.memoryRecall.maxResults": "Memory Recall Max Results",
+  "agents.defaults.memoryRecall.minScore": "Memory Recall Min Score",
+  "agents.defaults.memoryRecall.maxInjectedChars": "Memory Recall Max Injected Chars",
+  "agents.defaults.memoryRecall.minMessageChars": "Memory Recall Min Message Chars",
   memory: "Memory",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",
@@ -583,6 +593,23 @@ const FIELD_HELP: Record<string, string> = {
     "Multiplier for candidate pool size (default: 4).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  "agents.defaults.memoryRecall":
+    "Pre-turn memory recall injection: automatically runs memory search for continuity questions and injects top snippets into the system prompt (default: disabled).",
+  "agents.defaults.memoryRecall.enabled":
+    "Enable pre-turn memory recall injection (default: false).",
+  "agents.defaults.memoryRecall.mode":
+    'Trigger mode ("heuristic" = only on messages like "did we…" / "last time…"; "always" = every turn).',
+  "agents.defaults.memoryRecall.requireOwner":
+    "When true (default), only owner/authorized senders can trigger recall injection.",
+  "agents.defaults.memoryRecall.chatTypes":
+    'Chat types where recall injection is allowed (default: ["direct"]).',
+  "agents.defaults.memoryRecall.timeoutMs": "Timeout for the recall search step (ms).",
+  "agents.defaults.memoryRecall.maxResults": "Max recall hits pulled from memory search.",
+  "agents.defaults.memoryRecall.minScore": "Min similarity score for injected recall hits (0-1).",
+  "agents.defaults.memoryRecall.maxInjectedChars":
+    "Max characters injected into the system prompt.",
+  "agents.defaults.memoryRecall.minMessageChars":
+    "Minimum message length before recall triggers (heuristic mode).",
   memory: "Memory backend configuration (global).",
   "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',

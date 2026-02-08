@@ -338,6 +338,32 @@ Tools:
 - `memory_search` — returns snippets with file + line ranges.
 - `memory_get` — read memory file content by path.
 
+### Pre-turn auto-recall (continuity guardrails)
+
+OpenClaw can optionally run a memory search **before** the model answers when an inbound message looks like it references prior context (e.g. "did we…", "last time…", "earlier…").
+
+When enabled, the top memory hits are injected into the system prompt as an **Auto-recall (pre-turn)** block (with citations in direct chats, unless `memory.citations` disables them).
+
+Config:
+
+```json5
+agents: {
+  defaults: {
+    memoryRecall: {
+      enabled: true,
+      mode: "heuristic",        // or "always"
+      requireOwner: true,        // recommended
+      chatTypes: ["direct"],    // or include "group"/"channel"
+      timeoutMs: 6000,
+      maxResults: 6,
+      minScore: 0.35,
+      maxInjectedChars: 2000,
+      minMessageChars: 12
+    }
+  }
+}
+```
+
 Local mode:
 
 - Set `agents.defaults.memorySearch.provider = "local"`.

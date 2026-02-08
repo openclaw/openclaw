@@ -21,6 +21,7 @@ type ResolvedAgentConfig = {
   model?: AgentEntry["model"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
+  memoryRecall?: AgentEntry["memoryRecall"];
   humanDelay?: AgentEntry["humanDelay"];
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -115,6 +116,7 @@ export function resolveAgentConfig(
         : undefined,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
+    memoryRecall: entry.memoryRecall,
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
     identity: entry.identity,

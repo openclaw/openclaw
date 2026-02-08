@@ -27,6 +27,8 @@ export type AgentConfig = {
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
+  /** Optional per-agent pre-turn memory recall injection settings. */
+  memoryRecall?: AgentDefaultsConfig["memoryRecall"];
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */

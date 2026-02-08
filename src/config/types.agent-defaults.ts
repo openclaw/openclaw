@@ -12,6 +12,30 @@ import type {
 } from "./types.sandbox.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+export type AgentMemoryRecallConfig = {
+  /** Enable pre-turn memory recall injection (default: false). */
+  enabled?: boolean;
+  /**
+   * - "heuristic": only run when the message looks like it references prior context
+   * - "always": run before every turn (not recommended)
+   */
+  mode?: "heuristic" | "always";
+  /** When true (default), only owners/authorized senders can trigger recall. */
+  requireOwner?: boolean;
+  /** Chat types where recall injection is allowed (default: ["direct"]). */
+  chatTypes?: Array<"direct" | "group" | "channel">;
+  /** Timeout for the recall search step (ms). */
+  timeoutMs?: number;
+  /** Overrides memory_search maxResults for recall injection. */
+  maxResults?: number;
+  /** Overrides memory_search minScore for recall injection. */
+  minScore?: number;
+  /** Max characters to inject into the system prompt. */
+  maxInjectedChars?: number;
+  /** Minimum message length before recall triggers (heuristic mode). */
+  minMessageChars?: number;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -134,6 +158,11 @@ export type AgentDefaultsConfig = {
   compaction?: AgentCompactionConfig;
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /**
+   * Pre-turn memory recall injection using memory search results.
+   * Useful for continuity questions like "did we…" / "last time…".
+   */
+  memoryRecall?: AgentMemoryRecallConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Default verbose level when no /verbose directive is present. */

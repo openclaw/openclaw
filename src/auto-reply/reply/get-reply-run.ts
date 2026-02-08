@@ -37,6 +37,7 @@ import {
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { runReplyAgent } from "./agent-runner.js";
+import { maybeBuildMemoryRecallSystemPrompt } from "./auto-recall.js";
 import { applySessionHints } from "./body.js";
 import { buildGroupIntro } from "./groups.js";
 import { resolveQueueSettings } from "./queue.js";
@@ -181,7 +182,7 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
-  const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
+  let extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -209,6 +210,21 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
+
+  const recallPrompt = await maybeBuildMemoryRecallSystemPrompt({
+    cfg,
+    agentId,
+    sessionKey,
+    chatType: sessionCtx.ChatType,
+    senderIsOwner: command.senderIsOwner,
+    isHeartbeat,
+    isBareSessionReset,
+    message: baseBodyFinal,
+  });
+  if (recallPrompt) {
+    extraSystemPrompt = [extraSystemPrompt, recallPrompt].filter(Boolean).join("\n\n");
+  }
+
   let prefixedBodyBase = await applySessionHints({
     baseBody: baseBodyFinal,
     abortedLastRun,
