@@ -43,7 +43,12 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  const nets = os.networkInterfaces();
+  let nets: NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+  try {
+    nets = os.networkInterfaces() ?? {};
+  } catch {
+    return os.hostname();
+  }
   const prefer = ["en0", "eth0"];
   const pick = (names: string[]) => {
     for (const name of names) {
