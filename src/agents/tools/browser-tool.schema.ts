@@ -36,7 +36,7 @@ const BROWSER_TOOL_ACTIONS = [
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
 
-const BROWSER_SNAPSHOT_FORMATS = ["aria", "ai"] as const;
+const BROWSER_SNAPSHOT_FORMATS = ["aria", "ai", "enhanced", "hybrid"] as const;
 const BROWSER_SNAPSHOT_MODES = ["efficient"] as const;
 const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 

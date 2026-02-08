@@ -58,3 +58,16 @@ export {
   waitForDownloadViaPlaywright,
   waitForViaPlaywright,
 } from "./pw-tools-core.js";
+
+export {
+  getFocusedElementIdViaScript,
+  getInteractiveRegionsViaScript,
+  getVisibleTextViaScript,
+  getVisualViewportViaScript,
+  snapshotEnhancedViaPlaywright,
+  snapshotHybridViaPlaywright,
+  type DOMRectangle,
+  type EnhancedSnapshotResult,
+  type InteractiveRegion,
+  type VisualViewport,
+} from "./pw-tools-core-enhanced-snapshot.js";

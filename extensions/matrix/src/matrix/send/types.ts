@@ -69,7 +69,7 @@ export type MatrixMediaContent = MessageEventContent &
     "org.matrix.msc1767.audio"?: { duration: number };
   };
 
-export type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
+export type MatrixOutboundContent = MatrixTextContent;
 
 export type ReactionEventContent = {
   "m.relates_to": {

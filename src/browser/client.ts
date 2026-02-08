@@ -84,6 +84,50 @@ export type SnapshotResult =
       labelsSkipped?: number;
       imagePath?: string;
       imageType?: "png" | "jpeg";
+    }
+  | {
+      ok: true;
+      format: "enhanced";
+      targetId: string;
+      url: string;
+      snapshot: string;
+      refs: Record<string, { role: string; name?: string; nth?: number }>;
+      stats: {
+        lines: number;
+        chars: number;
+        refs: number;
+        interactive: number;
+      };
+      viewport: {
+        height: number;
+        width: number;
+        offsetLeft: number;
+        offsetTop: number;
+        pageLeft: number;
+        pageTop: number;
+        scale: number;
+        clientWidth: number;
+        clientHeight: number;
+        scrollWidth: number;
+        scrollHeight: number;
+      };
+      visibleText: string;
+      interactiveRegionsCount: number;
+    }
+  | {
+      ok: true;
+      format: "hybrid";
+      targetId: string;
+      url: string;
+      snapshot: string;
+      refs: Record<string, { role: string; name?: string; nth?: number }>;
+      stats: {
+        lines: number;
+        chars: number;
+        refs: number;
+        interactive: number;
+      };
+      enhancedRegionsCount: number;
     };
 
 function buildProfileQuery(profile?: string): string {
@@ -276,7 +320,7 @@ export async function browserTabAction(
 export async function browserSnapshot(
   baseUrl: string | undefined,
   opts: {
-    format: "aria" | "ai";
+    format: "aria" | "ai" | "enhanced" | "hybrid";
     targetId?: string;
     limit?: number;
     maxChars?: number;
@@ -291,6 +335,39 @@ export async function browserSnapshot(
     profile?: string;
   },
 ): Promise<SnapshotResult> {
+  // Use enhanced or hybrid endpoints if requested
+  if (opts.format === "enhanced" || opts.format === "hybrid") {
+    const endpoint = opts.format === "enhanced" ? "/snapshot-enhanced" : "/snapshot-hybrid";
+    const q = new URLSearchParams();
+    if (opts.targetId) {
+      q.set("targetId", opts.targetId);
+    }
+    if (typeof opts.interactive === "boolean") {
+      q.set("interactive", String(opts.interactive));
+    }
+    if (typeof opts.compact === "boolean") {
+      q.set("compact", String(opts.compact));
+    }
+    if (typeof opts.depth === "number") {
+      q.set("depth", String(opts.depth));
+    }
+    if (opts.selector?.trim()) {
+      q.set("selector", opts.selector.trim());
+    }
+    if (opts.frame?.trim()) {
+      q.set("frame", opts.frame.trim());
+    }
+    if (opts.profile) {
+      q.set("profile", opts.profile);
+    }
+    return await fetchBrowserJson<SnapshotResult>(
+      withBaseUrl(baseUrl, `${endpoint}?${q.toString()}`),
+      {
+        timeoutMs: 20000,
+      },
+    );
+  }
+
   const q = new URLSearchParams();
   q.set("format", opts.format);
   if (opts.targetId) {
