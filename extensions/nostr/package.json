@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.0",
-    "openclaw": "workspace:*",
     "zod": "^4.3.6"
   },
   "devDependencies": {
