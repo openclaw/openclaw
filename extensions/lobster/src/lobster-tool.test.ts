@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../../../src/plugins/types.js";
 import { createLobsterTool } from "./lobster-tool.js";
 
+const isWindows = process.platform === "win32";
+
 async function writeFakeLobsterScript(scriptBody: string, prefix = "openclaw-lobster-plugin-") {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const isWindows = process.platform === "win32";
@@ -82,13 +84,23 @@ describe("lobster plugin tool", () => {
 
     try {
       const tool = createLobsterTool(fakeApi());
-      const res = await tool.execute("call1", {
-        action: "run",
-        pipeline: "noop",
-        timeoutMs: 1000,
-      });
+      if (isWindows) {
+        await expect(
+          tool.execute("call1", {
+            action: "run",
+            pipeline: "noop",
+            timeoutMs: 1000,
+          }),
+        ).rejects.toThrow(/lobster\.exe/);
+      } else {
+        const res = await tool.execute("call1", {
+          action: "run",
+          pipeline: "noop",
+          timeoutMs: 1000,
+        });
 
-      expect(res.details).toMatchObject({ ok: true, status: "ok" });
+        expect(res.details).toMatchObject({ ok: true, status: "ok" });
+      }
     } finally {
       process.env.PATH = originalPath;
     }
@@ -108,13 +120,23 @@ describe("lobster plugin tool", () => {
 
     try {
       const tool = createLobsterTool(fakeApi());
-      const res = await tool.execute("call-noisy", {
-        action: "run",
-        pipeline: "noop",
-        timeoutMs: 1000,
-      });
+      if (isWindows) {
+        await expect(
+          tool.execute("call-noisy", {
+            action: "run",
+            pipeline: "noop",
+            timeoutMs: 1000,
+          }),
+        ).rejects.toThrow(/lobster\.exe/);
+      } else {
+        const res = await tool.execute("call-noisy", {
+          action: "run",
+          pipeline: "noop",
+          timeoutMs: 1000,
+        });
 
-      expect(res.details).toMatchObject({ ok: true, status: "ok" });
+        expect(res.details).toMatchObject({ ok: true, status: "ok" });
+      }
     } finally {
       process.env.PATH = originalPath;
     }
@@ -158,7 +180,7 @@ describe("lobster plugin tool", () => {
           pipeline: "noop",
           lobsterPath: "/bin/bash",
         }),
-      ).rejects.toThrow(/lobster executable/);
+      ).rejects.toThrow(isWindows ? /lobster\.exe/ : /lobster executable/);
     } finally {
       process.env.PATH = originalPath;
     }
@@ -198,13 +220,23 @@ describe("lobster plugin tool", () => {
 
     try {
       const tool = createLobsterTool(fakeApi({ pluginConfig: { lobsterPath: fake.binPath } }));
-      const res = await tool.execute("call-plugin-config", {
-        action: "run",
-        pipeline: "noop",
-        timeoutMs: 1000,
-      });
+      if (isWindows) {
+        await expect(
+          tool.execute("call-plugin-config", {
+            action: "run",
+            pipeline: "noop",
+            timeoutMs: 1000,
+          }),
+        ).rejects.toThrow(/lobster\.exe/);
+      } else {
+        const res = await tool.execute("call-plugin-config", {
+          action: "run",
+          pipeline: "noop",
+          timeoutMs: 1000,
+        });
 
-      expect(res.details).toMatchObject({ ok: true, status: "ok" });
+        expect(res.details).toMatchObject({ ok: true, status: "ok" });
+      }
     } finally {
       process.env.PATH = originalPath;
     }
