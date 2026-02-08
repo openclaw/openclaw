@@ -118,6 +118,7 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
+  "diagnostics.otel.captureContent": "OpenTelemetry Capture Message Content",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "diagnostics.cacheTrace.filePath": "Cache Trace File Path",
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
@@ -444,6 +445,8 @@ const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of browser profile names exposed via the node proxy.",
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
+  "diagnostics.otel.captureContent":
+    "Record gen_ai.input.messages and gen_ai.output.messages on inference spans (opt-in, contains sensitive data; default: false).",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

@@ -7,8 +7,51 @@ type DiagnosticBaseEvent = {
   seq: number;
 };
 
-export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
-  type: "model.usage";
+// -- GenAI message content types (OTel GenAI semantic conventions v1.38+) --
+
+export type GenAiPartText = { type: "text"; content: string };
+export type GenAiPartToolCall = {
+  type: "tool_call";
+  id: string;
+  name: string;
+  arguments?: Record<string, unknown>;
+};
+export type GenAiPartToolCallResponse = {
+  type: "tool_call_response";
+  id: string;
+  response: unknown;
+};
+export type GenAiPartReasoning = { type: "reasoning"; content: string };
+export type GenAiPartMedia = {
+  type: "uri" | "blob";
+  modality: "image" | "audio" | "video";
+  mime_type?: string;
+  uri?: string;
+  content?: string;
+};
+
+export type GenAiPart =
+  | GenAiPartText
+  | GenAiPartToolCall
+  | GenAiPartToolCallResponse
+  | GenAiPartReasoning
+  | GenAiPartMedia;
+
+export type GenAiMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  parts: GenAiPart[];
+  finish_reason?: string;
+};
+
+export type GenAiToolDef = {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+};
+
+export type DiagnosticInferenceEvent = DiagnosticBaseEvent & {
+  type: "model.inference";
+  runId?: string;
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
@@ -22,12 +65,35 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
     promptTokens?: number;
     total?: number;
   };
-  context?: {
-    limit?: number;
-    used?: number;
-  };
-  costUsd?: number;
   durationMs?: number;
+  // GenAI semantic convention fields (v1.38+)
+  operationName?: string;
+  responseId?: string;
+  responseModel?: string;
+  finishReasons?: string[];
+  outputMessages?: GenAiMessage[];
+  ttftMs?: number;
+  error?: string;
+  errorType?: string;
+  callIndex?: number;
+};
+
+export type DiagnosticInferenceStartedEvent = DiagnosticBaseEvent & {
+  type: "model.inference.started";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  model?: string;
+  // GenAI semantic convention fields (v1.38+)
+  operationName?: string;
+  inputMessages?: GenAiMessage[];
+  systemInstructions?: GenAiPart[];
+  toolDefinitions?: GenAiToolDef[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  callIndex?: number;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
@@ -115,6 +181,51 @@ export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
   attempt: number;
 };
 
+export type DiagnosticRunStartedEvent = DiagnosticBaseEvent & {
+  type: "run.started";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunCompletedEvent = DiagnosticBaseEvent & {
+  type: "run.completed";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  model?: string;
+  usage: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    promptTokens?: number;
+    total?: number;
+  };
+  context?: {
+    limit?: number;
+    used?: number;
+  };
+  costUsd?: number;
+  durationMs?: number;
+  // GenAI semantic convention fields (v1.38+)
+  operationName?: string;
+  responseId?: string;
+  responseModel?: string;
+  finishReasons?: string[];
+  inputMessages?: GenAiMessage[];
+  outputMessages?: GenAiMessage[];
+  systemInstructions?: GenAiPart[];
+  toolDefinitions?: GenAiToolDef[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  error?: string;
+  errorType?: string;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -127,8 +238,26 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   queued: number;
 };
 
+export type DiagnosticToolExecutionEvent = DiagnosticBaseEvent & {
+  type: "tool.execution";
+  runId?: string;
+  toolName: string;
+  toolType?: "function" | "extension" | "datastore";
+  toolCallId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  durationMs?: number;
+  error?: string;
+  /** Tool call arguments (input). */
+  toolInput?: Record<string, unknown>;
+  /** Tool call result (output). */
+  toolOutput?: unknown;
+};
+
 export type DiagnosticEventPayload =
-  | DiagnosticUsageEvent
+  | DiagnosticInferenceEvent
+  | DiagnosticInferenceStartedEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
@@ -139,27 +268,49 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
-  | DiagnosticHeartbeatEvent;
+  | DiagnosticRunStartedEvent
+  | DiagnosticRunCompletedEvent
+  | DiagnosticHeartbeatEvent
+  | DiagnosticToolExecutionEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
-let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+
+type DiagnosticEventState = {
+  seq: number;
+  listeners: Set<(evt: DiagnosticEventPayload) => void>;
+};
+
+const GLOBAL_STATE_KEY = Symbol.for("openclaw.diagnostic-events");
+
+function getState(): DiagnosticEventState {
+  const globalStore = globalThis as {
+    [GLOBAL_STATE_KEY]?: DiagnosticEventState;
+  };
+  if (!globalStore[GLOBAL_STATE_KEY]) {
+    globalStore[GLOBAL_STATE_KEY] = {
+      seq: 0,
+      listeners: new Set(),
+    };
+  }
+  return globalStore[GLOBAL_STATE_KEY];
+}
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
+  const state = getState();
   const enriched = {
     ...event,
-    seq: (seq += 1),
+    seq: (state.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  for (const listener of listeners) {
+  for (const listener of state.listeners) {
     try {
       listener(enriched);
     } catch {
@@ -169,11 +320,13 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  const state = getState();
+  state.listeners.add(listener);
+  return () => state.listeners.delete(listener);
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  seq = 0;
-  listeners.clear();
+  const state = getState();
+  state.seq = 0;
+  state.listeners.clear();
 }

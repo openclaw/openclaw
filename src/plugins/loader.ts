@@ -47,6 +47,7 @@ const resolvePluginSdkAlias = (): string | null => {
     const modulePath = fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    const isFromDist = modulePath.includes(`${path.sep}dist${path.sep}`);
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
@@ -55,7 +56,9 @@ const resolvePluginSdkAlias = (): string | null => {
         ? isTest
           ? [distCandidate, srcCandidate]
           : [distCandidate]
-        : [srcCandidate, distCandidate];
+        : isFromDist
+          ? [distCandidate, srcCandidate]
+          : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;

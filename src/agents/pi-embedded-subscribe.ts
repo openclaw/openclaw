@@ -36,6 +36,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts: [],
     toolMetas: [],
     toolMetaById: new Map(),
+    toolStartTimeById: new Map(),
+    toolArgsById: new Map(),
     toolSummaryById: new Set(),
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
@@ -69,6 +71,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTargets: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
+    firstTokenAt: undefined,
+    currentMessageStartAt: undefined,
+    currentMessageFirstTokenAt: undefined,
   };
   const usageTotals = {
     input: 0,
@@ -542,6 +547,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
+    state.toolStartTimeById.clear();
+    state.toolArgsById.clear();
     toolSummaryById.clear();
     state.lastToolError = undefined;
     messagingToolSentTexts.length = 0;
@@ -549,6 +556,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTargets.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
+    state.firstTokenAt = undefined;
     resetAssistantMessageState(0);
   };
 
@@ -589,6 +597,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
+    getFirstTokenAt: () => state.firstTokenAt,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     // Returns true if any messaging tool successfully sent a message.

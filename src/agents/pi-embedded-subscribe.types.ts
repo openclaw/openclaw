@@ -7,6 +7,11 @@ export type ToolResultFormat = "markdown" | "plain";
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
+  /**
+   * When true, diagnostic events may include message content.
+   * This is intentionally opt-in and typically controlled by `diagnostics.otel.captureContent`.
+   */
+  captureContent?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

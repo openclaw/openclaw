@@ -123,6 +123,8 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /** Record gen_ai.input.messages / gen_ai.output.messages on inference spans (opt-in, sensitive). */
+  captureContent?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {

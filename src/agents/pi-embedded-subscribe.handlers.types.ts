@@ -25,6 +25,8 @@ export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, string | undefined>;
+  toolStartTimeById: Map<string, number>;
+  toolArgsById: Map<string, Record<string, unknown> | undefined>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
 
@@ -61,6 +63,12 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
+  /** Timestamp (ms) when the first token arrived from the model. */
+  firstTokenAt?: number;
+  /** Timestamp (ms) when the current assistant message started. */
+  currentMessageStartAt?: number;
+  /** Timestamp (ms) when the first token arrived for the current message. */
+  currentMessageFirstTokenAt?: number;
 };
 
 export type EmbeddedPiSubscribeContext = {

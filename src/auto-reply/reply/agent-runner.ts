@@ -8,8 +8,9 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveExtraParams } from "../../agents/pi-embedded-runner/extra-params.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { derivePromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -18,7 +19,11 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
-import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  type GenAiMessage,
+} from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
@@ -332,10 +337,26 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      if (isDiagnosticsEnabled(cfg) && runOutcome.errorInfo) {
+        emitDiagnosticEvent({
+          type: "run.completed",
+          runId: runOutcome.runId,
+          sessionKey,
+          sessionId: followupRun.run.sessionId,
+          channel: replyToChannel,
+          provider: followupRun.run.provider,
+          model: defaultModel,
+          usage: {},
+          durationMs: Date.now() - runStartedAt,
+          operationName: "chat",
+          error: runOutcome.errorInfo.message,
+          errorType: runOutcome.errorInfo.errorType,
+        });
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const { runId, runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -375,6 +396,11 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const resolvedModelParams = resolveExtraParams({
+      cfg,
+      provider: providerUsed,
+      modelId: modelUsed,
+    });
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta.agentMeta?.sessionId?.trim()
       : undefined;
@@ -394,6 +420,107 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta.systemPromptReport,
       cliSessionId,
     });
+
+    if (isDiagnosticsEnabled(cfg)) {
+      const captureContent = cfg?.diagnostics?.otel?.captureContent === true;
+      const input = usage?.input;
+      const output = usage?.output;
+      const cacheRead = usage?.cacheRead;
+      const cacheWrite = usage?.cacheWrite;
+      const promptTokens = derivePromptTokens(usage);
+      const totalTokens =
+        usage?.total ??
+        (typeof promptTokens === "number" && typeof output === "number"
+          ? promptTokens + output
+          : undefined);
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+      });
+      const costUsd = hasNonzeroUsage(usage)
+        ? estimateUsageCost({ usage, cost: costConfig })
+        : undefined;
+      // Map stopReason to GenAI finish_reasons
+      const stopReason = runResult.meta.stopReason;
+      const finishReasons = stopReason
+        ? [stopReason === "tool_calls" ? "tool_call" : stopReason]
+        : ["stop"];
+
+      // Content capture is intentionally opt-in and controlled by diagnostics.otel.captureContent.
+      // When disabled, we still emit aggregate usage/timings/errors but omit message content fields.
+      const inputMessages: GenAiMessage[] = captureContent
+        ? [{ role: "user", parts: [{ type: "text", content: commandBody }] }]
+        : [];
+      const outputParts = captureContent
+        ? payloadArray.map((p) => p.text?.trim()).filter((t): t is string => Boolean(t))
+        : [];
+      const pendingCalls = captureContent ? runResult.meta.pendingToolCalls : undefined;
+      const outputMessages: GenAiMessage[] = [];
+      if (captureContent && (outputParts.length > 0 || pendingCalls?.length)) {
+        const msg: GenAiMessage = {
+          role: "assistant",
+          parts: [
+            ...outputParts.map((t) => ({ type: "text" as const, content: t })),
+            ...(pendingCalls?.map((tc) => ({
+              type: "tool_call" as const,
+              id: tc.id,
+              name: tc.name,
+              arguments: (() => {
+                try {
+                  return JSON.parse(tc.arguments) as Record<string, unknown>;
+                } catch {
+                  return { raw: tc.arguments };
+                }
+              })(),
+            })) ?? []),
+          ],
+          finish_reason: finishReasons[0],
+        };
+        outputMessages.push(msg);
+      }
+
+      emitDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        channel: replyToChannel,
+        provider: providerUsed,
+        model: modelUsed,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          promptTokens,
+          total: totalTokens,
+        },
+        context: {
+          limit: contextTokensUsed,
+          used: totalTokens,
+        },
+        costUsd,
+        durationMs: Date.now() - runStartedAt,
+        operationName: "chat",
+        finishReasons,
+        responseModel: runResult.meta.agentMeta?.model,
+        inputMessages: inputMessages.length > 0 ? inputMessages : undefined,
+        outputMessages: outputMessages.length > 0 ? outputMessages : undefined,
+        systemInstructions:
+          captureContent && runResult.meta.systemPromptText
+            ? [{ type: "text" as const, content: runResult.meta.systemPromptText }]
+            : undefined,
+        temperature:
+          typeof resolvedModelParams?.temperature === "number"
+            ? resolvedModelParams.temperature
+            : undefined,
+        maxOutputTokens:
+          typeof resolvedModelParams?.maxTokens === "number"
+            ? resolvedModelParams.maxTokens
+            : undefined,
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
@@ -426,43 +553,6 @@ export async function runReplyAgent(params: {
     }
 
     await signalTypingIfNeeded(replyPayloads, typingSignals);
-
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
-      const costConfig = resolveModelCostConfig({
-        provider: providerUsed,
-        model: modelUsed,
-        config: cfg,
-      });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      emitDiagnosticEvent({
-        type: "model.usage",
-        sessionKey,
-        sessionId: followupRun.run.sessionId,
-        channel: replyToChannel,
-        provider: providerUsed,
-        model: modelUsed,
-        usage: {
-          input,
-          output,
-          cacheRead,
-          cacheWrite,
-          promptTokens,
-          total: totalTokens,
-        },
-        context: {
-          limit: contextTokensUsed,
-          used: totalTokens,
-        },
-        costUsd,
-        durationMs: Date.now() - runStartedAt,
-      });
-    }
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??

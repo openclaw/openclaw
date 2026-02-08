@@ -233,18 +233,25 @@ export {
 export type {
   DiagnosticEventPayload,
   DiagnosticHeartbeatEvent,
+  DiagnosticInferenceEvent,
+  DiagnosticInferenceStartedEvent,
   DiagnosticLaneDequeueEvent,
   DiagnosticLaneEnqueueEvent,
   DiagnosticMessageProcessedEvent,
   DiagnosticMessageQueuedEvent,
   DiagnosticRunAttemptEvent,
+  DiagnosticRunStartedEvent,
+  DiagnosticRunCompletedEvent,
   DiagnosticSessionState,
   DiagnosticSessionStateEvent,
   DiagnosticSessionStuckEvent,
-  DiagnosticUsageEvent,
+  DiagnosticToolExecutionEvent,
   DiagnosticWebhookErrorEvent,
   DiagnosticWebhookProcessedEvent,
   DiagnosticWebhookReceivedEvent,
+  GenAiMessage,
+  GenAiPart,
+  GenAiToolDef,
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";

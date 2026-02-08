@@ -265,6 +265,9 @@ importers:
       '@opentelemetry/api-logs':
         specifier: ^0.211.0
         version: 0.211.0
+      '@opentelemetry/core':
+        specifier: ^2.5.0
+        version: 2.5.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-logs-otlp-http':
         specifier: ^0.211.0
         version: 0.211.0(@opentelemetry/api@1.9.0)
