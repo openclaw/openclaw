@@ -61,6 +61,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaPath?: string;
     mediaType?: string;
     commandAuthorized: boolean;
+    /** Context from a quoted/replied-to message, if present */
+    quoteContext?: {
+      text: string;
+      authorDisplay?: string;
+      messageId?: string;
+    };
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -89,11 +95,29 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: route.sessionKey,
     });
+    // Build body text with quote context if present
+    let effectiveBody = entry.bodyText;
+    if (entry.quoteContext?.text) {
+      const quoteMeta = [
+        entry.quoteContext.authorDisplay,
+        entry.quoteContext.messageId ? `id:${entry.quoteContext.messageId}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const quotePrefix = quoteMeta ? `(replying to ${quoteMeta})` : "(replying to)";
+      // Format: (replying to Author id:123)\n> quoted text\n\nactual message
+      const quotedText = entry.quoteContext.text
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n");
+      effectiveBody = `${quotePrefix}\n${quotedText}\n\n${entry.bodyText}`;
+    }
+
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
       timestamp: entry.timestamp ?? undefined,
-      body: entry.bodyText,
+      body: effectiveBody,
       chatType: entry.isGroup ? "group" : "direct",
       sender: { name: entry.senderName, id: entry.senderDisplay },
       previousTimestamp,
@@ -265,6 +289,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return false;
       }
       if (entry.mediaPath || entry.mediaType) {
+        return false;
+      }
+      // Don't debounce messages with quote context - they need their context preserved
+      if (entry.quoteContext?.text) {
         return false;
       }
       return !hasControlCommand(entry.bodyText, deps.cfg);
@@ -562,6 +590,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+
+    // Extract quote context if replying to a message
+    let quoteContext: SignalInboundEntry["quoteContext"];
+    const quote = dataMessage.quote;
+    if (quote?.text?.trim()) {
+      const quoteAuthorDisplay = quote.author
+        ? (normalizeE164(quote.author) ?? quote.author)
+        : (quote.authorUuid ?? undefined);
+      quoteContext = {
+        text: quote.text.trim(),
+        authorDisplay: quoteAuthorDisplay,
+        messageId: quote.id != null ? String(quote.id) : undefined,
+      };
+    }
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -576,6 +619,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaPath,
       mediaType,
       commandAuthorized,
+      quoteContext,
     });
   };
 }
