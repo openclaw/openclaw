@@ -366,4 +366,21 @@ describe("chrome extension relay server", () => {
     cdp.close();
     ext.close();
   });
+
+  it("handles concurrent initialization requests for same port", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+
+    // Concurrent calls should return the same server instance
+    const [relay1, relay2] = await Promise.all([
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+    ]);
+
+    expect(relay1).toBe(relay2);
+
+    // Third call after initialization should also return the same instance
+    const relay3 = await ensureChromeExtensionRelayServer({ cdpUrl });
+    expect(relay3).toBe(relay1);
+  });
 });
