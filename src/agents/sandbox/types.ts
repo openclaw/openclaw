@@ -61,6 +61,7 @@ export type SandboxConfig = {
 
 export type SandboxBrowserContext = {
   bridgeUrl: string;
+  authToken: string;
   noVncUrl?: string;
   containerName: string;
 };

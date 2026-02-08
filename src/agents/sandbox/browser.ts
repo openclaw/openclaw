@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
@@ -166,6 +167,9 @@ export async function ensureSandboxBrowser(params: {
     return null;
   })();
 
+  // Generate cryptographic auth token for bridge security (fixes issue #11023)
+  const authToken = randomBytes(32).toString("hex");
+
   const ensureBridge = async () => {
     if (bridge) {
       return bridge;
@@ -197,6 +201,7 @@ export async function ensureSandboxBrowser(params: {
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
       onEnsureAttachTarget,
+      authToken,
     });
   };
 
@@ -226,6 +231,7 @@ export async function ensureSandboxBrowser(params: {
 
   return {
     bridgeUrl: resolvedBridge.baseUrl,
+    authToken,
     noVncUrl,
     containerName,
   };
