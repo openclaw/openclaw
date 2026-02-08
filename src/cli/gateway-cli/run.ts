@@ -308,10 +308,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       } catch {
         gatewayLog.warn(`Could not detect Docker bridge IP, using default ${dockerBridgeIp}`);
       }
-
-      // Use detected IP in proxy URL (must match bind address)
-      const proxyUrl = `http://${dockerBridgeIp}:${proxyPort}`;
-
       // Generate shared secret for proxy client auth
       const proxyAuthToken = generateProxyAuthToken();
 
@@ -338,11 +334,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         return;
       }
 
-      // Start gateway container with sanitized mounts
+      // Start gateway container with sanitized mounts + network isolation
       let containerName: string;
       try {
         containerName = await startGatewayContainer({
-          proxyUrl,
+          proxyBridgeIp: dockerBridgeIp,
+          proxyPort,
           gatewayPort: port,
           env: { ...process.env, PROXY_AUTH_TOKEN: proxyAuthToken },
           binds: sanitizedMounts.binds,

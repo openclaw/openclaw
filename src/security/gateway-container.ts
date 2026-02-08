@@ -8,13 +8,224 @@ const GATEWAY_IMAGE = "openclaw-gateway:latest";
 const GATEWAY_CONTAINER_NAME = "openclaw-gateway-secure";
 
 export type GatewayContainerOptions = {
-  proxyUrl: string;
   /** Gateway WebSocket port (host and container) */
   gatewayPort: number;
+  /** Docker bridge IP where the host proxy is listening */
+  proxyBridgeIp: string;
+  /** Port the host proxy is listening on */
+  proxyPort: number;
   env?: Record<string, string | undefined>;
   /** Bind mounts in format ["host:container:ro"] */
   binds?: string[];
 };
+
+const SECURE_NETWORK_NAME = "openclaw-secure-net";
+const RELAY_CONTAINER_NAME = "openclaw-relay";
+const SOCAT_IMAGE = "alpine/socat";
+
+/**
+ * Create the internal Docker network (blocks all outbound internet).
+ * Idempotent — silently succeeds if the network already exists.
+ */
+async function ensureSecureNetwork(): Promise<void> {
+  const result = await execDocker(["network", "inspect", SECURE_NETWORK_NAME], { allowFailure: true });
+  if (result.code === 0) {
+    logger.debug(`Network ${SECURE_NETWORK_NAME} already exists`);
+    return;
+  }
+  logger.info(`Creating internal Docker network: ${SECURE_NETWORK_NAME}`);
+  await execDocker(["network", "create", "--internal", SECURE_NETWORK_NAME]);
+}
+
+/**
+ * Remove the internal Docker network.
+ */
+async function removeSecureNetwork(): Promise<void> {
+  try {
+    await execDocker(["network", "rm", SECURE_NETWORK_NAME], { allowFailure: true });
+    logger.info(`Removed network: ${SECURE_NETWORK_NAME}`);
+  } catch {
+    // Network may not exist or may still have endpoints
+  }
+}
+
+/**
+ * Start a socat relay container that bridges the internal network to the host proxy.
+ * Connected to both the internal network (for gateway access) and bridge (to reach host).
+ */
+async function startRelayContainer(proxyBridgeIp: string, proxyPort: number, gatewayPort: number): Promise<void> {
+  // Remove any existing relay
+  try {
+    await execDocker(["rm", "-f", RELAY_CONTAINER_NAME], { allowFailure: true });
+  } catch {
+    // ignore
+  }
+
+  // Start relay with socat forwarding both proxy port and gateway port (inbound)
+  // The relay is on the bridge network by default (can reach host), then we also connect it to the internal network
+  await execDocker([
+    "run", "-d",
+    "--name", RELAY_CONTAINER_NAME,
+    "--network", "bridge",
+    "--restart", "unless-stopped",
+    SOCAT_IMAGE,
+    // Forward proxy port: internal network → host proxy
+    `TCP-LISTEN:${proxyPort},fork,reuseaddr`,
+    `TCP:${proxyBridgeIp}:${proxyPort}`,
+  ]);
+
+  // Also connect relay to the internal network so the gateway container can reach it
+  await execDocker(["network", "connect", SECURE_NETWORK_NAME, RELAY_CONTAINER_NAME]);
+
+  logger.info(`Relay container started: ${RELAY_CONTAINER_NAME} (forwarding port ${proxyPort} to ${proxyBridgeIp}:${proxyPort})`);
+}
+
+/**
+ * Stop and remove the relay container.
+ */
+async function stopRelayContainer(): Promise<void> {
+  try {
+    await execDocker(["rm", "-f", RELAY_CONTAINER_NAME], { allowFailure: true });
+    logger.info(`Removed relay container: ${RELAY_CONTAINER_NAME}`);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Full cleanup: gateway container, relay container, and internal network.
+ */
+export async function stopGatewayContainer(): Promise<void> {
+  const state = await dockerContainerState(GATEWAY_CONTAINER_NAME);
+  if (state.exists) {
+    logger.info(`Stopping existing gateway container: ${GATEWAY_CONTAINER_NAME}`);
+    await execDocker(["rm", "-f", GATEWAY_CONTAINER_NAME]);
+  }
+  await stopRelayContainer();
+  await removeSecureNetwork();
+}
+
+export async function startGatewayContainer(opts: GatewayContainerOptions): Promise<string> {
+  await stopGatewayContainer();
+
+  // Set up network isolation: internal network + relay
+  await ensureSecureNetwork();
+  await startRelayContainer(opts.proxyBridgeIp, opts.proxyPort, opts.gatewayPort);
+
+  const filteredEnv = filterSecretEnv(opts.env || process.env);
+
+  // Resolve the relay container's IP on the internal network for PROXY_URL
+  // The gateway container uses the relay's hostname (Docker DNS on user-defined networks)
+  const proxyUrl = `http://${RELAY_CONTAINER_NAME}:${opts.proxyPort}`;
+
+  const args = [
+    "run",
+    "-d",
+    "--name",
+    GATEWAY_CONTAINER_NAME,
+    // Internal-only network: blocks ALL outbound internet access
+    "--network",
+    SECURE_NETWORK_NAME,
+    // Port mapping for gateway WebSocket server - bind to localhost only
+    // This works because Docker creates a proxy on the host that forwards to the container
+    // even on internal networks (the host can always reach its own containers)
+    "-p",
+    `127.0.0.1:${opts.gatewayPort}:${opts.gatewayPort}`,
+    // Tell container to bind to the configured port
+    "-e",
+    `PORT=${opts.gatewayPort}`,
+    // Set secure mode flag so gateway knows to use placeholders and fetch wrapper
+    "-e",
+    "OPENCLAW_SECURE_MODE=1",
+    // Tell the container where the proxy is (via relay on the internal network)
+    "-e",
+    `PROXY_URL=${proxyUrl}`,
+    // Explicitly set container paths to prevent host paths from being used
+    "-e",
+    "OPENCLAW_STATE_DIR=/home/node/.openclaw",
+    "-e",
+    "HOME=/home/node",
+    "-e",
+    "USER=node",
+    "-e",
+    "LOGNAME=node",
+    "-e",
+    "PWD=/app",
+    "-e",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "-e",
+    "XDG_CACHE_HOME=/home/node/.cache",
+    "-e",
+    "XDG_CONFIG_HOME=/home/node/.config",
+  ];
+
+  // Add bind mounts for tools/skills
+  for (const bind of opts.binds || []) {
+    // Validate bind mount format
+    if (bind.includes(":")) {
+      args.push("-v", bind);
+      logger.info(`Adding bind mount: ${bind}`);
+    } else {
+      logger.warn(`Invalid bind mount format (expected host:container[:ro]): ${bind}`);
+    }
+  }
+
+  // Keys that are explicitly set above - don't override with filteredEnv
+  const explicitlySetKeys = new Set([
+    "PORT",
+    "OPENCLAW_SECURE_MODE",
+    "PROXY_URL",
+    "OPENCLAW_STATE_DIR",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "PWD",
+    "PATH",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+  ]);
+
+  // Add filtered environment variables (excluding explicitly set keys)
+  for (const [key, value] of Object.entries(filteredEnv)) {
+    if (explicitlySetKeys.has(key.toUpperCase())) {
+      logger.debug(`Skipping explicitly set env var: ${key}`);
+      continue;
+    }
+    args.push("-e", `${key}=${value}`);
+  }
+
+  args.push(GATEWAY_IMAGE);
+
+  // Run gateway with allow-unconfigured flag for secure mode
+  // Bind to 0.0.0.0 inside container since we're on an internal network (no external exposure)
+  args.push("node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "loopback");
+
+  logger.info(`Starting gateway container: ${GATEWAY_CONTAINER_NAME} (network: ${SECURE_NETWORK_NAME})`);
+  await execDocker(args);
+
+  return GATEWAY_CONTAINER_NAME;
+}
+
+/**
+ * Checks if the gateway container is running and healthy.
+ */
+export async function isGatewayContainerRunning(): Promise<boolean> {
+  const state = await dockerContainerState(GATEWAY_CONTAINER_NAME);
+  return state.exists && state.running;
+}
+
+/**
+ * Gets the gateway container logs.
+ */
+export async function getGatewayContainerLogs(lines: number = 50): Promise<string> {
+  try {
+    const result = await execDocker(["logs", "--tail", String(lines), GATEWAY_CONTAINER_NAME]);
+    // execDocker returns {stdout, stderr, code} - combine for logs
+    return result.stdout + (result.stderr ? "\n" + result.stderr : "");
+  } catch (err) {
+    return `Failed to get logs: ${String(err)}`;
+  }
+}
 
 /**
  * P1 Fix: Comprehensive list of secret env var patterns.
@@ -144,126 +355,4 @@ function filterSecretEnv(env: Record<string, string | undefined>): Record<string
   }
 
   return filtered;
-}
-
-export async function stopGatewayContainer(): Promise<void> {
-  const state = await dockerContainerState(GATEWAY_CONTAINER_NAME);
-  if (state.exists) {
-    logger.info(`Stopping existing gateway container: ${GATEWAY_CONTAINER_NAME}`);
-    await execDocker(["rm", "-f", GATEWAY_CONTAINER_NAME]);
-  }
-}
-
-export async function startGatewayContainer(opts: GatewayContainerOptions): Promise<string> {
-  await stopGatewayContainer();
-
-  const filteredEnv = filterSecretEnv(opts.env || process.env);
-
-  const args = [
-    "run",
-    "-d",
-    "--name",
-    GATEWAY_CONTAINER_NAME,
-    "--network",
-    "bridge",
-    "--add-host",
-    `host.docker.internal:host-gateway`,
-    // Port mapping for gateway WebSocket server - bind to localhost only for secure mode
-    "-p",
-    `127.0.0.1:${opts.gatewayPort}:${opts.gatewayPort}`,
-    // Tell container to bind to the configured port
-    "-e",
-    `PORT=${opts.gatewayPort}`,
-    // Set secure mode flag so gateway knows to use placeholders and fetch wrapper
-    "-e",
-    "OPENCLAW_SECURE_MODE=1",
-    // Tell the container where the proxy is
-    "-e",
-    `PROXY_URL=${opts.proxyUrl}`,
-    // Explicitly set container paths to prevent host paths from being used
-    "-e",
-    "OPENCLAW_STATE_DIR=/home/node/.openclaw",
-    "-e",
-    "HOME=/home/node",
-    "-e",
-    "USER=node",
-    "-e",
-    "LOGNAME=node",
-    "-e",
-    "PWD=/app",
-    "-e",
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    "-e",
-    "XDG_CACHE_HOME=/home/node/.cache",
-    "-e",
-    "XDG_CONFIG_HOME=/home/node/.config",
-  ];
-
-  // Add bind mounts for tools/skills
-  for (const bind of opts.binds || []) {
-    // Validate bind mount format
-    if (bind.includes(":")) {
-      args.push("-v", bind);
-      logger.info(`Adding bind mount: ${bind}`);
-    } else {
-      logger.warn(`Invalid bind mount format (expected host:container[:ro]): ${bind}`);
-    }
-  }
-
-  // Keys that are explicitly set above - don't override with filteredEnv
-  const explicitlySetKeys = new Set([
-    "PORT",
-    "OPENCLAW_SECURE_MODE",
-    "PROXY_URL",
-    "OPENCLAW_STATE_DIR",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "PWD",
-    "PATH",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-  ]);
-
-  // Add filtered environment variables (excluding explicitly set keys)
-  for (const [key, value] of Object.entries(filteredEnv)) {
-    if (explicitlySetKeys.has(key.toUpperCase())) {
-      logger.debug(`Skipping explicitly set env var: ${key}`);
-      continue;
-    }
-    args.push("-e", `${key}=${value}`);
-  }
-
-  args.push(GATEWAY_IMAGE);
-
-  // Run gateway with allow-unconfigured flag for secure mode
-  // Bind to loopback inside container - host port forwarding still works via Docker NAT
-  // This prevents other containers on the bridge network from directly accessing the gateway
-  args.push("node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "loopback");
-
-  logger.info(`Starting gateway container: ${GATEWAY_CONTAINER_NAME}`);
-  await execDocker(args);
-
-  return GATEWAY_CONTAINER_NAME;
-}
-
-/**
- * Checks if the gateway container is running and healthy.
- */
-export async function isGatewayContainerRunning(): Promise<boolean> {
-  const state = await dockerContainerState(GATEWAY_CONTAINER_NAME);
-  return state.exists && state.running;
-}
-
-/**
- * Gets the gateway container logs.
- */
-export async function getGatewayContainerLogs(lines: number = 50): Promise<string> {
-  try {
-    const result = await execDocker(["logs", "--tail", String(lines), GATEWAY_CONTAINER_NAME]);
-    // execDocker returns {stdout, stderr, code} - combine for logs
-    return result.stdout + (result.stderr ? "\n" + result.stderr : "");
-  } catch (err) {
-    return `Failed to get logs: ${String(err)}`;
-  }
 }
