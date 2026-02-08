@@ -1,6 +1,9 @@
 import { RateLimitError } from "@buape/carbon";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
+
+const log = createSubsystemLogger("infra/retry-policy");
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
@@ -58,11 +61,11 @@ export function createDiscordRetryRunner(params: {
       shouldRetry: (err) => err instanceof RateLimitError,
       retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
       onRetry: params.verbose
-        ? (info) => {
-            const labelText = info.label ?? "request";
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
-              `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+        ? (retryInfo) => {
+            const labelText = retryInfo.label ?? "request";
+            const maxRetries = Math.max(1, retryInfo.maxAttempts - 1);
+            log.warn(
+              `discord ${labelText} rate limited, retry ${retryInfo.attempt}/${maxRetries} in ${retryInfo.delayMs}ms`,
             );
           }
         : undefined,
@@ -90,10 +93,10 @@ export function createTelegramRetryRunner(params: {
       shouldRetry,
       retryAfterMs: getTelegramRetryAfterMs,
       onRetry: params.verbose
-        ? (info) => {
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            console.warn(
-              `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+        ? (retryInfo) => {
+            const maxRetries = Math.max(1, retryInfo.maxAttempts - 1);
+            log.warn(
+              `telegram send retry ${retryInfo.attempt}/${maxRetries} for ${retryInfo.label ?? label ?? "request"} in ${retryInfo.delayMs}ms: ${formatErrorMessage(retryInfo.err)}`,
             );
           }
         : undefined,

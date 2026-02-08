@@ -8,6 +8,7 @@
   },
   "rules": {
     "curly": "error",
+    "eslint/no-console": "warn",
     "eslint-plugin-unicorn/prefer-array-find": "off",
     "eslint/no-await-in-loop": "off",
     "eslint/no-new": "off",
@@ -32,5 +33,13 @@
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
     "vendor/"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts"],
+      "rules": {
+        "eslint/no-console": "off"
+      }
+    }
   ]
 }
