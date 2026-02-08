@@ -454,11 +454,45 @@ export async function restartLaunchAgent({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
+  const resolvedEnv = env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
-  if (res.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
+  const label = resolveLaunchAgentLabel({ env: resolvedEnv });
+  const plistPath = resolveLaunchAgentPlistPath(resolvedEnv);
+
+  // Check if the plist file exists on disk. If so, perform a full bootout + bootstrap
+  // cycle so launchd reloads the plist from disk (picking up updated env vars, program
+  // arguments, etc.). A plain `kickstart -k` only restarts the process without reloading
+  // the on-disk plist, leaving stale environment variables in effect after updates.
+  let plistExists = false;
+  try {
+    await fs.access(plistPath);
+    plistExists = true;
+  } catch {
+    // plist not on disk — fall back to kickstart only
   }
+
+  if (plistExists) {
+    const bout = await execLaunchctl(["bootout", `${domain}/${label}`]);
+    // bootout may fail if the service is not loaded — treat "not loaded" as non-fatal,
+    // matching the pattern used by stopLaunchAgent().
+    if (bout.code !== 0 && !isLaunchctlNotLoaded(bout)) {
+      throw new Error(`launchctl bootout failed: ${bout.stderr || bout.stdout}`.trim());
+    }
+    await execLaunchctl(["enable", `${domain}/${label}`]);
+    const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+    if (boot.code !== 0) {
+      throw new Error(`launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim());
+    }
+    const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+    if (kick.code !== 0) {
+      throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
+    }
+  } else {
+    const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+    if (res.code !== 0) {
+      throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
+    }
+  }
+
   stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
 }
