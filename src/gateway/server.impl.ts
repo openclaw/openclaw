@@ -65,6 +65,7 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
+import { startGatewayMemoryBackendOnBoot } from "./server-startup-memory.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -557,6 +558,12 @@ export async function startGatewayServer(
     logChannels,
     logBrowser,
   }));
+
+  // Boot hook: if memory.backend resolves to QMD, eagerly create the manager once so its
+  // periodic update/embed interval is armed even if no memory tool is called after restart.
+  // Intentionally fire-and-forget: we don't want to block gateway startup, and shutdown/restart
+  // does not currently cancel this in-flight initialization.
+  void startGatewayMemoryBackendOnBoot({ cfg: cfgAtStart });
 
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps,

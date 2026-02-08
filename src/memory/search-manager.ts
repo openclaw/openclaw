@@ -10,9 +10,13 @@ import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const QMD_INFLIGHT = new Map<string, Promise<MemorySearchManagerResult>>();
+
+export type MemorySearchManagerBackend = "qmd" | "builtin";
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
+  backend?: MemorySearchManagerBackend;
   error?: string;
 };
 
@@ -25,43 +29,58 @@ export async function getMemorySearchManager(params: {
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
     const cached = QMD_MANAGER_CACHE.get(cacheKey);
     if (cached) {
-      return { manager: cached };
+      return { manager: cached, backend: "qmd" };
     }
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-      });
-      if (primary) {
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
+
+    const inflight = QMD_INFLIGHT.get(cacheKey);
+    if (inflight) {
+      return await inflight;
+    }
+
+    const create = (async (): Promise<MemorySearchManagerResult> => {
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+        });
+        if (primary) {
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await import("./manager.js");
+                return await MemoryIndexManager.get(params);
+              },
             },
-          },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
+            () => QMD_MANAGER_CACHE.delete(cacheKey),
+          );
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper, backend: "qmd" };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn("qmd memory unavailable; falling back to builtin", { err });
+        const builtin = await tryGetBuiltinManager(params);
+        return builtin.manager
+          ? { ...builtin, backend: "builtin", error: message }
+          : { ...builtin, backend: "builtin", error: builtin.error ?? message };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
-    }
+
+      // Should not happen (we already gated on resolved.qmd), but keep behavior predictable.
+      const builtin = await tryGetBuiltinManager(params);
+      return builtin.manager ? { ...builtin, backend: "builtin" } : builtin;
+    })().finally(() => {
+      QMD_INFLIGHT.delete(cacheKey);
+    });
+
+    QMD_INFLIGHT.set(cacheKey, create);
+    return await create;
   }
 
-  try {
-    const { MemoryIndexManager } = await import("./manager.js");
-    const manager = await MemoryIndexManager.get(params);
-    return { manager };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { manager: null, error: message };
-  }
+  const builtin = await tryGetBuiltinManager(params);
+  return builtin.manager ? { ...builtin, backend: "builtin" } : builtin;
 }
 
 class FallbackMemoryManager implements MemorySearchManager {
@@ -192,6 +211,20 @@ class FallbackMemoryManager implements MemorySearchManager {
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   return `${agentId}:${stableSerialize(config)}`;
+}
+
+async function tryGetBuiltinManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<MemorySearchManagerResult> {
+  try {
+    const { MemoryIndexManager } = await import("./manager.js");
+    const manager = await MemoryIndexManager.get(params);
+    return { manager };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { manager: null, error: message };
+  }
 }
 
 function stableSerialize(value: unknown): string {

@@ -144,15 +144,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.bootstrapCollections();
     await this.ensureCollections();
 
-    if (this.qmd.update.onBoot) {
-      await this.runUpdate("boot", true);
-    }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
         void this.runUpdate("interval").catch((err) => {
-          log.warn(`qmd update failed (${String(err)})`);
+          log.warn("qmd update failed (interval)", { err });
         });
       }, this.qmd.update.intervalMs);
+    }
+
+    // Arm the interval before attempting the boot update so failures/timeouts don't prevent retries.
+    if (this.qmd.update.onBoot) {
+      try {
+        await this.runUpdate("boot", true);
+      } catch (err) {
+        log.warn("qmd update failed (boot)", { err });
+      }
     }
   }
 

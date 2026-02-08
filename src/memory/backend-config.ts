@@ -233,6 +233,8 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+  // NOTE: Today, anything other than "qmd" is treated as "builtin".
+  // If additional backends are introduced, this resolver must be updated.
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
