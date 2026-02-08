@@ -43,6 +43,12 @@ Use `/compact` (optionally with instructions) to force a compaction pass:
 /compact Focus on decisions and open questions
 ```
 
+If the agent has access to the `session_compact` tool, it can also trigger compaction programmatically during a run:
+
+```
+session_compact({ "instructions": "Focus on decisions and open questions" })
+```
+
 ## Context window source
 
 Context window is model-specific. OpenClaw uses the model definition from the configured provider catalog to determine limits.

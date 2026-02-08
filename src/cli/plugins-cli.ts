@@ -14,7 +14,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { CONFIG_DIR, resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -305,6 +305,113 @@ export function registerPluginsCli(program: Command) {
       };
       await writeConfigFile(next);
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
+    });
+
+  plugins
+    .command("uninstall")
+    .description("Uninstall a plugin (remove from config and optionally delete files)")
+    .argument("<id>", "Plugin id (or display name)")
+    .option("--keep-files", "Keep installed files (only remove from config)", false)
+    .action(async (rawId: string, opts: { keepFiles?: boolean }) => {
+      const report = buildPluginStatusReport();
+      const resolvedId =
+        report.plugins.find((p) => p.id === rawId || p.name === rawId)?.id ?? rawId;
+
+      const cfg = loadConfig();
+      const install = cfg.plugins?.installs?.[resolvedId];
+
+      const nextInstalls = { ...cfg.plugins?.installs };
+      const nextEntries = { ...cfg.plugins?.entries };
+      const nextLoadPaths = [...(cfg.plugins?.load?.paths ?? [])];
+      const nextSlots = { ...cfg.plugins?.slots } as Record<string, string>;
+
+      let changed = false;
+
+      if (nextInstalls[resolvedId]) {
+        delete nextInstalls[resolvedId];
+        changed = true;
+      }
+      if (nextEntries[resolvedId]) {
+        delete nextEntries[resolvedId];
+        changed = true;
+      }
+
+      // Clear exclusive slot selections that point at this plugin.
+      for (const [slot, owner] of Object.entries(nextSlots)) {
+        if (owner === resolvedId) {
+          delete nextSlots[slot];
+          changed = true;
+        }
+      }
+
+      if (install) {
+        const toRemove = new Set(
+          [install.sourcePath, install.installPath].filter(
+            (p): p is string => typeof p === "string" && p.trim() !== "",
+          ),
+        );
+        if (toRemove.size > 0) {
+          const filtered = nextLoadPaths.filter((p) => !toRemove.has(p));
+          if (filtered.length !== nextLoadPaths.length) {
+            nextLoadPaths.splice(0, nextLoadPaths.length, ...filtered);
+            changed = true;
+          }
+        }
+      }
+
+      if (!changed) {
+        defaultRuntime.log(
+          `Plugin "${resolvedId}" is already uninstalled (no config entries found).`,
+        );
+      } else {
+        const next: OpenClawConfig = {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            installs: Object.keys(nextInstalls).length > 0 ? nextInstalls : undefined,
+            entries: Object.keys(nextEntries).length > 0 ? nextEntries : undefined,
+            slots: Object.keys(nextSlots).length > 0 ? nextSlots : undefined,
+            load: {
+              ...cfg.plugins?.load,
+              paths: nextLoadPaths.length > 0 ? nextLoadPaths : undefined,
+            },
+          },
+        };
+
+        await writeConfigFile(next);
+        defaultRuntime.log(`Removed plugin "${resolvedId}" from config.`);
+      }
+
+      if (opts.keepFiles || !install?.installPath) {
+        defaultRuntime.log(`Restart the gateway to apply changes.`);
+        return;
+      }
+
+      // Only delete copies under ~/.openclaw/extensions; never delete linked paths.
+      const extensionsRoot = path.resolve(path.join(CONFIG_DIR, "extensions"));
+      const installPath = path.resolve(install.installPath);
+      const withinExtensions =
+        installPath === extensionsRoot || installPath.startsWith(`${extensionsRoot}${path.sep}`);
+
+      const sourcePath = install.sourcePath ? path.resolve(install.sourcePath) : undefined;
+      const looksLinked = install.source === "path" && sourcePath && sourcePath === installPath;
+
+      if (!withinExtensions || looksLinked) {
+        defaultRuntime.log(theme.muted(`Keeping files on disk: ${shortenHomePath(installPath)}`));
+        defaultRuntime.log(`Restart the gateway to apply changes.`);
+        return;
+      }
+
+      try {
+        if (fs.existsSync(installPath)) {
+          await fs.promises.rm(installPath, { recursive: true, force: true });
+          defaultRuntime.log(`Deleted: ${shortenHomePath(installPath)}`);
+        }
+      } catch (err) {
+        defaultRuntime.log(theme.warn(`Failed to delete files: ${String(err)}`));
+      }
+
+      defaultRuntime.log(`Restart the gateway to apply changes.`);
     });
 
   plugins

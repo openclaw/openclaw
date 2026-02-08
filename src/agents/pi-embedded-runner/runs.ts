@@ -1,3 +1,4 @@
+import type { EmbeddedPiCompactResult } from "./types.js";
 import {
   diagnosticLogger as diag,
   logMessageQueued,
@@ -8,6 +9,7 @@ type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  compact: (instructions?: string) => Promise<EmbeddedPiCompactResult>;
   abort: () => void;
 };
 
@@ -35,6 +37,23 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
   void handle.queueMessage(text);
   return true;
+}
+
+export async function compactEmbeddedPiRun(
+  sessionId: string,
+  instructions?: string,
+): Promise<EmbeddedPiCompactResult> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    diag.debug(`compact failed: sessionId=${sessionId} reason=no_active_run`);
+    return { ok: false, compacted: false, reason: "no active run" };
+  }
+  if (handle.isCompacting()) {
+    diag.debug(`compact skipped: sessionId=${sessionId} reason=compacting`);
+    return { ok: true, compacted: false, reason: "already compacting" };
+  }
+  diag.debug(`compacting run: sessionId=${sessionId}`);
+  return await handle.compact(instructions);
 }
 
 export function abortEmbeddedPiRun(sessionId: string): boolean {

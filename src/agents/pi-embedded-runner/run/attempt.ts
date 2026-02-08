@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  estimateTokens,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -228,6 +233,7 @@ export async function runEmbeddedAttempt(
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
           sessionKey: params.sessionKey ?? params.sessionId,
+          sessionId: params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -654,12 +660,58 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
+      let toolCompactionInFlight = false;
+
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
         },
         isStreaming: () => activeSession.isStreaming,
-        isCompacting: () => subscription.isCompacting(),
+        isCompacting: () => subscription.isCompacting() || toolCompactionInFlight,
+        compact: async (instructions?: string) => {
+          if (toolCompactionInFlight) {
+            return { ok: true, compacted: false, reason: "already compacting" };
+          }
+
+          toolCompactionInFlight = true;
+          try {
+            const result = await activeSession.compact(instructions);
+
+            // Best-effort token estimate after compaction.
+            let tokensAfter: number | undefined;
+            try {
+              let sum = 0;
+              for (const message of activeSession.messages) {
+                sum += estimateTokens(message);
+              }
+              if (sum <= result.tokensBefore) {
+                tokensAfter = sum;
+              }
+            } catch {
+              tokensAfter = undefined;
+            }
+
+            return {
+              ok: true,
+              compacted: true,
+              result: {
+                summary: result.summary,
+                firstKeptEntryId: result.firstKeptEntryId,
+                tokensBefore: result.tokensBefore,
+                tokensAfter,
+                details: result.details,
+              },
+            };
+          } catch (err) {
+            return {
+              ok: false,
+              compacted: false,
+              reason: describeUnknownError(err),
+            };
+          } finally {
+            toolCompactionInFlight = false;
+          }
+        },
         abort: abortRun,
       };
       setActiveEmbeddedRun(params.sessionId, queueHandle);
