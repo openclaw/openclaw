@@ -9,7 +9,9 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -183,6 +185,54 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
 }
 
+/**
+ * Check if a message is an assistant heartbeat-only message (just HEARTBEAT_OK).
+ * Returns true if the message should be filtered when showOk is false.
+ */
+function isHeartbeatOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role !== "assistant") {
+    return false;
+  }
+
+  // Check string content
+  if (typeof entry.content === "string") {
+    const trimmed = entry.content.trim();
+    return trimmed === HEARTBEAT_TOKEN || trimmed.startsWith(`${HEARTBEAT_TOKEN}\n`);
+  }
+
+  // Check array content (text blocks)
+  if (Array.isArray(entry.content)) {
+    const textParts = entry.content
+      .filter(
+        (item) => item && typeof item === "object" && (item as { type?: string }).type === "text",
+      )
+      .map((item) => ((item as { text?: string }).text ?? "").trim())
+      .filter((t) => t.length > 0);
+    if (textParts.length === 0) {
+      return false;
+    }
+    const combined = textParts.join(" ").trim();
+    return combined === HEARTBEAT_TOKEN || combined.startsWith(`${HEARTBEAT_TOKEN} `);
+  }
+
+  return false;
+}
+
+/**
+ * Filter heartbeat-only messages from chat history when showOk is false.
+ */
+function filterHeartbeatMessages(messages: unknown[], showOk: boolean): unknown[] {
+  if (showOk) {
+    return messages;
+  }
+  return messages.filter((msg) => !isHeartbeatOnlyMessage(msg));
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -211,6 +261,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+
+    // Filter heartbeat-only messages for webchat when showOk is false (the default).
+    // This matches the live broadcast behavior in shouldSuppressHeartbeatBroadcast().
+    const visibility = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
+    const filtered = filterHeartbeatMessages(capped, visibility.showOk);
+
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -232,7 +288,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     respond(true, {
       sessionKey,
       sessionId,
-      messages: capped,
+      messages: filtered,
       thinkingLevel,
       verboseLevel,
     });
