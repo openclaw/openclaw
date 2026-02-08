@@ -7,8 +7,11 @@ type ThreadTsCacheEntry = {
   updatedAt: number;
 };
 
-const DEFAULT_THREAD_TS_CACHE_TTL_MS = 60_000;
-const DEFAULT_THREAD_TS_CACHE_MAX = 500;
+// Increased cache TTL and size for better thread tracking.
+// 6 hours (was 60 seconds) - users often pause conversations for hours.
+// 10k entries (was 500) - busy workspaces with many active threads need more capacity.
+const DEFAULT_THREAD_TS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const DEFAULT_THREAD_TS_CACHE_MAX = 10_000;
 
 const normalizeThreadTs = (threadTs?: string | null) => {
   const trimmed = threadTs?.trim();
