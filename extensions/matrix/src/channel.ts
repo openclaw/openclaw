@@ -9,7 +9,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, MatrixConfig } from "./types.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
@@ -147,14 +147,23 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: account.config.dm?.policy ?? "pairing",
-      allowFrom: account.config.dm?.allowFrom ?? [],
-      policyPath: "channels.matrix.dm.policy",
-      allowFromPath: "channels.matrix.dm.allowFrom",
-      approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
-    }),
+    resolveDmPolicy: ({ account }) => {
+      const resolvedAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const isNamedAccount =
+        resolvedAccountId !== DEFAULT_ACCOUNT_ID &&
+        Boolean((account.config as MatrixConfig).accounts?.[resolvedAccountId]);
+      const basePath = isNamedAccount
+        ? `channels.matrix.accounts.${resolvedAccountId}`
+        : "channels.matrix";
+      return {
+        policy: account.config.dm?.policy ?? "pairing",
+        allowFrom: account.config.dm?.allowFrom ?? [],
+        policyPath: `${basePath}.dm.policy`,
+        allowFromPath: `${basePath}.dm.allowFrom`,
+        approveHint: formatPairingApproveHint("matrix"),
+        normalizeEntry: (raw) => normalizeMatrixUserId(raw),
+      };
+    },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
@@ -320,11 +329,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       }
       return null;
     },
-    applyAccountConfig: ({ cfg, input }) => {
+    applyAccountConfig: ({ cfg, accountId: rawAccountId, input }) => {
+      const accountId = rawAccountId ?? DEFAULT_ACCOUNT_ID;
       const namedConfig = applyAccountNameToChannelSection({
         cfg: cfg as CoreConfig,
         channelKey: "matrix",
-        accountId: DEFAULT_ACCOUNT_ID,
+        accountId,
         name: input.name,
       });
       if (input.useEnv) {
@@ -339,14 +349,45 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           },
         } as CoreConfig;
       }
-      return buildMatrixConfigUpdate(namedConfig as CoreConfig, {
+      const configFields = {
         homeserver: input.homeserver?.trim(),
         userId: input.userId?.trim(),
         accessToken: input.accessToken?.trim(),
         password: input.password?.trim(),
         deviceName: input.deviceName?.trim(),
         initialSyncLimit: input.initialSyncLimit,
-      });
+      };
+      // For non-default accounts, store config under accounts.<accountId>
+      if (accountId !== DEFAULT_ACCOUNT_ID) {
+        const next = namedConfig as CoreConfig;
+        const existing = next.channels?.matrix ?? {};
+        return {
+          ...next,
+          channels: {
+            ...next.channels,
+            matrix: {
+              ...existing,
+              enabled: true,
+              accounts: {
+                ...existing.accounts,
+                [accountId]: {
+                  ...existing.accounts?.[accountId],
+                  enabled: true,
+                  ...(configFields.homeserver ? { homeserver: configFields.homeserver } : {}),
+                  ...(configFields.userId ? { userId: configFields.userId } : {}),
+                  ...(configFields.accessToken ? { accessToken: configFields.accessToken } : {}),
+                  ...(configFields.password ? { password: configFields.password } : {}),
+                  ...(configFields.deviceName ? { deviceName: configFields.deviceName } : {}),
+                  ...(typeof configFields.initialSyncLimit === "number"
+                    ? { initialSyncLimit: configFields.initialSyncLimit }
+                    : {}),
+                },
+              },
+            },
+          },
+        } as CoreConfig;
+      }
+      return buildMatrixConfigUpdate(namedConfig as CoreConfig, configFields);
     },
   },
   outbound: matrixOutbound,
@@ -383,9 +424,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ timeoutMs, cfg }) => {
+    probeAccount: async ({ timeoutMs, cfg, account }) => {
       try {
-        const auth = await resolveMatrixAuth({ cfg: cfg as CoreConfig });
+        const auth = await resolveMatrixAuth({
+          cfg: cfg as CoreConfig,
+          accountId: account?.accountId,
+        });
         return await probeMatrix({
           homeserver: auth.homeserver,
           accessToken: auth.accessToken,

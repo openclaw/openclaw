@@ -28,6 +28,8 @@ export type MatrixRoomConfig = {
   skills?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+  /** Account ID that owns this room (for multi-account routing). */
+  accountId?: string;
 };
 
 export type MatrixActionConfig = {
@@ -36,6 +38,32 @@ export type MatrixActionConfig = {
   pins?: boolean;
   memberInfo?: boolean;
   channelInfo?: boolean;
+};
+
+/** Per-account config fields (connection credentials + per-account overrides). */
+export type MatrixAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this account. Default: true. */
+  enabled?: boolean;
+  /** Matrix homeserver URL (https://matrix.example.org). */
+  homeserver?: string;
+  /** Matrix user id (@user:server). */
+  userId?: string;
+  /** Matrix access token. */
+  accessToken?: string;
+  /** Matrix password (used only to fetch access token). */
+  password?: string;
+  /** Optional device name when logging in via password. */
+  deviceName?: string;
+  /** Initial sync limit for startup (default: @vector-im/matrix-bot-sdk default). */
+  initialSyncLimit?: number;
+  /** Enable end-to-end encryption (E2EE). Default: false. */
+  encryption?: boolean;
+  /** Max outbound media size in MB. */
+  mediaMaxMb?: number;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: ReplyToMode;
 };
 
 export type MatrixConfig = {
@@ -87,11 +115,14 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /** Named accounts for multi-account support. */
+  accounts?: Record<string, MatrixAccountConfig>;
 };
 
 export type CoreConfig = {
   channels?: {
     matrix?: MatrixConfig;
+    defaults?: { groupPolicy?: GroupPolicy };
   };
   [key: string]: unknown;
 };
