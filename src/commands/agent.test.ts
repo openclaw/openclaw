@@ -7,6 +7,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  getActiveRunThreadContext: vi.fn().mockReturnValue(undefined),
+  hasActiveRunThreadContext: vi.fn().mockReturnValue(false),
 }));
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),

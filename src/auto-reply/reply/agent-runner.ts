@@ -8,7 +8,11 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import {
+  getActiveRunThreadContext,
+  hasActiveRunThreadContext,
+  queueEmbeddedPiMessage,
+} from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -159,7 +163,26 @@ export async function runReplyAgent(params: {
         })
       : null;
 
-  if (shouldSteer && isStreaming) {
+  // Only attempt fast steering when the incoming message is from the same thread
+  // as the active run. Cross-thread steering would route replies to the wrong thread.
+  // When thread contexts don't match, we fall through to enqueueFollowupRun which
+  // preserves per-message routing.
+  const hasThreadContext = hasActiveRunThreadContext(followupRun.run.sessionId);
+  const activeRunThread = getActiveRunThreadContext(followupRun.run.sessionId);
+  const incomingThread = followupRun.originatingThreadId;
+  // Allow fast steer only when thread context is registered AND threads match.
+  // Use strict equality to avoid false positives from type coercion.
+  // If context isn't registered (e.g., setActiveEmbeddedRun not yet called or run ended),
+  // we fall back to queue - this is intentionally conservative to avoid misrouting.
+  // The slight latency cost of queueing is acceptable vs. cross-thread contamination.
+  const isSameThread =
+    hasThreadContext &&
+    ((activeRunThread === undefined && incomingThread === undefined) ||
+      (activeRunThread !== undefined &&
+        incomingThread !== undefined &&
+        typeof activeRunThread === typeof incomingThread &&
+        activeRunThread === incomingThread));
+  if (shouldSteer && isStreaming && isSameThread) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       if (activeSessionEntry && activeSessionStore && sessionKey) {

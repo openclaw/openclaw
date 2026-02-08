@@ -10,6 +10,8 @@ import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
+  getActiveRunThreadContext: vi.fn().mockReturnValue(undefined),
+  hasActiveRunThreadContext: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
