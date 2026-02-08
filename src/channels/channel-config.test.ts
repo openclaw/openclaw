@@ -160,3 +160,32 @@ describe("resolveNestedAllowlistDecision", () => {
     ).toBe(true);
   });
 });
+
+describe("resolveNestedAllowlistDecision - truth table", () => {
+  it("all 12 combinations", () => {
+    const cases: Array<[boolean, boolean, boolean, boolean, boolean]> = [
+      [false, false, false, false, true],
+      [false, false, false, true, true],
+      [false, true, false, false, true],
+      [false, true, true, false, true],
+      [true, false, false, false, false],
+      [true, false, false, true, false],
+      [true, false, true, false, false],
+      [true, false, true, true, false],
+      [true, true, false, false, true],
+      [true, true, false, true, true],
+      [true, true, true, false, false],
+      [true, true, true, true, true],
+    ];
+
+    for (const [outer, outerMatch, inner, innerMatch, expected] of cases) {
+      const result = resolveNestedAllowlistDecision({
+        outerConfigured: outer,
+        outerMatched: outerMatch,
+        innerConfigured: inner,
+        innerMatched: innerMatch,
+      });
+      expect(result).toBe(expected);
+    }
+  });
+});
