@@ -4,12 +4,14 @@ import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -18,6 +20,11 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+  type AgentResponseHookContext,
+} from "../../hooks/internal-hooks.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -511,6 +518,38 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    // Trigger agent:response hook for post-response processing (only with valid session)
+    if (sessionKey) {
+      const responseText = finalPayloads
+        .map((p) => p.text)
+        .filter(Boolean)
+        .join("\n");
+      const agentId = resolveAgentIdFromSessionKey(sessionKey);
+      const workspaceDir =
+        cfg && agentId
+          ? (resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR)
+          : undefined;
+      const responseContext: AgentResponseHookContext = {
+        responseText: responseText || undefined,
+        payloads: finalPayloads,
+        model: modelUsed,
+        provider: providerUsed,
+        cfg,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        agentId,
+        workspaceDir,
+      };
+      const responseEvent = createInternalHookEvent(
+        "agent",
+        "response",
+        sessionKey,
+        responseContext,
+      );
+      // Fire-and-forget to avoid blocking response delivery
+      void triggerInternalHook(responseEvent);
     }
 
     return finalizeWithFollowup(
