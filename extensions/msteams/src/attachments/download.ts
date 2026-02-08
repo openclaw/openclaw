@@ -141,8 +141,9 @@ async function fetchWithAllowlistedRedirects(params: {
 }): Promise<{ response: Response; finalUrl: string }> {
   const maxRedirects = params.maxRedirects ?? 5;
   let currentUrl = params.url;
+  let redirectsFollowed = 0;
 
-  for (let redirects = 0; redirects <= maxRedirects; redirects++) {
+  while (true) {
     const initForUrl = params.requestInitForUrl?.(currentUrl);
     const response = await params.fetchFn(currentUrl, {
       ...(initForUrl ?? {}),
@@ -155,15 +156,12 @@ async function fetchWithAllowlistedRedirects(params: {
     if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
       return { response, finalUrl: currentUrl };
     }
+    if (redirectsFollowed >= maxRedirects) {
+      return { response, finalUrl: currentUrl };
+    }
+    redirectsFollowed += 1;
     currentUrl = redirectUrl;
   }
-
-  const initForUrl = params.requestInitForUrl?.(currentUrl);
-  const response = await params.fetchFn(currentUrl, {
-    ...(initForUrl ?? {}),
-    redirect: "manual",
-  });
-  return { response, finalUrl: currentUrl };
 }
 
 function readRedirectUrl(baseUrl: string, res: Response): string | null {

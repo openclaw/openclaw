@@ -308,6 +308,38 @@ describe("msteams attachments", () => {
       expect(fetchMock).toHaveBeenCalledWith("https://x/img", { redirect: "manual" });
     });
 
+    it("caps redirect follows at the configured max", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async (url: string) => {
+        const match = url.match(/^https:\/\/x\/r(\d+)$/);
+        if (!match) {
+          return new Response("not found", { status: 404 });
+        }
+        const idx = Number(match[1]);
+        if (idx <= 5) {
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: `https://x/r${idx + 1}` },
+          });
+        }
+        return new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/png", contentUrl: "https://x/r0" }],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(0);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(fetchMock).toHaveBeenNthCalledWith(6, "https://x/r5", { redirect: "manual" });
+    });
+
     it("skips auth retries when the host is not in auth allowlist", async () => {
       const { downloadMSTeamsAttachments } = await load();
       const tokenProvider = { getAccessToken: vi.fn(async () => "token") };
