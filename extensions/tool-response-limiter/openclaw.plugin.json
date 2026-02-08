@@ -1,0 +1,41 @@
+{
+  "id": "tool-response-limiter",
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable tool response size limiting"
+    },
+    "maxResponseSizeKb": {
+      "label": "Max Response Size (KB)",
+      "help": "Maximum size for tool responses in kilobytes (default: 30KB)",
+      "placeholder": "30"
+    },
+    "exemptTools": {
+      "label": "Exempt Tools",
+      "help": "Comma-separated list of tool names to exempt from size limits",
+      "placeholder": "e.g., image, screenshot"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "maxResponseSizeKb": {
+        "type": "number",
+        "default": 30,
+        "minimum": 1
+      },
+      "exemptTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      }
+    }
+  }
+}
