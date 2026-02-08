@@ -130,6 +130,12 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
+  /**
+   * Webhook URL to receive model.usage events.
+   * When configured, a POST request with token usage, cost, and duration info
+   * will be sent to this URL after each completion.
+   */
+  usageWebhookUrl?: string;
 };
 
 export type GatewayHttpResponsesConfig = {

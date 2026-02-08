@@ -20,6 +20,8 @@ type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   trustedProxies?: string[];
+  /** Webhook URL to receive model.usage events with token usage, cost, and duration */
+  usageWebhookUrl?: string;
 };
 
 type OpenAiChatMessage = {
@@ -35,8 +37,124 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
 };
 
+// Agent command result type for extracting usage
+type AgentCommandResult = {
+  payloads?: Array<{ text?: string }>;
+  meta?: {
+    durationMs?: number;
+    agentMeta?: {
+      sessionId?: string;
+      provider?: string;
+      model?: string;
+      usage?: {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        total?: number;
+      };
+    };
+  };
+};
+
+// OpenAI format usage type
+type OpenAiUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+// Webhook payload type for usage notification
+type UsageWebhookPayload = {
+  event: "model.usage";
+  runId: string;
+  model: string;
+  provider?: string;
+  usage: OpenAiUsage;
+  durationMs?: number;
+  cost?: {
+    input: number;
+    output: number;
+    total: number;
+  };
+  timestamp: number;
+};
+
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function extractUsageFromResult(result: AgentCommandResult | null): OpenAiUsage {
+  const usage = result?.meta?.agentMeta?.usage;
+  if (!usage) {
+    return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  }
+  // prompt_tokens = input + cacheRead + cacheWrite (following OpenAI convention)
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  const completionTokens = usage.output ?? 0;
+  const totalTokens = usage.total ?? promptTokens + completionTokens;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+  };
+}
+
+async function sendUsageWebhook(params: {
+  webhookUrl: string;
+  payload: UsageWebhookPayload;
+}): Promise<void> {
+  const { webhookUrl, payload } = params;
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      console.error(`[openai-http] webhook notification failed: ${response.status}`);
+    }
+  } catch (err) {
+    console.error(`[openai-http] webhook notification error: ${String(err)}`);
+  }
+}
+
+function buildUsageWebhookPayload(params: {
+  runId: string;
+  model: string;
+  result: AgentCommandResult | null;
+  usage: OpenAiUsage;
+}): UsageWebhookPayload {
+  const { runId, model, result, usage } = params;
+  const agentMeta = result?.meta?.agentMeta;
+  const rawUsage = agentMeta?.usage;
+
+  // Calculate cost if we have usage data (simplified cost calculation)
+  // In production, this would use resolveModelCostConfig from usage-format.ts
+  let cost: UsageWebhookPayload["cost"];
+  if (rawUsage && (rawUsage.input || rawUsage.output)) {
+    // Default cost rates per million tokens (can be customized via config)
+    const inputRate = 0.003; // $3 per million
+    const outputRate = 0.015; // $15 per million
+    const inputCost = ((rawUsage.input ?? 0) / 1_000_000) * inputRate;
+    const outputCost = ((rawUsage.output ?? 0) / 1_000_000) * outputRate;
+    cost = {
+      input: inputCost,
+      output: outputCost,
+      total: inputCost + outputCost,
+    };
+  }
+
+  return {
+    event: "model.usage",
+    runId,
+    model,
+    provider: agentMeta?.provider,
+    usage,
+    durationMs: result?.meta?.durationMs,
+    cost,
+    timestamp: Date.now(),
+  };
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
@@ -237,7 +355,8 @@ export async function handleOpenAiHttpRequest(
         deps,
       );
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const typedResult = result as AgentCommandResult | null;
+      const payloads = typedResult?.payloads;
       const content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
@@ -245,6 +364,19 @@ export async function handleOpenAiHttpRequest(
               .filter(Boolean)
               .join("\n\n")
           : "No response from OpenClaw.";
+
+      const usage = extractUsageFromResult(typedResult);
+
+      // Send webhook notification if configured
+      if (opts.usageWebhookUrl) {
+        const webhookPayload = buildUsageWebhookPayload({
+          runId,
+          model,
+          result: typedResult,
+          usage,
+        });
+        void sendUsageWebhook({ webhookUrl: opts.usageWebhookUrl, payload: webhookPayload });
+      }
 
       sendJson(res, 200, {
         id: runId,
@@ -258,7 +390,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } catch (err) {
       sendJson(res, 500, {
@@ -273,6 +405,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let streamResult: AgentCommandResult | null = null;
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -318,15 +451,7 @@ export async function handleOpenAiHttpRequest(
       return;
     }
 
-    if (evt.stream === "lifecycle") {
-      const phase = evt.data?.phase;
-      if (phase === "end" || phase === "error") {
-        closed = true;
-        unsubscribe();
-        writeDone(res);
-        res.end();
-      }
-    }
+    // Note: lifecycle events are handled after agentCommand completes in the IIFE
   });
 
   req.on("close", () => {
@@ -350,6 +475,8 @@ export async function handleOpenAiHttpRequest(
         deps,
       );
 
+      streamResult = result as AgentCommandResult | null;
+
       if (closed) {
         return;
       }
@@ -366,7 +493,7 @@ export async function handleOpenAiHttpRequest(
           });
         }
 
-        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+        const payloads = streamResult?.payloads;
         const content =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -389,6 +516,34 @@ export async function handleOpenAiHttpRequest(
             },
           ],
         });
+      }
+
+      // Send final chunk with finish_reason and usage
+      const usage = extractUsageFromResult(streamResult);
+      writeSse(res, {
+        id: runId,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            finish_reason: "stop",
+          },
+        ],
+        usage,
+      });
+
+      // Send webhook notification if configured
+      if (opts.usageWebhookUrl) {
+        const webhookPayload = buildUsageWebhookPayload({
+          runId,
+          model,
+          result: streamResult,
+          usage,
+        });
+        void sendUsageWebhook({ webhookUrl: opts.usageWebhookUrl, payload: webhookPayload });
       }
     } catch (err) {
       if (closed) {
