@@ -251,6 +251,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/campfire:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/copilot-proxy:
     devDependencies:
       openclaw:
