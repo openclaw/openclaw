@@ -38,6 +38,18 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("");
   });
 
+  it("accepts /tmp/ paths from internal tools (e.g. TTS)", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/tts-abc123/voice-123456.opus");
+    expect(result.mediaUrls).toEqual(["/tmp/tts-abc123/voice-123456.opus"]);
+    expect(result.text).toBe("");
+  });
+
+  it("rejects /tmp/ paths with directory traversal", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/../etc/passwd");
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe("MEDIA:/tmp/../etc/passwd");
+  });
+
   it("keeps audio_as_voice detection stable across calls", () => {
     const input = "Hello [[audio_as_voice]]";
     const first = splitMediaFromOutput(input);

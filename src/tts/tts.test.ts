@@ -35,12 +35,20 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const {
+  _test,
+  resolveTtsConfig,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  resolveTtsApiKey,
+  isTtsProviderConfigured,
+} = tts;
 
 const {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isCustomOpenAIEndpoint,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   parseTtsDirectives,
@@ -556,6 +564,171 @@ describe("tts", () => {
 
       globalThis.fetch = originalFetch;
       process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+  });
+
+  describe("OpenAI TTS baseUrl support", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    const restoreEnv = (snapshot: Record<string, string | undefined>) => {
+      for (const [key, value] of Object.entries(snapshot)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    const withEnv = (env: Record<string, string | undefined>, run: () => void) => {
+      const snapshot: Record<string, string | undefined> = {};
+      for (const key of Object.keys(env)) {
+        snapshot[key] = process.env[key];
+      }
+      try {
+        for (const [key, value] of Object.entries(env)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+        run();
+      } finally {
+        restoreEnv(snapshot);
+      }
+    };
+
+    describe("resolveTtsConfig", () => {
+      it("resolves openai.baseUrl from config", () => {
+        const cfg = {
+          ...baseCfg,
+          messages: {
+            tts: { openai: { baseUrl: "http://localhost:8880/v1" } },
+          },
+        };
+        const config = resolveTtsConfig(cfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+
+      it("trims whitespace from baseUrl", () => {
+        const cfg = {
+          ...baseCfg,
+          messages: {
+            tts: { openai: { baseUrl: "  http://localhost:8880/v1  " } },
+          },
+        };
+        const config = resolveTtsConfig(cfg);
+        expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
+      });
+
+      it("leaves baseUrl undefined when not set", () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(config.openai.baseUrl).toBeUndefined();
+      });
+    });
+
+    describe("isCustomOpenAIEndpoint", () => {
+      it("returns true when config baseUrl is set", () => {
+        withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+          expect(isCustomOpenAIEndpoint("http://localhost:8880/v1")).toBe(true);
+        });
+      });
+
+      it("returns true when env var points to non-default URL", () => {
+        withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+          expect(isCustomOpenAIEndpoint()).toBe(true);
+        });
+      });
+
+      it("returns false when neither config nor env is set", () => {
+        withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+          expect(isCustomOpenAIEndpoint()).toBe(false);
+        });
+      });
+    });
+
+    describe("resolveTtsApiKey", () => {
+      it("returns 'local' sentinel when custom baseUrl is set with no API key", () => {
+        withEnv({ OPENAI_API_KEY: undefined }, () => {
+          const cfg = {
+            ...baseCfg,
+            messages: {
+              tts: { openai: { baseUrl: "http://localhost:8880/v1" } },
+            },
+          };
+          const config = resolveTtsConfig(cfg);
+          expect(resolveTtsApiKey(config, "openai")).toBe("local");
+        });
+      });
+
+      it("prefers real API key over sentinel", () => {
+        withEnv({ OPENAI_API_KEY: "sk-real-key" }, () => {
+          const cfg = {
+            ...baseCfg,
+            messages: {
+              tts: { openai: { baseUrl: "http://localhost:8880/v1" } },
+            },
+          };
+          const config = resolveTtsConfig(cfg);
+          expect(resolveTtsApiKey(config, "openai")).toBe("sk-real-key");
+        });
+      });
+
+      it("returns undefined for openai without key or baseUrl", () => {
+        withEnv({ OPENAI_API_KEY: undefined }, () => {
+          const config = resolveTtsConfig(baseCfg);
+          expect(resolveTtsApiKey(config, "openai")).toBeUndefined();
+        });
+      });
+    });
+
+    describe("isTtsProviderConfigured", () => {
+      it("returns true for openai with custom baseUrl and no API key", () => {
+        withEnv({ OPENAI_API_KEY: undefined }, () => {
+          const cfg = {
+            ...baseCfg,
+            messages: {
+              tts: { openai: { baseUrl: "http://localhost:8880/v1" } },
+            },
+          };
+          const config = resolveTtsConfig(cfg);
+          expect(isTtsProviderConfigured(config, "openai")).toBe(true);
+        });
+      });
+
+      it("returns false for openai without key or baseUrl", () => {
+        withEnv({ OPENAI_API_KEY: undefined }, () => {
+          const config = resolveTtsConfig(baseCfg);
+          expect(isTtsProviderConfigured(config, "openai")).toBe(false);
+        });
+      });
+    });
+
+    describe("model/voice validation with custom baseUrl", () => {
+      it("allows any model when config baseUrl is set", () => {
+        expect(isValidOpenAIModel("chatterbox", "http://localhost:8880/v1")).toBe(true);
+        expect(isValidOpenAIModel("coqui-xtts", "http://localhost:8880/v1")).toBe(true);
+      });
+
+      it("rejects unknown models without custom endpoint", () => {
+        withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+          expect(isValidOpenAIModel("chatterbox")).toBe(false);
+        });
+      });
+
+      it("allows any voice when config baseUrl is set", () => {
+        expect(isValidOpenAIVoice("custom-voice", "http://localhost:8880/v1")).toBe(true);
+      });
+
+      it("rejects unknown voices without custom endpoint", () => {
+        withEnv({ OPENAI_TTS_BASE_URL: undefined }, () => {
+          expect(isValidOpenAIVoice("custom-voice")).toBe(false);
+        });
+      });
     });
   });
 });
