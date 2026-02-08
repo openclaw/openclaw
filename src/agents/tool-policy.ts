@@ -65,7 +65,7 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: ["session_status"],
   },
   coding: {
-    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
+    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "group:web", "image"],
   },
   messaging: {
     allow: [
