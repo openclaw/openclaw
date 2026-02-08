@@ -33,163 +33,75 @@ export function stripMinimaxToolCallXml(text: string): string {
  * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
  * not be shown to users.
  */
-export function stripDowngradedToolCallText(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/\[(?:Tool (?:Call|Result)|Historical context)/i.test(text)) {
-    return text;
-  }
 
-  const consumeJsonish = (
-    input: string,
-    start: number,
-    options?: { allowLeadingNewlines?: boolean },
-  ): number | null => {
-    const { allowLeadingNewlines = false } = options ?? {};
-    let index = start;
-    while (index < input.length) {
-      const ch = input[index];
-      if (ch === " " || ch === "\t") {
-        index += 1;
-        continue;
+export function stripHistoricalContext(text: string): string {
+  const marker = "[Historical context:";
+  let result = text;
+  let startIndex = result.indexOf(marker);
+
+  while (startIndex !== -1) {
+    let depth = 1;
+    let endIndex = -1;
+
+    // Start searching after the marker
+    for (let i = startIndex + marker.length; i < result.length; i++) {
+      if (result[i] === "[") {
+        depth++;
+      } else if (result[i] === "]") {
+        depth--;
       }
-      if (allowLeadingNewlines && (ch === "\n" || ch === "\r")) {
-        index += 1;
-        continue;
+
+      if (depth === 0) {
+        endIndex = i;
+        break;
       }
+    }
+
+    if (endIndex !== -1) {
+      // Remove the block including the closing bracket and potentially a following newline
+      let removeEnd = endIndex + 1;
+      if (result[removeEnd] === "\n") {
+        removeEnd++;
+      }
+      result = result.slice(0, startIndex) + result.slice(removeEnd);
+      // Look for next occurrence
+      startIndex = result.indexOf(marker);
+    } else {
+      // Malformed (no closing bracket found), stop processing to avoid infinite loop
+      // or potentially just remove everything from start?
+      // For safety, just break and return what we have (or remove till end)
+      // Let's assume valid nesting or stop.
       break;
     }
-    if (index >= input.length) {
-      return null;
-    }
+  }
+  return result;
+}
 
-    const startChar = input[index];
-    if (startChar === "{" || startChar === "[") {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      for (let i = index; i < input.length; i += 1) {
-        const ch = input[i];
-        if (inString) {
-          if (escape) {
-            escape = false;
-          } else if (ch === "\\") {
-            escape = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        if (ch === '"') {
-          inString = true;
-          continue;
-        }
-        if (ch === "{" || ch === "[") {
-          depth += 1;
-          continue;
-        }
-        if (ch === "}" || ch === "]") {
-          depth -= 1;
-          if (depth === 0) {
-            return i + 1;
-          }
-        }
-      }
-      return null;
-    }
+export function stripDowngradedToolCallText(text: string): string {
+  // 1. Strip Historical Context (nested structure)
+  // We use the robust balanced-bracket parser here.
+  let clean = stripHistoricalContext(text);
 
-    if (startChar === '"') {
-      let escape = false;
-      for (let i = index + 1; i < input.length; i += 1) {
-        const ch = input[i];
-        if (escape) {
-          escape = false;
-          continue;
-        }
-        if (ch === "\\") {
-          escape = true;
-          continue;
-        }
-        if (ch === '"') {
-          return i + 1;
-        }
-      }
-      return null;
-    }
+  // 2. Strip standard regex-based patterns
+  clean = clean
+    // Strip [Tool Call: ...] blocks
+    .replace(/\[Tool Call:[\s\S]*?Arguments:\s*\{[\s\S]*?\}\s*/gi, "")
+    // Strip [Tool Result ...] blocks and their content
+    .replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "")
+    // Strip XML-style tool calls (Minimax/Anthropic legacy)
+    .replace(/<invoke[\s\S]*?<\/minimax:tool_call>\n?/gi, "")
+    // Strip thinking tags
+    .replace(/<think>[\s\S]*?<\/think>\n?/gi, "")
+    .replace(/<think>[\s\S]*/gi, "") // Unclosed thinking
+    .replace(/<antthinking>[\s\S]*?<\/antthinking>\n?/gi, "")
+    .replace(/<thought>[\s\S]*?<\/thought>\n?/gi, "")
+    // Strip final tags wrapper (keep content inside)
+    .replace(/<final>[\s\S]*?<\/final>\n?/gi, (match) => {
+      return match.replace(/<\/?final>/g, "");
+    });
 
-    let end = index;
-    while (end < input.length && input[end] !== "\n" && input[end] !== "\r") {
-      end += 1;
-    }
-    return end;
-  };
-
-  const stripToolCalls = (input: string): string => {
-    const markerRe = /\[Tool Call:[^\]]*\]/gi;
-    let result = "";
-    let cursor = 0;
-    for (const match of input.matchAll(markerRe)) {
-      const start = match.index ?? 0;
-      if (start < cursor) {
-        continue;
-      }
-      result += input.slice(cursor, start);
-      let index = start + match[0].length;
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input[index] === "\r") {
-        index += 1;
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      } else if (input[index] === "\n") {
-        index += 1;
-      }
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
-        index += 9;
-        if (input[index] === ":") {
-          index += 1;
-        }
-        if (input[index] === " ") {
-          index += 1;
-        }
-        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
-        if (end !== null) {
-          index = end;
-        }
-      }
-      if (
-        (input[index] === "\n" || input[index] === "\r") &&
-        (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
-      ) {
-        if (input[index] === "\r") {
-          index += 1;
-        }
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      }
-      cursor = index;
-    }
-    result += input.slice(cursor);
-    return result;
-  };
-
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
-
-  // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] blocks injected by pi-ai for Gemini 3.
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
-
-  return cleaned.trim();
+  // 3. Cleanup whitespace
+  return clean.trim();
 }
 
 /**
