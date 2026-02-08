@@ -12,6 +12,7 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { resolveChannelIdForUpload } from "./resolve-channels.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -77,7 +78,8 @@ async function resolveChannelId(
   recipient: SlackRecipient,
 ): Promise<{ channelId: string; isDm?: boolean }> {
   if (recipient.kind === "channel") {
-    return { channelId: recipient.id };
+    const channelId = await resolveChannelIdForUpload(client, recipient.id);
+    return { channelId };
   }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
