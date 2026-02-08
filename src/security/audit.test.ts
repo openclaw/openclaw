@@ -212,6 +212,34 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("does not treat a symlinked state dir as world-writable on POSIX", async () => {
+    if (isWindows) {
+      return;
+    }
+
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-symlink-"));
+    const realStateDir = path.join(tmp, "real-state");
+    await fs.mkdir(realStateDir, { recursive: true, mode: 0o700 });
+
+    const configPathReal = path.join(realStateDir, "openclaw.json");
+    await fs.writeFile(configPathReal, "{}\n", "utf-8");
+
+    const linkStateDir = path.join(tmp, "state-link");
+    await fs.symlink(realStateDir, linkStateDir, "dir");
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir: linkStateDir,
+      configPath: path.join(linkStateDir, "openclaw.json"),
+      platform: "linux",
+    });
+
+    expect(res.findings.some((f) => f.checkId === "fs.state_dir.symlink")).toBe(true);
+    expect(res.findings.some((f) => f.checkId === "fs.state_dir.perms_world_writable")).toBe(false);
+  });
+
   it("warns when small models are paired with web/browser tools", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },

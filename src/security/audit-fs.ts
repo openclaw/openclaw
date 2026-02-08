@@ -80,11 +80,13 @@ export async function inspectPathPermissions(
     };
   }
 
-  const bits = modeBits(st.mode);
   const platform = opts?.platform ?? process.platform;
 
+  // Windows uses ACL-based permission checks, not POSIX mode bits.
+  // We still compute and return mode bits for informational purposes.
   if (platform === "win32") {
     const acl = await inspectWindowsAcl(targetPath, { env: opts?.env, exec: opts?.exec });
+    const bits = modeBits(st.mode);
     if (!acl.ok) {
       return {
         ok: true,
@@ -115,11 +117,28 @@ export async function inspectPathPermissions(
     };
   }
 
+  // POSIX note: symlink permission bits are not meaningful for access control.
+  // We still report `isSymlink=true` as a trust-boundary warning, but we
+  // evaluate readability/writability on the symlink *target* (fs.stat follows).
+  let effectiveIsDir = st.isDir;
+  let effectiveMode = st.mode;
+  if (st.isSymlink) {
+    try {
+      const real = await fs.stat(targetPath);
+      effectiveIsDir = real.isDirectory();
+      effectiveMode = typeof real.mode === "number" ? real.mode : effectiveMode;
+    } catch {
+      // If the symlink target cannot be stat'd, fall back to lstat values.
+      // The caller will still see isSymlink=true.
+    }
+  }
+
+  const bits = modeBits(effectiveMode);
   return {
     ok: true,
     isSymlink: st.isSymlink,
-    isDir: st.isDir,
-    mode: st.mode,
+    isDir: effectiveIsDir,
+    mode: effectiveMode,
     bits,
     source: "posix",
     worldWritable: isWorldWritable(bits),
