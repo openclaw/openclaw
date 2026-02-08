@@ -40,10 +40,19 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
 /**
  * Manages voice calls: state machine, persistence, and provider coordination.
  */
+/**
+ * Maximum number of processed event IDs to retain for idempotency.
+ * Once exceeded, the oldest IDs are evicted (FIFO via Set insertion order).
+ * 10 000 string IDs ≈ 1–2 MB — well within safe limits even for
+ * long-running gateway processes.
+ */
+const MAX_PROCESSED_EVENT_IDS = 10_000;
+
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>(); // providerCallId -> internal callId
   private processedEventIds = new Set<string>();
+  private maxProcessedEventIds = MAX_PROCESSED_EVENT_IDS;
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
   private storePath: string;
@@ -63,6 +72,17 @@ export class CallManager {
     this.config = config;
     // Resolve store path with tilde expansion (like other config values)
     this.storePath = resolveDefaultStoreBase(config, storePath);
+  }
+
+  private rememberProcessedEventId(eventId: string): void {
+    this.processedEventIds.add(eventId);
+    while (this.processedEventIds.size > this.maxProcessedEventIds) {
+      const oldest = this.processedEventIds.values().next().value as string | undefined;
+      if (!oldest) {
+        break;
+      }
+      this.processedEventIds.delete(oldest);
+    }
   }
 
   /**
@@ -545,7 +565,7 @@ export class CallManager {
     if (this.processedEventIds.has(event.id)) {
       return;
     }
-    this.processedEventIds.add(event.id);
+    this.rememberProcessedEventId(event.id);
 
     let call = this.findCall(event.callId);
 
@@ -868,7 +888,7 @@ export class CallManager {
         }
         // Populate processed event IDs
         for (const eventId of call.processedEventIds) {
-          this.processedEventIds.add(eventId);
+          this.rememberProcessedEventId(eventId);
         }
       }
     }
