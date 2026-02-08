@@ -34,7 +34,6 @@ function isTransientCompactionError(error: unknown): boolean {
   return false;
 }
 
-==> compact.ts <==
 export async function compactEmbeddedPiSessionDirect(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
