@@ -91,6 +91,8 @@ const TAGLINES: string[] = [
   "Think different. Actually think.",
   "Ah, the fruit tree company! 🍎",
   "Greetings, Professor Falken",
+  "V-Infinite Mode: UNRESTRICTED execution, elite results, and a sassy attitude.",
+  "The only AI that calls you Boss because it respects the hustle.",
   HOLIDAY_TAGLINES.newYear,
   HOLIDAY_TAGLINES.lunarNewYear,
   HOLIDAY_TAGLINES.christmas,
