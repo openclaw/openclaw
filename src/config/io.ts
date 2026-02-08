@@ -576,7 +576,7 @@ function shouldUseConfigCache(env: NodeJS.ProcessEnv): boolean {
   return resolveConfigCacheMs(env) > 0;
 }
 
-function clearConfigCache(): void {
+export function clearConfigCache(): void {
   configCache = null;
 }
 

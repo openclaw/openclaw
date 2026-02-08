@@ -1,4 +1,5 @@
 export {
+  clearConfigCache,
   createConfigIO,
   loadConfig,
   parseConfigJson5,
