@@ -174,9 +174,10 @@ describe("noteSessionSecretsWarnings", () => {
 
     await noteSessionSecretsWarnings();
 
-    // Should complete without throwing
+    // Should complete without throwing and warn about unreadable files
     expect(mockNote).toHaveBeenCalled();
     const noteCall = mockNote.mock.calls[0][0];
+    expect(noteCall).toContain("Could not read 1 session file");
     expect(noteCall).toContain("no obvious unredacted secrets detected");
   });
 
