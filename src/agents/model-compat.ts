@@ -7,18 +7,25 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  const isBailian = model.provider === "bailian" || baseUrl.includes("dashscope.aliyuncs.com");
+
+  if ((!isZai && !isBailian) || !isOpenAiCompletionsModel(model)) {
     return model;
   }
 
   const openaiModel = model;
   const compat = openaiModel.compat ?? undefined;
-  if (compat?.supportsDeveloperRole === false) {
-    return model;
-  }
 
-  openaiModel.compat = compat
-    ? { ...compat, supportsDeveloperRole: false }
-    : { supportsDeveloperRole: false };
+  if (isZai) {
+    // Z.ai only needs supportsDeveloperRole: false
+    openaiModel.compat = compat
+      ? { ...compat, supportsDeveloperRole: false }
+      : { supportsDeveloperRole: false };
+  } else if (isBailian) {
+    // Bailian/DashScope needs both supportsDeveloperRole: false and thinkingFormat: "qwen"
+    openaiModel.compat = compat
+      ? { ...compat, supportsDeveloperRole: false, thinkingFormat: "qwen" }
+      : { supportsDeveloperRole: false, thinkingFormat: "qwen" };
+  }
   return openaiModel;
 }

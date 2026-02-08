@@ -11,6 +11,7 @@ export type ModelCompatConfig = {
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
+  thinkingFormat?: "openai" | "qwen" | "zai";
 };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
