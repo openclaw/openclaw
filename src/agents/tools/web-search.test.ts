@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "./web-search.js";
 
-const { inferPerplexityBaseUrlFromApiKey, resolvePerplexityBaseUrl, normalizeFreshness } =
-  __testing;
+const {
+  inferPerplexityBaseUrlFromApiKey,
+  resolvePerplexityBaseUrl,
+  normalizeFreshness,
+  resolveSeltzApiKey,
+} = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
   it("detects a Perplexity key prefix", () => {
@@ -66,5 +70,45 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  });
+});
+
+describe("web_search seltz API key resolution", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env = { ...originalEnv };
+    delete process.env.SELTZ_API_KEY;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("returns config source when apiKey is in config", () => {
+    const result = resolveSeltzApiKey({ apiKey: "test-seltz-key" });
+    expect(result.apiKey).toBe("test-seltz-key");
+    expect(result.source).toBe("config");
+  });
+
+  it("returns env source when SELTZ_API_KEY is set", () => {
+    process.env.SELTZ_API_KEY = "env-seltz-key";
+    const result = resolveSeltzApiKey({});
+    expect(result.apiKey).toBe("env-seltz-key");
+    expect(result.source).toBe("env");
+  });
+
+  it("prefers config over env", () => {
+    process.env.SELTZ_API_KEY = "env-seltz-key";
+    const result = resolveSeltzApiKey({ apiKey: "config-seltz-key" });
+    expect(result.apiKey).toBe("config-seltz-key");
+    expect(result.source).toBe("config");
+  });
+
+  it("returns none source when no key is available", () => {
+    const result = resolveSeltzApiKey({});
+    expect(result.apiKey).toBeUndefined();
+    expect(result.source).toBe("none");
   });
 });
