@@ -595,7 +595,8 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
-        void activeSession.abort();
+        // Catch AbortError from in-flight requests - expected during timeout aborts
+        activeSession.abort().catch(() => {});
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
