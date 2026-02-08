@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -371,5 +372,41 @@ export async function deliverOutboundPayloads(params: {
       });
     }
   }
+
+  // Fire message_sent hook only for successfully delivered payloads.
+  // When bestEffort is enabled, some payloads may fail — only report
+  // text from payloads that produced delivery results.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner && results.length > 0) {
+    // results array corresponds 1:1 with successful sends, so use
+    // results.length to determine how many payloads succeeded.
+    // In bestEffort mode, failed payloads call onError and are skipped.
+    const deliveredCount = results.length;
+    const deliveredText = normalizedPayloads
+      .slice(0, deliveredCount)
+      .map((p) => p.text ?? "")
+      .filter(Boolean)
+      .join("\n");
+    if (deliveredText) {
+      const ctx = {
+        channelId: channel,
+        accountId: accountId ?? undefined,
+        conversationId: to,
+      };
+      void hookRunner
+        .runMessageSent(
+          {
+            to,
+            content: deliveredText,
+            success: true,
+          },
+          ctx,
+        )
+        .catch(() => {
+          // Fire-and-forget — don't break delivery on hook errors
+        });
+    }
+  }
+
   return results;
 }

@@ -13,6 +13,11 @@ import {
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  getGlobalHookRunner: vi.fn(),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: mocks.getGlobalHookRunner,
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -329,6 +334,57 @@ describe("deliverOutboundPayloads", () => {
       expect.any(Error),
       expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
     );
+  });
+
+  it("calls runMessageSent with combined text after successful delivery", async () => {
+    const mockRunMessageSent = vi.fn().mockResolvedValue(undefined);
+    mocks.getGlobalHookRunner.mockReturnValue({ runMessageSent: mockRunMessageSent });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-1",
+      payloads: [{ text: "Hello" }, { text: "World" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(mockRunMessageSent).toHaveBeenCalledTimes(1);
+    expect(mockRunMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "Hello\nWorld",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "acct-1",
+        conversationId: "+1555",
+      }),
+    );
+    mocks.getGlobalHookRunner.mockReturnValue(null);
+  });
+
+  it("runMessageSent errors don't propagate to caller", async () => {
+    const mockRunMessageSent = vi.fn().mockRejectedValue(new Error("hook boom"));
+    mocks.getGlobalHookRunner.mockReturnValue({ runMessageSent: mockRunMessageSent });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {};
+
+    // Should not throw despite the hook rejection
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "safe" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(mockRunMessageSent).toHaveBeenCalledTimes(1);
+    mocks.getGlobalHookRunner.mockReturnValue(null);
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {
