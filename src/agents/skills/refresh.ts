@@ -29,6 +29,15 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
+  // Python virtual environments
+  /(^|[\\/])\.venv([\\/]|$)/,
+  /(^|[\\/])venv([\\/]|$)/,
+  // Python cache directories
+  /(^|[\\/])__pycache__([\\/]|$)/,
+  /(^|[\\/])\.pytest_cache([\\/]|$)/,
+  /(^|[\\/])\.mypy_cache([\\/]|$)/,
+  // Build artifacts and caches
+  /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
 function bumpVersion(current: number): number {
