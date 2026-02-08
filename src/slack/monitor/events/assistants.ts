@@ -37,6 +37,11 @@ export function registerSlackAssistantEvents(params: {
           `slack: assistant thread started in ${channelId}, context channel: ${contextChannelId ?? "none"}`,
         );
 
+        // Track this sidebar session so dispatch can post activity here.
+        const userId = thread.user_id;
+        ctx.sidebarSessions.set(userId, { channelId, threadTs });
+        logVerbose(`slack: registered sidebar session for user ${userId}`);
+
         // Set status while we prepare
         try {
           await client.apiCall("assistant.threads.setStatus", {

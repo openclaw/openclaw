@@ -48,6 +48,12 @@ export function normalizeSlackChannelType(
   return inferSlackChannelType(channelId) ?? "channel";
 }
 
+/** Tracks an active assistant sidebar session for a user. */
+export type SidebarSession = {
+  channelId: string;
+  threadTs: string;
+};
+
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -119,6 +125,11 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+
+  /** Active assistant sidebar sessions, keyed by Slack user ID. */
+  sidebarSessions: Map<string, SidebarSession>;
+  /** Post an activity message to a user's assistant sidebar (no-op if no active session). */
+  postToSidebar: (userId: string, text: string) => Promise<void>;
 };
 
 export function createSlackMonitorContext(params: {
@@ -293,6 +304,25 @@ export function createSlackMonitorContext(params: {
     }
   };
 
+  const sidebarSessions = new Map<string, SidebarSession>();
+
+  const postToSidebar = async (userId: string, text: string) => {
+    const session = sidebarSessions.get(userId);
+    if (!session) {
+      return;
+    }
+    try {
+      await params.app.client.chat.postMessage({
+        token: params.botToken,
+        channel: session.channelId,
+        thread_ts: session.threadTs,
+        text,
+      });
+    } catch (err) {
+      logVerbose(`slack: sidebar post failed for user ${userId}: ${String(err)}`);
+    }
+  };
+
   const isChannelAllowed = (p: {
     channelId?: string;
     channelName?: string;
@@ -425,5 +455,7 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    sidebarSessions,
+    postToSidebar,
   };
 }

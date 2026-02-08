@@ -73,6 +73,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
       await updateStatus("is typing...");
+      postSidebarActivity("Processing message...");
     },
     stop: async () => {
       if (!didSetStatus) {
@@ -119,6 +120,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Wrapped in an object so TypeScript can track mutations across closures.
   const streamState = { handle: null as SlackStreamHandle | null, failed: false };
 
+  // Post activity to the user's assistant sidebar (fire-and-forget).
+  const sidebarUserId = message.user;
+  const postSidebarActivity = (text: string) => {
+    if (sidebarUserId) {
+      void ctx.postToSidebar(sidebarUserId, text).catch(() => {});
+    }
+  };
+
   const deliverNormal = async (payload: ReplyPayload) => {
     const replyThreadTs = replyPlan.nextThreadTs();
     await deliverReplies({
@@ -142,6 +151,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         const statusHint = extractToolStatusHint(toolText);
         if (statusHint) {
           void updateStatus(statusHint).catch(() => {});
+          postSidebarActivity(statusHint);
         }
       }
       await deliverNormal(payload);
@@ -206,7 +216,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: slackStreamingEnabled
       ? async (payload, info) => deliverStreaming(payload, info.kind)
-      : async (payload) => deliverNormal(payload),
+      : async (payload, info) => {
+          if (info.kind === "tool") {
+            const toolText = payload.text?.trim();
+            if (toolText) {
+              const statusHint = extractToolStatusHint(toolText);
+              if (statusHint) {
+                postSidebarActivity(statusHint);
+              }
+            }
+          }
+          await deliverNormal(payload);
+        },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
