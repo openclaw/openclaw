@@ -239,12 +239,22 @@ function resolvePerplexityBaseUrl(
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
 
-function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+function resolvePerplexityModel(perplexity?: PerplexityConfig, baseUrl?: string): string {
   const fromConfig =
     perplexity && "model" in perplexity && typeof perplexity.model === "string"
       ? perplexity.model.trim()
       : "";
-  return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+  if (fromConfig) {
+    return fromConfig;
+  }
+  
+  // When using direct Perplexity API (not OpenRouter), use model name without prefix
+  if (baseUrl === PERPLEXITY_DIRECT_BASE_URL) {
+    return "sonar-pro";
+  }
+  
+  // Default for OpenRouter: use prefixed model name
+  return DEFAULT_PERPLEXITY_MODEL;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -529,7 +539,7 @@ export function createWebSearchTool(options?: {
           perplexityAuth?.source,
           perplexityAuth?.apiKey,
         ),
-        perplexityModel: resolvePerplexityModel(perplexityConfig),
+        perplexityModel: resolvePerplexityModel(perplexityConfig, perplexityBaseUrl),
       });
       return jsonResult(result);
     },
