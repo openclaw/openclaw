@@ -156,6 +156,12 @@ export function renderOverview(props: OverviewProps) {
                 const v = (e.target as HTMLInputElement).value;
                 props.onPasswordChange(v);
               }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  props.onConnect();
+                }
+              }}
               placeholder="system or shared password"
             />
           </label>

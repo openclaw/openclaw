@@ -145,6 +145,14 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+
+      // Auto-switch to Chat tab when connecting from the Overview page
+      if ((host as unknown as { tab: string }).tab === "overview") {
+        const appHost = host as unknown as { setTab: (tab: string) => void };
+        if (typeof appHost.setTab === "function") {
+          appHost.setTab("chat");
+        }
+      }
     },
     onClose: ({ code, reason }) => {
       host.connected = false;
