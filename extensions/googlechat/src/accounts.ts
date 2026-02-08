@@ -53,7 +53,11 @@ function resolveAccountConfig(
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
-  return accounts[accountId];
+  const config = (accounts as Record<string, unknown>)[accountId];
+  if (!config || typeof config !== "object") {
+    return undefined;
+  }
+  return config as GoogleChatAccountConfig;
 }
 
 function mergeGoogleChatAccountConfig(

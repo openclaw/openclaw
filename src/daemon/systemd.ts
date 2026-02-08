@@ -38,6 +38,10 @@ function resolveSystemdUnitPathForName(
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
+function resolveSystemdSystemUnitPathForName(name: string): string {
+  return `/etc/systemd/system/${name}.service`;
+}
+
 function resolveSystemdServiceName(env: Record<string, string | undefined>): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
@@ -48,6 +52,10 @@ function resolveSystemdServiceName(env: Record<string, string | undefined>): str
 
 function resolveSystemdUnitPath(env: Record<string, string | undefined>): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
+}
+
+function resolveSystemdSystemUnitPath(env: Record<string, string | undefined>): string {
+  return resolveSystemdSystemUnitPathForName(resolveSystemdServiceName(env));
 }
 
 export function resolveSystemdUserUnitPath(env: Record<string, string | undefined>): string {
@@ -67,42 +75,48 @@ export async function readSystemdServiceExecStart(
   environment?: Record<string, string>;
   sourcePath?: string;
 } | null> {
-  const unitPath = resolveSystemdUnitPath(env);
-  try {
-    const content = await fs.readFile(unitPath, "utf8");
-    let execStart = "";
-    let workingDirectory = "";
-    const environment: Record<string, string> = {};
-    for (const rawLine of content.split("\n")) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith("#")) {
-        continue;
-      }
-      if (line.startsWith("ExecStart=")) {
-        execStart = line.slice("ExecStart=".length).trim();
-      } else if (line.startsWith("WorkingDirectory=")) {
-        workingDirectory = line.slice("WorkingDirectory=".length).trim();
-      } else if (line.startsWith("Environment=")) {
-        const raw = line.slice("Environment=".length).trim();
-        const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) {
-          environment[parsed.key] = parsed.value;
+  // Try user service first, then system service
+  const userUnitPath = resolveSystemdUnitPath(env);
+  const systemUnitPath = resolveSystemdSystemUnitPath(env);
+
+  for (const unitPath of [userUnitPath, systemUnitPath]) {
+    try {
+      const content = await fs.readFile(unitPath, "utf8");
+      let execStart = "";
+      let workingDirectory = "";
+      const environment: Record<string, string> = {};
+      for (const rawLine of content.split("\n")) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) {
+          continue;
+        }
+        if (line.startsWith("ExecStart=")) {
+          execStart = line.slice("ExecStart=".length).trim();
+        } else if (line.startsWith("WorkingDirectory=")) {
+          workingDirectory = line.slice("WorkingDirectory=".length).trim();
+        } else if (line.startsWith("Environment=")) {
+          const raw = line.slice("Environment=".length).trim();
+          const parsed = parseSystemdEnvAssignment(raw);
+          if (parsed) {
+            environment[parsed.key] = parsed.value;
+          }
         }
       }
+      if (!execStart) {
+        continue;
+      }
+      const programArguments = parseSystemdExecStart(execStart);
+      return {
+        programArguments,
+        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(Object.keys(environment).length > 0 ? { environment } : {}),
+        sourcePath: unitPath,
+      };
+    } catch {
+      // Continue to next path
     }
-    if (!execStart) {
-      return null;
-    }
-    const programArguments = parseSystemdExecStart(execStart);
-    return {
-      programArguments,
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      sourcePath: unitPath,
-    };
-  } catch {
-    return null;
   }
+  return null;
 }
 
 export type SystemdServiceInfo = {
@@ -147,9 +161,13 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
 
 async function execSystemctl(
   args: string[],
+  options?: { useSudo?: boolean },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
-    const { stdout, stderr } = await execFileAsync("systemctl", args, {
+    const cmd = options?.useSudo ? "sudo" : "systemctl";
+    // Security: use non-interactive sudo (-n) to avoid hanging on password prompts
+    const cmdArgs = options?.useSudo ? ["-n", "systemctl", ...args] : args;
+    const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
       encoding: "utf8",
     });
     return {
@@ -198,6 +216,21 @@ export async function isSystemdUserServiceAvailable(): Promise<boolean> {
     return false;
   }
   return false;
+}
+
+export async function isSystemdSystemServiceAvailable(): Promise<boolean> {
+  // Check if we can run systemctl (may require sudo)
+  // Note: we don't use useSudo: true here to avoid permission-denied false positives
+  const res = await execSystemctl(["status"]);
+  // If it doesn't error with \"command not found\", systemd is available
+  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  if (detail.includes("not found")) {
+    return false;
+  }
+  if (detail.includes("command not found")) {
+    return false;
+  }
+  return true;
 }
 
 async function assertSystemdAvailable() {
@@ -296,14 +329,27 @@ export async function stopSystemdService({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
-  await assertSystemdAvailable();
+  // Check if user service exists first, otherwise try system service
   const serviceName = resolveSystemdServiceName(env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "stop", unitName]);
-  if (res.code !== 0) {
-    throw new Error(`systemctl stop failed: ${res.stderr || res.stdout}`.trim());
+
+  // Try user service first
+  const userRes = await execSystemctl(["--user", "stop", unitName]);
+  if (userRes.code === 0) {
+    stdout.write(`${formatLine("Stopped systemd user service", unitName)}\n`);
+    return;
   }
-  stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
+
+  // Try system service
+  const systemRes = await execSystemctl(["stop", unitName], { useSudo: true });
+  if (systemRes.code === 0) {
+    stdout.write(`${formatLine("Stopped systemd system service", unitName)}\n`);
+    return;
+  }
+
+  const userErr = (userRes.stderr || userRes.stdout).trim();
+  const sysErr = (systemRes.stderr || systemRes.stdout).trim();
+  throw new Error(`systemctl stop failed.\nUser: ${userErr}\nSystem: ${sysErr}`);
 }
 
 export async function restartSystemdService({
@@ -313,40 +359,53 @@ export async function restartSystemdService({
   stdout: NodeJS.WritableStream;
   env?: Record<string, string | undefined>;
 }): Promise<void> {
-  await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "restart", unitName]);
-  if (res.code !== 0) {
-    throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
+
+  // Try user service first
+  const userRes = await execSystemctl(["--user", "restart", unitName]);
+  if (userRes.code === 0) {
+    stdout.write(`${formatLine("Restarted systemd user service", unitName)}\n`);
+    return;
   }
-  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
+
+  // Try system service
+  const systemRes = await execSystemctl(["restart", unitName], { useSudo: true });
+  if (systemRes.code === 0) {
+    stdout.write(`${formatLine("Restarted systemd system service", unitName)}\n`);
+    return;
+  }
+
+  const userErr = (userRes.stderr || userRes.stdout).trim();
+  const sysErr = (systemRes.stderr || systemRes.stdout).trim();
+  throw new Error(`systemctl restart failed.\nUser: ${userErr}\nSystem: ${sysErr}`);
 }
 
 export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
-  await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl(["--user", "is-enabled", unitName]);
-  return res.code === 0;
+
+  // Check user service
+  const userRes = await execSystemctl(["--user", "is-enabled", unitName]);
+  if (userRes.code === 0) {
+    return true;
+  }
+
+  // Check system service
+  const systemRes = await execSystemctl(["is-enabled", unitName], { useSudo: true });
+  return systemRes.code === 0;
 }
 
 export async function readSystemdServiceRuntime(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSystemdAvailable();
-  } catch (err) {
-    return {
-      status: "unknown",
-      detail: String(err),
-    };
-  }
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctl([
+
+  // Try user service first
+  const userRes = await execSystemctl([
     "--user",
     "show",
     unitName,
@@ -354,27 +413,59 @@ export async function readSystemdServiceRuntime(
     "--property",
     "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
   ]);
-  if (res.code !== 0) {
-    const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("not found");
+
+  if (userRes.code === 0) {
+    const parsed = parseSystemdShow(userRes.stdout || "");
+    const activeState = parsed.activeState?.toLowerCase();
+    const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
     return {
-      status: missing ? "stopped" : "unknown",
-      detail: detail || undefined,
-      missingUnit: missing,
+      status,
+      state: parsed.activeState,
+      subState: parsed.subState,
+      pid: parsed.mainPid,
+      lastExitStatus: parsed.execMainStatus,
+      lastExitReason: parsed.execMainCode,
+      lastRunResult: parsed.execMainCode,
     };
   }
-  const parsed = parseSystemdShow(res.stdout || "");
-  const activeState = parsed.activeState?.toLowerCase();
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+
+  // Try system service
+  const systemRes = await execSystemctl(
+    [
+      "show",
+      unitName,
+      "--no-page",
+      "--property",
+      "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+    ],
+    { useSudo: true },
+  );
+
+  if (systemRes.code === 0) {
+    const parsed = parseSystemdShow(systemRes.stdout || "");
+    const activeState = parsed.activeState?.toLowerCase();
+    const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+    return {
+      status,
+      state: parsed.activeState,
+      subState: parsed.subState,
+      pid: parsed.mainPid,
+      lastExitStatus: parsed.execMainStatus,
+      lastExitReason: parsed.execMainCode,
+      lastRunResult: parsed.execMainCode,
+      isSystemService: true,
+    };
+  }
+
+  const detail = (systemRes.stderr || systemRes.stdout).trim();
+  const missing = detail.toLowerCase().includes("not found");
   return {
-    status,
-    state: parsed.activeState,
-    subState: parsed.subState,
-    pid: parsed.mainPid,
-    lastExitStatus: parsed.execMainStatus,
-    lastExitReason: parsed.execMainCode,
+    status: missing ? "stopped" : "unknown",
+    detail: detail || undefined,
+    missingUnit: missing,
   };
 }
+
 export type LegacySystemdUnit = {
   name: string;
   unitPath: string;

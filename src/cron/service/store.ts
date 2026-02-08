@@ -275,8 +275,6 @@ export async function ensureLoaded(
   if (state.store && !opts?.forceReload) {
     return;
   }
-  // Force reload always re-reads the file to avoid missing cross-service
-  // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
