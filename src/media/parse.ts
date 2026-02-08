@@ -1,5 +1,7 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
+import * as os from "os";
+import * as path from "path";
 import { parseFenceSpans } from "../markdown/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
@@ -14,6 +16,60 @@ function cleanCandidate(raw: string) {
   return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
 }
 
+/**
+ * Normalize path for case-insensitive comparison on Windows/macOS.
+ * Assumes default case-insensitive macOS volumes; avoids bypass on HFS+.
+ * Case-sensitive macOS volumes (HFSX) are rare in practice.
+ */
+function normalizeForCompare(p: string): string {
+  if (process.platform === "win32" || process.platform === "darwin") {
+    return p.toLowerCase();
+  }
+  return p;
+}
+
+/**
+ * Get all valid temp directory roots.
+ * Includes os.tmpdir() and /tmp on POSIX when different.
+ */
+function getTempRoots(): Set<string> {
+  const roots = new Set([path.resolve(os.tmpdir())]);
+
+  // On POSIX, /tmp is also a valid temp location (os.tmpdir() may return
+  // /var/folders/... on macOS, but tools often use /tmp directly)
+  if (path.sep === "/" && !roots.has("/tmp")) {
+    roots.add(path.resolve("/tmp"));
+  }
+
+  return roots;
+}
+
+/**
+ * Check if an absolute path safely resolves under any temp directory root.
+ * Prevents path traversal attacks (e.g., /tmp/../etc/passwd).
+ * Uses path.relative() to avoid prefix edge cases and trailing-slash quirks.
+ */
+function isSafeTempPath(candidate: string): boolean {
+  const resolved = path.resolve(candidate);
+  const normalizedResolved = normalizeForCompare(resolved);
+  const tempRoots = getTempRoots();
+
+  for (const tempRoot of tempRoots) {
+    const normalizedRoot = normalizeForCompare(tempRoot);
+    const rel = path.relative(normalizedRoot, normalizedResolved);
+
+    // Valid if:
+    // - rel is not empty (candidate is not the temp dir itself)
+    // - rel doesn't start with ".." (candidate is inside temp dir)
+    // - rel is not absolute (handles Windows cross-drive edge case)
+    if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
   if (!candidate) {
     return false;
@@ -25,6 +81,11 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return false;
   }
   if (/^https?:\/\//i.test(candidate)) {
+    return true;
+  }
+
+  // Allow absolute paths under OS temp directory (for tool outputs like TTS)
+  if (path.isAbsolute(candidate) && isSafeTempPath(candidate)) {
     return true;
   }
 

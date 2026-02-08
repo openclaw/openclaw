@@ -1,3 +1,5 @@
+import * as os from "os";
+import * as path from "path";
 import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
@@ -57,5 +59,54 @@ describe("splitMediaFromOutput", () => {
     const result = splitMediaFromOutput("  MEDIA:./screenshot.png");
     expect(result.mediaUrls).toEqual(["./screenshot.png"]);
     expect(result.text).toBe("");
+  });
+
+  describe("temp directory paths", () => {
+    const tempDir = path.resolve(os.tmpdir());
+
+    it("accepts paths under OS temp directory", () => {
+      const testPath = path.join(tempDir, "tts-abc123", "voice.opus");
+      const result = splitMediaFromOutput(`MEDIA:${testPath}`);
+      expect(result.mediaUrls).toHaveLength(1);
+      expect(result.mediaUrls?.[0]).toBe(testPath);
+    });
+
+    it.skipIf(path.sep !== "/")("accepts paths under /tmp on POSIX", () => {
+      const testPath = path.join("/tmp", "tts-abc123", "voice.opus");
+      const result = splitMediaFromOutput(`MEDIA:${testPath}`);
+      expect(result.mediaUrls).toHaveLength(1);
+      expect(result.mediaUrls?.[0]).toBe(testPath);
+    });
+
+    it("accepts nested temp directory paths", () => {
+      const testPath = path.join(tempDir, "openclaw", "sessions", "audio.mp3");
+      const result = splitMediaFromOutput(`MEDIA:${testPath}`);
+      expect(result.mediaUrls).toHaveLength(1);
+    });
+
+    it("rejects path traversal from temp directory", () => {
+      const testPath = path.join(tempDir, "..", "etc", "passwd");
+      const result = splitMediaFromOutput(`MEDIA:${testPath}`);
+      expect(result.mediaUrls).toBeUndefined();
+    });
+
+    it("rejects the temp directory itself (not a file)", () => {
+      const result = splitMediaFromOutput(`MEDIA:${tempDir}`);
+      expect(result.mediaUrls).toBeUndefined();
+    });
+
+    it("rejects absolute paths outside temp directory", () => {
+      // OS-portable path outside any temp root
+      const outsidePath = path.join(path.parse(tempDir).root, "outside", "file.txt");
+      const result = splitMediaFromOutput(`MEDIA:${outsidePath}`);
+      expect(result.mediaUrls).toBeUndefined();
+    });
+
+    it("rejects absolute paths with similar prefix but outside temp", () => {
+      // e.g., /tmp-evil/file should not match /tmp
+      const evilPath = `${tempDir}-evil${path.sep}malicious.sh`;
+      const result = splitMediaFromOutput(`MEDIA:${evilPath}`);
+      expect(result.mediaUrls).toBeUndefined();
+    });
   });
 });
