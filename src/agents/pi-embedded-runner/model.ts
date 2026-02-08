@@ -2,7 +2,11 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  WELL_KNOWN_CONTEXT_WINDOWS,
+  WELL_KNOWN_MAX_TOKENS,
+} from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
@@ -210,8 +214,14 @@ export function resolveModel(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+        contextWindow:
+          providerCfg?.models?.[0]?.contextWindow ??
+          WELL_KNOWN_CONTEXT_WINDOWS[modelId] ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          providerCfg?.models?.[0]?.maxTokens ??
+          WELL_KNOWN_MAX_TOKENS[modelId] ??
+          DEFAULT_CONTEXT_TOKENS,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }

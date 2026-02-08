@@ -6,6 +6,11 @@ import {
   evaluateContextWindowGuard,
   resolveContextWindowInfo,
 } from "./context-window-guard.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  WELL_KNOWN_CONTEXT_WINDOWS,
+  WELL_KNOWN_MAX_TOKENS,
+} from "./defaults.js";
 
 describe("context-window-guard", () => {
   it("blocks below 16k (model metadata)", () => {
@@ -145,5 +150,50 @@ describe("context-window-guard", () => {
   it("exports thresholds as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(16_000);
     expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(32_000);
+  });
+});
+
+describe("WELL_KNOWN_CONTEXT_WINDOWS fallback", () => {
+  it("claude-opus-4-6 has 1M context window in well-known map", () => {
+    expect(WELL_KNOWN_CONTEXT_WINDOWS["claude-opus-4-6"]).toBe(1_000_000);
+  });
+
+  it("claude-sonnet-4-5-20250929 has 200k context window in well-known map", () => {
+    expect(WELL_KNOWN_CONTEXT_WINDOWS["claude-sonnet-4-5-20250929"]).toBe(200_000);
+  });
+
+  it("unknown model is not in well-known map (falls back to DEFAULT_CONTEXT_TOKENS)", () => {
+    const unknown = WELL_KNOWN_CONTEXT_WINDOWS["unknown-model-xyz"];
+    expect(unknown).toBeUndefined();
+    // The fallback chain: providerCfg?.models?.[0]?.contextWindow ?? WELL_KNOWN_CONTEXT_WINDOWS[modelId] ?? DEFAULT_CONTEXT_TOKENS
+    // When model is not in the map, ?? chains through to DEFAULT_CONTEXT_TOKENS
+    expect(unknown ?? DEFAULT_CONTEXT_TOKENS).toBe(200_000);
+  });
+
+  it("well-known context window is used when provider config has no contextWindow", () => {
+    // Simulates the fallback chain in resolveModel() line 99
+    const providerCfg: { models?: Array<{ contextWindow?: number }> } = {};
+    const modelId = "claude-opus-4-6";
+    const resolved =
+      providerCfg?.models?.[0]?.contextWindow ??
+      WELL_KNOWN_CONTEXT_WINDOWS[modelId] ??
+      DEFAULT_CONTEXT_TOKENS;
+    expect(resolved).toBe(1_000_000);
+  });
+
+  it("provider config contextWindow takes priority over well-known map", () => {
+    const providerCfg = { models: [{ contextWindow: 500_000 }] };
+    const modelId = "claude-opus-4-6";
+    const resolved =
+      providerCfg?.models?.[0]?.contextWindow ??
+      WELL_KNOWN_CONTEXT_WINDOWS[modelId] ??
+      DEFAULT_CONTEXT_TOKENS;
+    expect(resolved).toBe(500_000);
+  });
+
+  it("WELL_KNOWN_MAX_TOKENS has matching entries", () => {
+    expect(WELL_KNOWN_MAX_TOKENS["claude-opus-4-6"]).toBe(32_000);
+    expect(WELL_KNOWN_MAX_TOKENS["claude-sonnet-4-5-20250929"]).toBe(16_000);
+    expect(WELL_KNOWN_MAX_TOKENS["unknown-model-xyz"]).toBeUndefined();
   });
 });
