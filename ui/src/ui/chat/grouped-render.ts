@@ -38,6 +38,14 @@ function extractImages(message: unknown): ImageBlock[] {
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
           images.push({ url });
+        } else if (typeof b.data === "string" && typeof b.mimeType === "string") {
+          // Handle tool result format: { type: "image", data: "base64...", mimeType: "image/png" }
+          const data = b.data as string;
+          const mimeType = b.mimeType as string;
+          const url = data.startsWith("data:")
+            ? data
+            : `data:${mimeType};base64,${data}`;
+          images.push({ url });
         } else if (typeof b.url === "string") {
           images.push({ url: b.url });
         }
