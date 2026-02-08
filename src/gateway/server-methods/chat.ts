@@ -85,6 +85,29 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
+export function readTranscriptLeafId(transcriptPath: string): string | null {
+  if (!fs.existsSync(transcriptPath)) {
+    return null;
+  }
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.split(/\r?\n/).filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (parsed?.id && parsed?.type === "message") {
+          return parsed.id;
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+  return null;
+}
+
 function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -125,9 +148,11 @@ function appendAssistantTranscriptMessage(params: {
     stopReason: "injected",
     usage: { input: 0, output: 0, totalTokens: 0 },
   };
+  const parentId = readTranscriptLeafId(transcriptPath);
   const transcriptEntry = {
-    type: "message",
+    type: "message" as const,
     id: messageId,
+    ...(parentId ? { parentId } : {}),
     timestamp: new Date(now).toISOString(),
     message: messageBody,
   };
