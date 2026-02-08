@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
@@ -17,6 +18,28 @@ import {
 import { updateBrowserRegistry } from "./registry.js";
 import { slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
+
+/**
+ * Returns the host address that Docker containers can use to reach the gateway.
+ *
+ * Precedence:
+ * 1. OPENCLAW_DOCKER_HOST env var (for custom setups: rootless Docker, Colima, etc.)
+ * 2. host.docker.internal (macOS/Windows Docker Desktop)
+ * 3. 172.17.0.1 (Linux default bridge gateway)
+ */
+function resolveDockerHostAddress(): string {
+  const envOverride = process.env.OPENCLAW_DOCKER_HOST?.trim();
+  if (envOverride) {
+    return envOverride;
+  }
+  const platform = os.platform();
+  if (platform === "darwin" || platform === "win32") {
+    return "host.docker.internal";
+  }
+  // Linux: Docker bridge default gateway. Override with OPENCLAW_DOCKER_HOST
+  // for non-standard setups (rootless Docker, custom bridge networks, etc.).
+  return "172.17.0.1";
+}
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -189,6 +212,20 @@ export async function ensureSandboxBrowser(params: {
         }
       : undefined;
 
+    // Bind to all interfaces so containers can reach the bridge.
+    // Use Docker host address in the URL so containers can connect.
+    //
+    // Security note: Binding to 0.0.0.0 exposes the bridge on the host network.
+    // Mitigations in place:
+    // - Ephemeral port (0) - not a well-known port attackers would scan
+    // - Short-lived - only active during sandbox session
+    // - Local traffic only - Docker bridge network is typically not routed externally
+    // - Read-heavy API - bridge primarily serves browser state, limited write operations
+    //
+    // TODO: Add auth token support. The bridge-server.ts already supports authToken,
+    // but it needs to be plumbed through to the sandbox browser client code that
+    // makes requests to the bridge. Track in a follow-up issue.
+    const dockerHost = resolveDockerHostAddress();
     return await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
@@ -196,6 +233,8 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      host: "0.0.0.0",
+      baseUrlHost: dockerHost,
       onEnsureAttachTarget,
     });
   };

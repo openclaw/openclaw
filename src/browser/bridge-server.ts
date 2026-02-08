@@ -23,6 +23,9 @@ export async function startBrowserBridgeServer(params: {
   port?: number;
   authToken?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
+  /** Host to use in the returned baseUrl. Useful when binding to 0.0.0.0 but
+   * returning a URL that clients in Docker containers can reach. */
+  baseUrlHost?: string;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   const port = params.port ?? 0;
@@ -65,7 +68,8 @@ export async function startBrowserBridgeServer(params: {
   state.port = resolvedPort;
   state.resolved.controlPort = resolvedPort;
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const urlHost = params.baseUrlHost ?? host;
+  const baseUrl = `http://${urlHost}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
