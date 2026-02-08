@@ -220,7 +220,11 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  if (!fs.existsSync(filePath)) {
+  let raw: string | null = null;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    // File does not exist or is unreadable.
     const file = normalizeExecApprovals({ version: 1, agents: {} });
     return {
       path: filePath,
@@ -230,7 +234,6 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const raw = fs.readFileSync(filePath, "utf8");
   let parsed: ExecApprovalsFile | null = null;
   try {
     parsed = JSON.parse(raw) as ExecApprovalsFile;
