@@ -737,6 +737,58 @@ describe("sessions tools", () => {
     resetSubagentRegistryForTests();
   });
 
+  it("subagents list usage separates io tokens from prompt/cache", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-usage-active",
+      childSessionKey: "agent:main:subagent:usage-active",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait and check weather",
+      cleanup: "keep",
+      createdAt: now - 2 * 60_000,
+      startedAt: now - 2 * 60_000,
+    });
+
+    const sessionsModule = await import("../config/sessions.js");
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:usage-active": {
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          inputTokens: 12,
+          outputTokens: 1000,
+          totalTokens: 197000,
+        },
+      }));
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      const result = await tool.execute("call-subagents-list-usage", { action: "list" });
+      const details = result.details as {
+        status?: string;
+        text?: string;
+      };
+      expect(details.status).toBe("ok");
+      expect(details.text).toContain("tokens 1k (in 12 / out 1k)");
+      expect(details.text).toContain("prompt/cache 197k");
+      expect(details.text).not.toContain("1.0k io");
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+      resetSubagentRegistryForTests();
+    }
+  });
+
   it("subagents steer sends guidance to a running run", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

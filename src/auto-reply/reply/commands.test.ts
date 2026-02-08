@@ -8,6 +8,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
@@ -300,6 +301,43 @@ describe("handleCommands subagents", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("active subagents:");
     expect(result.reply?.text).toContain("do thing");
+  });
+
+  it("formats subagent usage with io and prompt/cache breakdown", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    addSubagentRunForTests({
+      runId: "run-usage",
+      childSessionKey: "agent:main:subagent:usage",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 1000,
+      startedAt: 1000,
+    });
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-usage.json");
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:subagent:usage"] = {
+        sessionId: "child-session-usage",
+        updatedAt: Date.now(),
+        inputTokens: 12,
+        outputTokens: 1000,
+        totalTokens: 197000,
+        model: "opencode/claude-opus-4-6",
+      };
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents list", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("tokens 1k (in 12 / out 1k)");
+    expect(result.reply?.text).toContain("prompt/cache 197k");
+    expect(result.reply?.text).not.toContain("1k io");
   });
 
   it("omits subagent status line when none exist", async () => {

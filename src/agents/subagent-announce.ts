@@ -40,6 +40,29 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
+function formatSubagentUsage(parts: { total?: number; input?: number; output?: number }) {
+  const input = typeof parts.input === "number" && Number.isFinite(parts.input) ? parts.input : 0;
+  const output =
+    typeof parts.output === "number" && Number.isFinite(parts.output) ? parts.output : 0;
+  const ioTotal = input + output;
+  const promptCache =
+    typeof parts.total === "number" && Number.isFinite(parts.total) ? parts.total : undefined;
+
+  if (ioTotal > 0) {
+    const inputText = formatTokenCount(input);
+    const outputText = formatTokenCount(output);
+    const usageBits = [`tokens ${formatTokenCount(ioTotal)} (in ${inputText} / out ${outputText})`];
+    if (typeof promptCache === "number" && promptCache > ioTotal) {
+      usageBits.push(`prompt/cache ${formatTokenCount(promptCache)}`);
+    }
+    return usageBits.join(" • ");
+  }
+  if (typeof promptCache === "number" && promptCache > 0) {
+    return `tokens ${formatTokenCount(promptCache)} prompt/cache`;
+  }
+  return "tokens n/a";
+}
+
 function formatUsd(value?: number) {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
@@ -264,14 +287,7 @@ async function buildSubagentStatsLine(params: {
   const parts: string[] = [];
   const runtime = formatDurationCompact(runtimeMs);
   parts.push(`runtime ${runtime ?? "n/a"}`);
-  if (typeof total === "number") {
-    const inputText = typeof input === "number" ? formatTokenCount(input) : "n/a";
-    const outputText = typeof output === "number" ? formatTokenCount(output) : "n/a";
-    const totalText = formatTokenCount(total);
-    parts.push(`tokens ${totalText} (in ${inputText} / out ${outputText})`);
-  } else {
-    parts.push("tokens n/a");
-  }
+  parts.push(formatSubagentUsage({ total, input, output }));
   const costText = formatUsd(cost);
   if (costText) {
     parts.push(`est ${costText}`);
@@ -499,14 +515,16 @@ export async function runSubagentAnnounceFlow(params: {
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
     const triggerMessage = [
-      `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      `[System Message] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Findings:",
       reply || "(no output)",
       "",
       statsLine,
       "",
+      "This block is internal context and is not user-visible unless you explicitly share it.",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
+      "Do not say the user can see this block, logs, or output above unless you already sent that content to them.",
       `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");

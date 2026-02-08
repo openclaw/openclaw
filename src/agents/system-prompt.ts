@@ -110,6 +110,7 @@ function buildMessagingSection(params: {
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -406,6 +407,7 @@ export function buildAgentSystemPrompt(params: {
           "- apply_patch: apply multi-file patches",
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
+          `- For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",

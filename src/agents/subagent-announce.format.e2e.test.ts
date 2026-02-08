@@ -99,6 +99,7 @@ describe("subagent announce formatting", () => {
     };
     const msg = call?.params?.message as string;
     expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(msg).toContain("[System Message]");
     expect(msg).toContain("subagent task");
     expect(msg).toContain("failed");
     expect(msg).toContain("boom");
@@ -127,6 +128,38 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("completed successfully");
+  });
+
+  it("formats stats usage without redundant io label and shows prompt/cache separately", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-usage",
+        inputTokens: 12,
+        outputTokens: 1000,
+        totalTokens: 197000,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-usage",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
+    expect(msg).toContain("prompt/cache 197.0k");
+    expect(msg).not.toContain("tokens 1.0k io");
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
@@ -160,7 +193,7 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
       "session-123",
-      expect.stringContaining("subagent task"),
+      expect.stringContaining("[System Message]"),
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { CommandHandler } from "./commands-types.js";
 import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
-import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   extractAssistantText,
@@ -110,6 +110,46 @@ function resolveTotalTokens(entry?: {
   const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
   const total = input + output;
   return total > 0 ? total : undefined;
+}
+
+function resolveIoTokens(entry?: { inputTokens?: unknown; outputTokens?: unknown }) {
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const input =
+    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
+      ? entry.inputTokens
+      : 0;
+  const output =
+    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
+      ? entry.outputTokens
+      : 0;
+  const total = input + output;
+  if (total <= 0) {
+    return undefined;
+  }
+  return { input, output, total };
+}
+
+function resolveUsageDisplay(entry?: {
+  totalTokens?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+}) {
+  const io = resolveIoTokens(entry);
+  const promptCache = resolveTotalTokens(entry);
+  const parts: string[] = [];
+  if (io) {
+    const input = formatTokenShort(io.input) ?? "0";
+    const output = formatTokenShort(io.output) ?? "0";
+    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
+  } else if (typeof promptCache === "number" && promptCache > 0) {
+    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
+  }
+  if (typeof promptCache === "number" && io && promptCache > io.total) {
+    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
+  }
+  return parts.join(", ");
 }
 
 function resolveDisplayStatus(entry: SubagentRunRecord) {
@@ -356,13 +396,12 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           entry.childSessionKey,
           storeCache,
         );
-        const totalTokens = resolveTotalTokens(sessionEntry);
-        const tokenText = formatTokenShort(totalTokens);
+        const usageText = resolveUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
         const task = truncateLine(entry.task.trim(), 72);
         const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
         const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${tokenText ? `, ${tokenText} tokens` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
         index += 1;
         return line;
       });
@@ -374,15 +413,14 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           entry.childSessionKey,
           storeCache,
         );
-        const totalTokens = resolveTotalTokens(sessionEntry);
-        const tokenText = formatTokenShort(totalTokens);
+        const usageText = resolveUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
         const task = truncateLine(entry.task.trim(), 72);
         const runtime = formatDurationCompact(
           (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
         );
         const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${tokenText ? `, ${tokenText} tokens` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
         index += 1;
         return line;
       });
@@ -568,17 +606,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         : undefined;
 
     if (steerRequested) {
-      // Prefer in-run steering when the subagent is currently streaming.
-      if (targetSessionId && queueEmbeddedPiMessage(targetSessionId, message)) {
-        return {
-          shouldContinue: false,
-          reply: {
-            text: `steered ${formatRunLabel(resolved.entry)}.`,
-          },
-        };
-      }
-
-      // Otherwise force an immediate interruption and make steer the next run.
+      // Force an immediate interruption and make steer the next run.
       if (targetSessionId) {
         abortEmbeddedPiRun(targetSessionId);
       }

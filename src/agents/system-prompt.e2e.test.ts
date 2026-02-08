@@ -103,6 +103,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not invent commands");
   });
 
+  it("marks system message blocks as internal and not user-visible", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
+    expect(prompt).toContain("Never claim the user can see internal logs/context");
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

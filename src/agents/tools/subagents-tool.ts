@@ -14,7 +14,7 @@ import {
 } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../pi-embedded.js";
+import { abortEmbeddedPiRun } from "../pi-embedded.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { listSubagentRunsForRequester, type SubagentRunRecord } from "../subagent-registry.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -160,6 +160,42 @@ function resolveTotalTokens(entry?: SessionEntry) {
   const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
   const total = input + output;
   return total > 0 ? total : undefined;
+}
+
+function resolveIoTokens(entry?: SessionEntry) {
+  if (!entry) {
+    return undefined;
+  }
+  const input =
+    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
+      ? entry.inputTokens
+      : 0;
+  const output =
+    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
+      ? entry.outputTokens
+      : 0;
+  const total = input + output;
+  if (total <= 0) {
+    return undefined;
+  }
+  return { input, output, total };
+}
+
+function resolveUsageDisplay(entry?: SessionEntry) {
+  const io = resolveIoTokens(entry);
+  const promptCache = resolveTotalTokens(entry);
+  const parts: string[] = [];
+  if (io) {
+    const input = formatTokenShort(io.input) ?? "0";
+    const output = formatTokenShort(io.output) ?? "0";
+    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
+  } else if (typeof promptCache === "number" && promptCache > 0) {
+    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
+  }
+  if (typeof promptCache === "number" && io && promptCache > io.total) {
+    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
+  }
+  return parts.join(", ");
 }
 
 function resolveSubagentTarget(
@@ -370,12 +406,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               cache,
             }).entry;
             const totalTokens = resolveTotalTokens(sessionEntry);
-            const tokenText = formatTokenShort(totalTokens);
+            const usageText = resolveUsageDisplay(sessionEntry);
             const status = resolveRunStatus(entry);
             const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
             const label = truncate(resolveRunLabel(entry), 48);
             const task = truncate(entry.task.trim(), 72);
-            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${tokenText ? `, ${tokenText} tokens` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
             const view = {
               index,
               runId: entry.runId,
@@ -401,14 +437,14 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
               cache,
             }).entry;
             const totalTokens = resolveTotalTokens(sessionEntry);
-            const tokenText = formatTokenShort(totalTokens);
+            const usageText = resolveUsageDisplay(sessionEntry);
             const status = resolveRunStatus(entry);
             const runtime = formatDurationCompact(
               (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
             );
             const label = truncate(resolveRunLabel(entry), 48);
             const task = truncate(entry.task.trim(), 72);
-            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${tokenText ? `, ${tokenText} tokens` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+            const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
             const view = {
               index,
               runId: entry.runId,
@@ -571,22 +607,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             ? targetSession.entry.sessionId.trim()
             : undefined;
 
-        // Prefer true in-run steering for currently streaming subagents.
-        if (sessionId && queueEmbeddedPiMessage(sessionId, message)) {
-          return jsonResult({
-            status: "accepted",
-            action: "steer",
-            target,
-            runId: resolved.entry.runId,
-            sessionKey: resolved.entry.childSessionKey,
-            sessionId,
-            mode: "live",
-            label: resolveRunLabel(resolved.entry),
-            text: `steered ${resolveRunLabel(resolved.entry)}.`,
-          });
-        }
-
-        // If live steer is unavailable, interrupt current work first so steer takes precedence.
+        // Interrupt current work first so steer takes precedence immediately.
         if (sessionId) {
           abortEmbeddedPiRun(sessionId);
         }
