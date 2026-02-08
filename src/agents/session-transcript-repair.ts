@@ -18,6 +18,7 @@ type ToolCallBlock = {
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
+  if (msg.stopReason === "aborted") return [];
   const content = msg.content;
   if (!Array.isArray(content)) {
     return [];
