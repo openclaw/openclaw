@@ -248,8 +248,8 @@ async function fetchProjectId(accessToken: string): Promise<string> {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
-    "User-Agent": "google-api-nodejs-client/9.15.1",
-    "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+    "User-Agent": "antigravity/1.15.8",
+    "X-Goog-Api-Client": "gl-vscode/1.96.1",
     "Client-Metadata": JSON.stringify({
       ideType: "IDE_UNSPECIFIED",
       platform: "PLATFORM_UNSPECIFIED",
