@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -290,14 +291,24 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const DEFAULT_SUBAGENT_BOOTSTRAP_FILES = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME];
+
+function resolveSubagentBootstrapAllowlist(config?: OpenClawConfig): Set<string> {
+  const configured = config?.agents?.defaults?.subagents?.bootstrapFiles;
+  if (Array.isArray(configured) && configured.length > 0) {
+    return new Set(configured);
+  }
+  return new Set(DEFAULT_SUBAGENT_BOOTSTRAP_FILES);
+}
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  config?: OpenClawConfig,
 ): WorkspaceBootstrapFile[] {
   if (!sessionKey || !isSubagentSessionKey(sessionKey)) {
     return files;
   }
-  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  const allowlist = resolveSubagentBootstrapAllowlist(config);
+  return files.filter((file) => allowlist.has(file.name));
 }

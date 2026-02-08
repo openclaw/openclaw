@@ -210,6 +210,12 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /**
+     * Workspace files to include in sub-agent context.
+     * Default: ["AGENTS.md", "TOOLS.md"]
+     * Example: ["AGENTS.md", "TOOLS.md", "SOUL.md", "USER.md", "IDENTITY.md"]
+     */
+    bootstrapFiles?: string[];
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {
