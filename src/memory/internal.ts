@@ -54,7 +54,23 @@ export function isMemoryPath(relPath: string): boolean {
   return normalized.startsWith("memory/");
 }
 
-async function walkDir(dir: string, files: string[]) {
+/**
+ * Extract literal directory names from glob patterns like "**\/node_modules\/**".
+ * Returns a Set of directory names to ignore.
+ */
+function extractIgnoredDirNames(patterns: string[]): Set<string> {
+  const names = new Set<string>();
+  for (const pattern of patterns) {
+    // Match patterns like **/dirname/** or **/dirname
+    const match = pattern.match(/^\*\*\/([^/*]+)(?:\/\*\*)?$/);
+    if (match?.[1]) {
+      names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+async function walkDir(dir: string, files: string[], ignoredDirNames?: Set<string>) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -62,7 +78,11 @@ async function walkDir(dir: string, files: string[]) {
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files);
+      // Skip ignored directories
+      if (ignoredDirNames?.has(entry.name)) {
+        continue;
+      }
+      await walkDir(full, files, ignoredDirNames);
       continue;
     }
     if (!entry.isFile()) {
@@ -78,11 +98,13 @@ async function walkDir(dir: string, files: string[]) {
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
+  ignorePaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
+  const ignoredDirNames = ignorePaths ? extractIgnoredDirNames(ignorePaths) : undefined;
 
   const addMarkdownFile = async (absPath: string) => {
     try {
@@ -102,7 +124,7 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      await walkDir(memoryDir, result, ignoredDirNames);
     }
   } catch {}
 
@@ -115,7 +137,7 @@ export async function listMemoryFiles(
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result);
+          await walkDir(inputPath, result, ignoredDirNames);
           continue;
         }
         if (stat.isFile() && inputPath.endsWith(".md")) {

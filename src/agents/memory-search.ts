@@ -9,6 +9,7 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
+  ignorePaths: string[];
   provider: "openai" | "local" | "gemini" | "voyage" | "auto";
   remote?: {
     baseUrl?: string;
@@ -181,6 +182,26 @@ function mergeConfig(
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
+  // Default ignore patterns for common non-document directories
+  const defaultIgnorePaths = [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/.env/**",
+    "**/__pycache__/**",
+    "**/.tox/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/.nuxt/**",
+    "**/target/**",
+    "**/.cargo/**",
+  ];
+  const userIgnorePaths = [...(defaults?.ignorePaths ?? []), ...(overrides?.ignorePaths ?? [])]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const ignorePaths = Array.from(new Set([...defaultIgnorePaths, ...userIgnorePaths]));
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -256,6 +277,7 @@ function mergeConfig(
     enabled,
     sources,
     extraPaths,
+    ignorePaths,
     provider,
     remote,
     experimental: {
