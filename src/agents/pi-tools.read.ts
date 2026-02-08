@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -251,7 +252,29 @@ export function wrapToolParamNormalization(
   };
 }
 
-function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+export function remapContainerPath(
+  filePath: string,
+  containerWorkdir: string | undefined,
+  hostRoot: string,
+): string {
+  if (!containerWorkdir) {
+    return filePath;
+  }
+  const prefix = containerWorkdir.endsWith("/") ? containerWorkdir : containerWorkdir + "/";
+  if (filePath === containerWorkdir) {
+    return hostRoot;
+  }
+  if (filePath.startsWith(prefix)) {
+    return path.join(hostRoot, filePath.slice(prefix.length));
+  }
+  return filePath;
+}
+
+function wrapSandboxPathGuard(
+  tool: AnyAgentTool,
+  root: string,
+  containerWorkdir?: string,
+): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -261,26 +284,38 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
-        await assertSandboxPath({ filePath, cwd: root, root });
+        const remapped = remapContainerPath(filePath, containerWorkdir, root);
+        if (remapped !== filePath) {
+          record!.path = remapped;
+        }
+        await assertSandboxPath({ filePath: remapped, cwd: root, root });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
   };
 }
 
-export function createSandboxedReadTool(root: string) {
+export function createSandboxedReadTool(root: string, containerWorkdir?: string) {
   const base = createReadTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
+  return wrapSandboxPathGuard(createOpenClawReadTool(base), root, containerWorkdir);
 }
 
-export function createSandboxedWriteTool(root: string) {
+export function createSandboxedWriteTool(root: string, containerWorkdir?: string) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
+    root,
+    containerWorkdir,
+  );
 }
 
-export function createSandboxedEditTool(root: string) {
+export function createSandboxedEditTool(root: string, containerWorkdir?: string) {
   const base = createEditTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
+    root,
+    containerWorkdir,
+  );
 }
 
 export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {

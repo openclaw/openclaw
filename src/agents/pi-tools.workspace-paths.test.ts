@@ -152,31 +152,35 @@ describe("workspace path resolution", () => {
 });
 
 describe("sandboxed workspace paths", () => {
+  function makeSandbox(sandboxDir: string, workspaceDir: string) {
+    return {
+      enabled: true,
+      sessionKey: "sandbox:test",
+      workspaceDir: sandboxDir,
+      agentWorkspaceDir: workspaceDir,
+      workspaceAccess: "rw",
+      containerName: "openclaw-sbx-test",
+      containerWorkdir: "/workspace",
+      docker: {
+        image: "openclaw-sandbox:bookworm-slim",
+        containerPrefix: "openclaw-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: [],
+        network: "none",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+      },
+      tools: { allow: [], deny: [] },
+      browserAllowHostControl: false,
+    };
+  }
+
   it("uses sandbox workspace for relative read/write/edit", async () => {
     await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
       await withTempDir("openclaw-workspace-", async (workspaceDir) => {
-        const sandbox = {
-          enabled: true,
-          sessionKey: "sandbox:test",
-          workspaceDir: sandboxDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          containerName: "openclaw-sbx-test",
-          containerWorkdir: "/workspace",
-          docker: {
-            image: "openclaw-sandbox:bookworm-slim",
-            containerPrefix: "openclaw-sbx-",
-            workdir: "/workspace",
-            readOnlyRoot: true,
-            tmpfs: [],
-            network: "none",
-            user: "1000:1000",
-            capDrop: ["ALL"],
-            env: { LANG: "C.UTF-8" },
-          },
-          tools: { allow: [], deny: [] },
-          browserAllowHostControl: false,
-        };
+        const sandbox = makeSandbox(sandboxDir, workspaceDir);
 
         const testFile = "sandbox.txt";
         await fs.writeFile(path.join(sandboxDir, testFile), "sandbox read", "utf8");
@@ -208,6 +212,80 @@ describe("sandboxed workspace paths", () => {
         });
         const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");
+      });
+    });
+  });
+
+  it("remaps container-absolute read path to sandbox dir", async () => {
+    await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-", async (workspaceDir) => {
+        const sandbox = makeSandbox(sandboxDir, workspaceDir);
+        await fs.writeFile(path.join(sandboxDir, "file.txt"), "container read ok", "utf8");
+
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+        const readTool = tools.find((tool) => tool.name === "read");
+        expect(readTool).toBeDefined();
+
+        const result = await readTool?.execute("sbx-container-read", {
+          path: "/workspace/file.txt",
+        });
+        expect(getTextContent(result)).toContain("container read ok");
+      });
+    });
+  });
+
+  it("remaps container-absolute write path to sandbox dir", async () => {
+    await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-", async (workspaceDir) => {
+        const sandbox = makeSandbox(sandboxDir, workspaceDir);
+
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+        const writeTool = tools.find((tool) => tool.name === "write");
+        expect(writeTool).toBeDefined();
+
+        await writeTool?.execute("sbx-container-write", {
+          path: "/workspace/written.txt",
+          content: "container write ok",
+        });
+        const written = await fs.readFile(path.join(sandboxDir, "written.txt"), "utf8");
+        expect(written).toBe("container write ok");
+      });
+    });
+  });
+
+  it("remaps container-absolute edit path to sandbox dir", async () => {
+    await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-", async (workspaceDir) => {
+        const sandbox = makeSandbox(sandboxDir, workspaceDir);
+        await fs.writeFile(path.join(sandboxDir, "edit-me.txt"), "hello world", "utf8");
+
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+        const editTool = tools.find((tool) => tool.name === "edit");
+        expect(editTool).toBeDefined();
+
+        await editTool?.execute("sbx-container-edit", {
+          path: "/workspace/edit-me.txt",
+          oldText: "world",
+          newText: "container",
+        });
+        const edited = await fs.readFile(path.join(sandboxDir, "edit-me.txt"), "utf8");
+        expect(edited).toBe("hello container");
+      });
+    });
+  });
+
+  it("rejects container path outside workspace prefix", async () => {
+    await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
+      await withTempDir("openclaw-workspace-", async (workspaceDir) => {
+        const sandbox = makeSandbox(sandboxDir, workspaceDir);
+
+        const tools = createOpenClawCodingTools({ workspaceDir, sandbox });
+        const readTool = tools.find((tool) => tool.name === "read");
+        expect(readTool).toBeDefined();
+
+        await expect(readTool?.execute("sbx-escape", { path: "/other/file.txt" })).rejects.toThrow(
+          /escapes sandbox root/i,
+        );
       });
     });
   });
