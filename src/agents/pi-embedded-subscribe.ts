@@ -403,7 +403,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
-    const chunk = stripBlockTags(text, state.blockState).trimEnd();
+    const raw = stripBlockTags(text, state.blockState);
+    const cleaned =
+      state.lastBlockReplyText === undefined ? raw.replace(/^(?:[ \t]*\n)+/, "") : raw;
+    const chunk = cleaned.trimEnd();
     if (!chunk) {
       return;
     }
