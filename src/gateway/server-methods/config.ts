@@ -18,6 +18,7 @@ import {
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
 import { buildConfigSchema } from "../../config/schema.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -309,11 +310,45 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
+    // Extract channel + threadId for routing after restart
+    let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+    let threadId: string | undefined;
+    if (sessionKey) {
+      const topicIndex = sessionKey.lastIndexOf(":topic:");
+      const threadIndex = sessionKey.lastIndexOf(":thread:");
+      const markerIndex = Math.max(topicIndex, threadIndex);
+      const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+      const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
+      const threadIdRaw =
+        markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
+      threadId = threadIdRaw?.trim() || undefined;
+      try {
+        const cfg = loadConfig();
+        const storePath = resolveStorePath(cfg.session?.store);
+        const store = loadSessionStore(storePath);
+        let entry = store[sessionKey];
+        if (!entry?.deliveryContext && markerIndex !== -1 && baseSessionKey) {
+          entry = store[baseSessionKey];
+        }
+        if (entry?.deliveryContext) {
+          deliveryContext = {
+            channel: entry.deliveryContext.channel,
+            to: entry.deliveryContext.to,
+            accountId: entry.deliveryContext.accountId,
+          };
+        }
+      } catch {
+        // ignore: best-effort
+      }
+    }
+
     const payload: RestartSentinelPayload = {
       kind: "config-apply",
       status: "ok",
       ts: Date.now(),
       sessionKey,
+      deliveryContext,
+      threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
@@ -420,11 +455,45 @@ export const configHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
 
+    // Extract channel + threadId for routing after restart
+    let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+    let threadId: string | undefined;
+    if (sessionKey) {
+      const topicIndex = sessionKey.lastIndexOf(":topic:");
+      const threadIndex = sessionKey.lastIndexOf(":thread:");
+      const markerIndex = Math.max(topicIndex, threadIndex);
+      const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+      const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
+      const threadIdRaw =
+        markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
+      threadId = threadIdRaw?.trim() || undefined;
+      try {
+        const cfg = loadConfig();
+        const storePath = resolveStorePath(cfg.session?.store);
+        const store = loadSessionStore(storePath);
+        let entry = store[sessionKey];
+        if (!entry?.deliveryContext && markerIndex !== -1 && baseSessionKey) {
+          entry = store[baseSessionKey];
+        }
+        if (entry?.deliveryContext) {
+          deliveryContext = {
+            channel: entry.deliveryContext.channel,
+            to: entry.deliveryContext.to,
+            accountId: entry.deliveryContext.accountId,
+          };
+        }
+      } catch {
+        // ignore: best-effort
+      }
+    }
+
     const payload: RestartSentinelPayload = {
       kind: "config-apply",
       status: "ok",
       ts: Date.now(),
       sessionKey,
+      deliveryContext,
+      threadId,
       message: note ?? null,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {

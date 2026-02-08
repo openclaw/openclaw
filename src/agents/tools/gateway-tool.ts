@@ -96,18 +96,20 @@ export function createGatewayTool(opts?: {
         let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
         let threadId: string | undefined;
         if (sessionKey) {
-          const threadMarker = ":thread:";
-          const threadIndex = sessionKey.lastIndexOf(threadMarker);
-          const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
+          const topicIndex = sessionKey.lastIndexOf(":topic:");
+          const threadIndex = sessionKey.lastIndexOf(":thread:");
+          const markerIndex = Math.max(topicIndex, threadIndex);
+          const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+          const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
           const threadIdRaw =
-            threadIndex === -1 ? undefined : sessionKey.slice(threadIndex + threadMarker.length);
+            markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
           threadId = threadIdRaw?.trim() || undefined;
           try {
             const cfg = loadConfig();
             const storePath = resolveStorePath(cfg.session?.store);
             const store = loadSessionStore(storePath);
             let entry = store[sessionKey];
-            if (!entry?.deliveryContext && threadIndex !== -1 && baseSessionKey) {
+            if (!entry?.deliveryContext && markerIndex !== -1 && baseSessionKey) {
               entry = store[baseSessionKey];
             }
             if (entry?.deliveryContext) {
