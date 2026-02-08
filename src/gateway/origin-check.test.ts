@@ -42,4 +42,24 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it("rejects cross-origin attack on localhost gateway", () => {
+    // A malicious page at evil.com opens a WebSocket to the local gateway.
+    // The browser sends Origin: https://evil.com — this must be rejected
+    // even though the gateway host is loopback.
+    const result = checkBrowserOrigin({
+      requestHost: "127.0.0.1:18789",
+      origin: "https://evil.com",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects 'null' origin string", () => {
+    // Sandboxed iframes and redirects send Origin: null
+    const result = checkBrowserOrigin({
+      requestHost: "127.0.0.1:18789",
+      origin: "null",
+    });
+    expect(result.ok).toBe(false);
+  });
 });

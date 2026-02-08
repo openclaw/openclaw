@@ -368,7 +368,14 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        if (isControlUi || isWebchat) {
+
+        // Apply origin validation to ALL connections that include an Origin header.
+        // Browsers always send Origin on WebSocket upgrade requests and it cannot
+        // be suppressed by JavaScript.  Non-browser clients (CLI, native apps,
+        // Node backend) typically omit the header.  Checking the header presence
+        // rather than the self-reported client.id prevents a malicious webpage
+        // from claiming to be a CLI client to bypass origin validation.
+        if (requestOrigin) {
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
@@ -376,7 +383,9 @@ export function attachGatewayWsMessageHandler(params: {
           });
           if (!originCheck.ok) {
             const errorMessage =
-              "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+              isControlUi || isWebchat
+                ? "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)"
+                : "origin not allowed (browser connections must match the gateway host or be listed in gateway.controlUi.allowedOrigins)";
             setHandshakeState("failed");
             setCloseCause("origin-mismatch", {
               origin: requestOrigin ?? "n/a",

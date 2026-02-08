@@ -622,5 +622,54 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  describe("origin validation", () => {
+    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let port: number;
+
+    beforeAll(async () => {
+      port = await getFreePort();
+      server = await startGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+    });
+
+    test("rejects cross-origin connection spoofing CLI client type", async () => {
+      // A malicious webpage opens a WebSocket to the local gateway and claims
+      // to be a CLI client.  The browser always sends an Origin header that
+      // cannot be suppressed by JavaScript, so the gateway must validate it
+      // regardless of the self-reported client type.
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: "https://evil.com" },
+      });
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+      const res = await connectReq(ws, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CLI,
+          version: "1.0.0",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
+    test("allows loopback origin for local dev regardless of client type", async () => {
+      // A local dev server (e.g. Vite at localhost:5173) connecting to the
+      // gateway at 127.0.0.1:port should still be accepted since both are
+      // loopback addresses.
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: "http://localhost:5173" },
+      });
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+      const res = await connectReq(ws);
+      expect(res.ok).toBe(true);
+      ws.close();
+    });
+  });
+
   // Remaining tests require isolated gateway state.
 });
