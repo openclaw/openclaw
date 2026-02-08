@@ -9,6 +9,8 @@ title: "Android App"
 
 # Android App (Node)
 
+> **Note:** The Android app is currently in development and not yet publicly available. Pre-built binaries are not distributed at this time. If you're interested in building from source or participating in early testing, please reach out via [Discord](https://discord.gg/clawd).
+
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
