@@ -123,6 +123,7 @@ const TOOL_SECTIONS = [
     tools: [
       { id: "sessions_list", label: "sessions_list", description: "List sessions" },
       { id: "sessions_history", label: "sessions_history", description: "Session history" },
+      { id: "sessions_manage", label: "sessions_manage", description: "Compact/reset session" },
       { id: "sessions_send", label: "sessions_send", description: "Send to session" },
       { id: "sessions_spawn", label: "sessions_spawn", description: "Spawn sub-agent" },
       { id: "session_status", label: "session_status", description: "Session status" },

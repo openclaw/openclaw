@@ -252,6 +252,11 @@
       "title": "Session History",
       "detailKeys": ["sessionKey", "limit", "includeTools"]
     },
+    "sessions_manage": {
+      "emoji": "🧰",
+      "title": "Session Manage",
+      "detailKeys": ["sessionKey", "action"]
+    },
     "sessions_send": {
       "emoji": "📨",
       "title": "Session Send",

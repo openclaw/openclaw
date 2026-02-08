@@ -24,6 +24,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   "group:sessions": [
     "sessions_list",
     "sessions_history",
+    "sessions_manage",
     "sessions_send",
     "sessions_spawn",
     "session_status",
@@ -47,6 +48,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "agents_list",
     "sessions_list",
     "sessions_history",
+    "sessions_manage",
     "sessions_send",
     "sessions_spawn",
     "session_status",
@@ -72,6 +74,7 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
       "group:messaging",
       "sessions_list",
       "sessions_history",
+      "sessions_manage",
       "sessions_send",
       "session_status",
     ],
