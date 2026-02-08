@@ -6,6 +6,10 @@ import type {
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  buildExecApprovalComponents,
+  formatExecApprovalEmbed,
+} from "../discord/monitor/exec-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -194,6 +198,7 @@ async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   text: string;
+  channelData?: Record<string, unknown>;
   deliver: typeof deliverOutboundPayloads;
   shouldSend?: () => boolean;
 }) {
@@ -212,7 +217,7 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [{ text: params.text, channelData: params.channelData }],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -290,10 +295,19 @@ export function createExecApprovalForwarder(
     }
 
     const text = buildRequestMessage(request, nowMs());
+    const embed = formatExecApprovalEmbed(request);
+    const components = buildExecApprovalComponents(request.id);
+    const channelData: Record<string, unknown> = {
+      discord: {
+        embeds: [embed],
+        components,
+      },
+    };
     await deliverToTargets({
       cfg,
       targets,
       text,
+      channelData,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     });
@@ -309,9 +323,16 @@ export function createExecApprovalForwarder(
     }
     pending.delete(resolved.id);
 
+    // Discord targets get the embed edited in-place via button interaction,
+    // so skip sending a separate resolved message to them.
+    const targets = entry.targets.filter((t) => normalizeMessageChannel(t.channel) !== "discord");
+    if (targets.length === 0) {
+      return;
+    }
+
     const cfg = getConfig();
     const text = buildResolvedMessage(resolved);
-    await deliverToTargets({ cfg, targets: entry.targets, text, deliver });
+    await deliverToTargets({ cfg, targets, text, deliver });
   };
 
   const stop = () => {

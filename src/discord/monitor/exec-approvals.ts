@@ -1,4 +1,4 @@
-import { Button, type ButtonInteraction, type ComponentData } from "@buape/carbon";
+import { Button, type ButtonInteraction, type ComponentData, Embed } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
@@ -85,7 +85,7 @@ export function parseExecApprovalData(
   };
 }
 
-function formatExecApprovalEmbed(request: ExecApprovalRequest) {
+export function formatExecApprovalEmbed(request: ExecApprovalRequest) {
   const commandText = request.request.command;
   const commandPreview =
     commandText.length > 1000 ? `${commandText.slice(0, 1000)}...` : commandText;
@@ -184,6 +184,34 @@ function formatExpiredEmbed(request: ExecApprovalRequest) {
     footer: { text: `ID: ${request.id}` },
     timestamp: new Date().toISOString(),
   };
+}
+
+export function buildExecApprovalComponents(approvalId: string) {
+  return [
+    {
+      type: 1, // ACTION_ROW
+      components: [
+        {
+          type: 2, // BUTTON
+          style: ButtonStyle.Success,
+          label: "Allow once",
+          custom_id: buildExecApprovalCustomId(approvalId, "allow-once"),
+        },
+        {
+          type: 2, // BUTTON
+          style: ButtonStyle.Primary,
+          label: "Always allow",
+          custom_id: buildExecApprovalCustomId(approvalId, "allow-always"),
+        },
+        {
+          type: 2, // BUTTON
+          style: ButtonStyle.Danger,
+          label: "Deny",
+          custom_id: buildExecApprovalCustomId(approvalId, "deny"),
+        },
+      ],
+    },
+  ];
 }
 
 export type DiscordExecApprovalHandlerOpts = {
@@ -331,33 +359,7 @@ export class DiscordExecApprovalHandler {
     );
 
     const embed = formatExecApprovalEmbed(request);
-
-    // Build action rows with buttons
-    const components = [
-      {
-        type: 1, // ACTION_ROW
-        components: [
-          {
-            type: 2, // BUTTON
-            style: ButtonStyle.Success,
-            label: "Allow once",
-            custom_id: buildExecApprovalCustomId(request.id, "allow-once"),
-          },
-          {
-            type: 2, // BUTTON
-            style: ButtonStyle.Primary,
-            label: "Always allow",
-            custom_id: buildExecApprovalCustomId(request.id, "allow-always"),
-          },
-          {
-            type: 2, // BUTTON
-            style: ButtonStyle.Danger,
-            label: "Deny",
-            custom_id: buildExecApprovalCustomId(request.id, "deny"),
-          },
-        ],
-      },
-    ];
+    const components = buildExecApprovalComponents(request.id);
 
     const approvers = this.opts.config.approvers ?? [];
 
@@ -512,8 +514,43 @@ export class DiscordExecApprovalHandler {
 }
 
 export type ExecApprovalButtonContext = {
-  handler: DiscordExecApprovalHandler;
+  resolve: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
 };
+
+function buildResolvedEmbedFromInteraction(
+  interaction: ButtonInteraction,
+  decision: ExecApprovalDecision,
+  approvalId: string,
+): Embed {
+  const decisionLabel =
+    decision === "allow-once"
+      ? "Allowed (once)"
+      : decision === "allow-always"
+        ? "Allowed (always)"
+        : "Denied";
+  const color = decision === "deny" ? 0xed4245 : decision === "allow-always" ? 0x5865f2 : 0x57f287;
+
+  const userName = interaction.user?.globalName ?? interaction.user?.username ?? "Unknown";
+  const timeStr = new Date().toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const shortId = approvalId.slice(0, 8);
+  const verb = decision === "deny" ? "Denied" : "Approved";
+
+  // Preserve command field from original embed if available
+  const originalEmbed = interaction.embeds?.[0];
+  const fields = originalEmbed?.fields ?? [];
+
+  const embed = new Embed();
+  embed.title = `Exec Approval: ${decisionLabel}`;
+  embed.color = color;
+  embed.fields = fields;
+  embed.footer = { text: `${verb} \`${decision}\` by ${userName} at ${timeStr} | ID: ${shortId}` };
+  embed.timestamp = new Date().toISOString();
+  return embed;
+}
 
 export class ExecApprovalButton extends Button {
   label = "execapproval";
@@ -540,24 +577,25 @@ export class ExecApprovalButton extends Button {
       return;
     }
 
-    const decisionLabel =
-      parsed.action === "allow-once"
-        ? "Allowed (once)"
-        : parsed.action === "allow-always"
-          ? "Allowed (always)"
-          : "Denied";
+    // Build resolved embed from the original embed fields
+    const resolvedEmbed = buildResolvedEmbedFromInteraction(
+      interaction,
+      parsed.action,
+      parsed.approvalId,
+    );
 
-    // Update the message immediately to show the decision
+    // Edit the original message: swap embed + remove buttons
     try {
       await interaction.update({
-        content: `Submitting decision: **${decisionLabel}**...`,
-        components: [], // Remove buttons
+        content: "",
+        embeds: [resolvedEmbed],
+        components: [],
       });
     } catch {
       // Interaction may have expired, try to continue anyway
     }
 
-    const ok = await this.ctx.handler.resolveApproval(parsed.approvalId, parsed.action);
+    const ok = await this.ctx.resolve(parsed.approvalId, parsed.action);
 
     if (!ok) {
       try {
@@ -570,7 +608,6 @@ export class ExecApprovalButton extends Button {
         // Interaction may have expired
       }
     }
-    // On success, the handleApprovalResolved event will update the message with the final result
   }
 }
 

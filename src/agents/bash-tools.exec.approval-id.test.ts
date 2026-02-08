@@ -44,19 +44,16 @@ describe("exec approvals", () => {
   it("reuses approval id as the node runId", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     let invokeParams: unknown;
-    let resolveInvoke: (() => void) | undefined;
-    const invokeSeen = new Promise<void>((resolve) => {
-      resolveInvoke = resolve;
-    });
+    let approvalId: string | undefined;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
+        approvalId = (params as { id?: string })?.id;
         return { decision: "allow-once" };
       }
       if (method === "node.invoke") {
         invokeParams = params;
-        resolveInvoke?.();
-        return { ok: true };
+        return { payload: { success: true, stdout: "ok" } };
       }
       return { ok: true };
     });
@@ -69,10 +66,8 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call1", { command: "ls -la" });
-    expect(result.details.status).toBe("approval-pending");
-    const approvalId = (result.details as { approvalId: string }).approvalId;
-
-    await invokeSeen;
+    expect(result.details.status).toBe("completed");
+    expect(approvalId).toBeDefined();
 
     const runId = (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId;
     expect(runId).toBe(approvalId);
@@ -154,15 +149,10 @@ describe("exec approvals", () => {
   it("requires approval for elevated ask when allowlist misses", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const calls: string[] = [];
-    let resolveApproval: (() => void) | undefined;
-    const approvalSeen = new Promise<void>((resolve) => {
-      resolveApproval = resolve;
-    });
 
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       calls.push(method);
       if (method === "exec.approval.request") {
-        resolveApproval?.();
         return { decision: "deny" };
       }
       return { ok: true };
@@ -177,8 +167,7 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
-    expect(result.details.status).toBe("approval-pending");
-    await approvalSeen;
+    expect(result.details.status).toBe("failed");
     expect(calls).toContain("exec.approval.request");
   });
 });

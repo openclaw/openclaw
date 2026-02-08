@@ -35,6 +35,14 @@ describe("exec approval forwarder", () => {
     await forwarder.handleRequested(baseRequest);
     expect(deliver).toHaveBeenCalledTimes(1);
 
+    // Verify channelData contains pre-built Discord embeds and components
+    const requestPayloads = deliver.mock.calls[0][0].payloads;
+    expect(requestPayloads[0].channelData).toBeDefined();
+    expect(requestPayloads[0].channelData.discord.embeds).toBeInstanceOf(Array);
+    expect(requestPayloads[0].channelData.discord.embeds.length).toBe(1);
+    expect(requestPayloads[0].channelData.discord.components).toBeInstanceOf(Array);
+    expect(requestPayloads[0].channelData.discord.components.length).toBe(1);
+
     await forwarder.handleResolved({
       id: baseRequest.id,
       decision: "allow-once",

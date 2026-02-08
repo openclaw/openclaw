@@ -297,6 +297,30 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       });
       return { channel: "discord", ...result };
     },
+    sendPayload: async ({ to, payload, accountId }) => {
+      const discordData = payload.channelData?.discord as
+        | { embeds?: unknown[]; components?: unknown[] }
+        | undefined;
+
+      if (!discordData?.embeds?.length && !discordData?.components?.length) {
+        // No rich Discord data — fall back to text send
+        const send = getDiscordRuntime().channel.discord.sendMessageDiscord;
+        const result = await send(to, payload.text ?? "", {
+          verbose: false,
+          accountId: accountId ?? undefined,
+        });
+        return { channel: "discord", ...result };
+      }
+
+      // Send rich message with embeds and/or components (buttons)
+      const send = getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const result = await send(to, "", {
+        accountId: accountId ?? undefined,
+        embeds: discordData.embeds,
+        components: discordData.components,
+      });
+      return { channel: "discord", ...result };
+    },
     sendPoll: async ({ to, poll, accountId }) =>
       await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
         accountId: accountId ?? undefined,
