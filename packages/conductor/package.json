@@ -1,0 +1,10 @@
+{
+  "name": "@aether/conductor",
+  "version": "0.1.0",
+  "description": "Aether Conductor — closed-loop external access authorization for AI agents",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

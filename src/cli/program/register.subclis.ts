@@ -89,6 +89,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "conductor",
+    description: "Aether Conductor — external access authorization",
+    register: async (program) => {
+      const mod = await import("../conductor-cli.js");
+      mod.registerConductorCli(program);
+    },
+  },
+  {
     name: "nodes",
     description: "Node commands",
     register: async (program) => {
