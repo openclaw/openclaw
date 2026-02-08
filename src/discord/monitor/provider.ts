@@ -1,4 +1,4 @@
-import { Client } from "@buape/carbon";
+import { Client, ReadyListener } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
@@ -487,6 +487,25 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     components.push(createExecApprovalButton({ handler: execApprovalsHandler }));
   }
 
+  class DiscordStatusReadyListener extends ReadyListener {
+    async handle(_data: unknown, client: Client) {
+      const gateway = client.getPlugin<GatewayPlugin>("gateway");
+      if (gateway) {
+        const statusText = discordCfg.activity ?? "the market 📉";
+        const activityType = discordCfg.activityType ?? 3;
+        const status = discordCfg.status ?? "online";
+        const activityUrl = activityType === 1 ? discordCfg.activityUrl : undefined;
+
+        gateway.updatePresence({
+          activities: [{ name: statusText, type: activityType, url: activityUrl }],
+          status: status,
+          since: null,
+          afk: false,
+        });
+      }
+    }
+  }
+
   const client = new Client(
     {
       baseUrl: "http://localhost",
@@ -498,7 +517,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     },
     {
       commands,
-      listeners: [],
+      listeners: [new DiscordStatusReadyListener()],
       components,
     },
     [

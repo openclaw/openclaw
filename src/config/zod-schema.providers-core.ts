@@ -326,6 +326,12 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     responsePrefix: z.string().optional(),
+    activity: z.string().optional(),
+    status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
+    activityType: z
+      .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(5)])
+      .optional(),
+    activityUrl: z.string().optional(),
   })
   .strict();
 
