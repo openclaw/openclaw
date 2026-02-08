@@ -323,6 +323,16 @@ export type MemorySearchConfig = {
   };
 };
 
+export type FsToolsConfig = {
+  /**
+   * Restrict read/write/edit tools to the agent's workspace directory.
+   * When enabled, filesystem tools cannot access paths outside workspace.
+   * This provides path-based security without requiring Docker sandbox.
+   * Default: false.
+   */
+  restrictToWorkspace?: boolean;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -332,6 +342,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Filesystem tool restrictions. */
+  fs?: FsToolsConfig;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */

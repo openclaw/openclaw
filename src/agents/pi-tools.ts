@@ -232,6 +232,20 @@ export function createOpenClawCodingTools(options?: {
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = options?.workspaceDir ?? process.cwd();
+  // Check if filesystem restriction is enabled (restricts read/write/edit to workspace)
+  const fsRestrictToWorkspace = options?.config?.tools?.fs?.restrictToWorkspace === true;
+
+  // Warn if both sandbox and fs restriction are enabled (sandbox takes precedence for write/edit)
+  if (sandboxRoot && fsRestrictToWorkspace) {
+    logWarn(
+      "Both Docker sandbox and tools.fs.restrictToWorkspace are enabled. " +
+        "Docker sandbox takes precedence: write/edit tools will be disabled (not restricted to workspace). " +
+        "Use one setting or the other, not both.",
+    );
+  }
+
+  // Use sandbox path guards when Docker sandbox OR fs restriction is enabled
+  const effectiveFsRoot = sandboxRoot ?? (fsRestrictToWorkspace ? workspaceRoot : undefined);
   const applyPatchConfig = options?.config?.tools?.exec?.applyPatch;
   const applyPatchEnabled =
     !!applyPatchConfig?.enabled &&
@@ -244,8 +258,9 @@ export function createOpenClawCodingTools(options?: {
 
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
-      if (sandboxRoot) {
-        return [createSandboxedReadTool(sandboxRoot)];
+      if (effectiveFsRoot) {
+        // Use sandboxed read tool when Docker sandbox OR fs restriction is enabled
+        return [createSandboxedReadTool(effectiveFsRoot)];
       }
       const freshReadTool = createReadTool(workspaceRoot);
       return [createOpenClawReadTool(freshReadTool)];
@@ -255,7 +270,12 @@ export function createOpenClawCodingTools(options?: {
     }
     if (tool.name === "write") {
       if (sandboxRoot) {
+        // Docker sandbox handles write differently (returns empty)
         return [];
+      }
+      if (effectiveFsRoot) {
+        // fs restriction enabled: use sandboxed write tool with path guards
+        return [createSandboxedWriteTool(effectiveFsRoot)];
       }
       // Wrap with param normalization for Claude Code compatibility
       return [
@@ -264,7 +284,12 @@ export function createOpenClawCodingTools(options?: {
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
+        // Docker sandbox handles edit differently (returns empty)
         return [];
+      }
+      if (effectiveFsRoot) {
+        // fs restriction enabled: use sandboxed edit tool with path guards
+        return [createSandboxedEditTool(effectiveFsRoot)];
       }
       // Wrap with param normalization for Claude Code compatibility
       return [wrapToolParamNormalization(createEditTool(workspaceRoot), CLAUDE_PARAM_GROUPS.edit)];
