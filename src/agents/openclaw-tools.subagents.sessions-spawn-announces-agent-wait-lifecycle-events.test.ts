@@ -82,6 +82,16 @@ describe("openclaw-tools: subagents", () => {
           endedAt: 4000,
         };
       }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
+        };
+      }
       if (request.method === "sessions.delete") {
         const params = request.params as { key?: string } | undefined;
         deletedKey = params?.key;

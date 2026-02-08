@@ -95,6 +95,16 @@ describe("openclaw-tools: subagents", () => {
         patchParams = { key: params?.key, label: params?.label };
         return { ok: true };
       }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
+        };
+      }
       if (request.method === "sessions.delete") {
         return { ok: true };
       }
