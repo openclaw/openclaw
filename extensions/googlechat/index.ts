@@ -12,7 +12,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setGoogleChatRuntime(api.runtime);
     api.registerChannel({ plugin: googlechatPlugin, dock: googlechatDock });
-    api.registerHttpHandler(handleGoogleChatWebhookRequest);
+    api.registerHttpHandler({ handler: handleGoogleChatWebhookRequest, requireAuth: false });
   },
 };
 

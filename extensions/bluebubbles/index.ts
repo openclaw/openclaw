@@ -12,7 +12,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setBlueBubblesRuntime(api.runtime);
     api.registerChannel({ plugin: bluebubblesPlugin });
-    api.registerHttpHandler(handleBlueBubblesWebhookRequest);
+    api.registerHttpHandler({ handler: handleBlueBubblesWebhookRequest, requireAuth: false });
   },
 };
 
