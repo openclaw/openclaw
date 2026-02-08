@@ -40,7 +40,7 @@ export type ModelProviderConfig = {
   api?: ModelApi;
   headers?: Record<string, string>;
   authHeader?: boolean;
-  models: ModelDefinitionConfig[];
+  models?: ModelDefinitionConfig[];
 };
 
 export type BedrockDiscoveryConfig = {

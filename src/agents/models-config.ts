@@ -84,12 +84,17 @@ async function readJson(pathname: string): Promise<unknown> {
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
+  options: { discover?: boolean } = {},
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({ agentDir });
+  const implicitProviders = await resolveImplicitProviders({
+    agentDir,
+    config: cfg,
+    discover: options.discover,
+  });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,

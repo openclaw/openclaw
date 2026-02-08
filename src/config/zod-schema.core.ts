@@ -55,7 +55,7 @@ export const ModelProviderSchema = z
     api: ModelApiSchema.optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
 
@@ -78,7 +78,21 @@ export const ModelsConfigSchema = z
     bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
-  .optional();
+  .optional()
+  .superRefine((data, ctx) => {
+    if (!data?.providers) {
+      return;
+    }
+    for (const [key, provider] of Object.entries(data.providers)) {
+      if (key !== "ollama" && (!provider.models || provider.models.length === 0)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["providers", key, "models"],
+          message: "models array is required for non-ollama providers",
+        });
+      }
+    }
+  });
 
 export const GroupChatSchema = z
   .object({

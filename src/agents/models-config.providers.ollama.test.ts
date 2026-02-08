@@ -1,10 +1,16 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { resolveImplicitProviders } from "./models-config.providers.js";
 
 describe("Ollama provider", () => {
+  beforeEach(() => {
+    delete process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_BASE_URL;
+    delete process.env.OLLAMA_BASE_URL;
+  });
+
   it("should not include ollama when no API key is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });

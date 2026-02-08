@@ -16,6 +16,7 @@ export async function modelsListCommand(
     provider?: string;
     json?: boolean;
     plain?: boolean;
+    discover?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
@@ -31,10 +32,14 @@ export async function modelsListCommand(
     return parsed?.provider ?? raw.toLowerCase();
   })();
 
+  if (opts.discover) {
+    runtime.log("Discovering models...");
+  }
+
   let models: Model<Api>[] = [];
   let availableKeys: Set<string> | undefined;
   try {
-    const loaded = await loadModelRegistry(cfg);
+    const loaded = await loadModelRegistry(cfg, { discover: opts.discover });
     models = loaded.models;
     availableKeys = loaded.availableKeys;
   } catch (err) {
@@ -64,7 +69,9 @@ export async function modelsListCommand(
     }
   };
 
-  if (opts.all) {
+  const showAll = opts.all || opts.discover;
+
+  if (showAll) {
     const sorted = [...models].toSorted((a, b) => {
       const p = a.provider.localeCompare(b.provider);
       if (p !== 0) {
@@ -81,6 +88,12 @@ export async function modelsListCommand(
         continue;
       }
       const key = modelKey(model.provider, model.id);
+
+      // If we are discovering but NOT showing "all", only show available models
+      if (opts.discover && !opts.all && !availableKeys?.has(key)) {
+        continue;
+      }
+
       const configured = configuredByKey.get(key);
       rows.push(
         toModelRow({

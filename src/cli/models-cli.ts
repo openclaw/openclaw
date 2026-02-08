@@ -58,6 +58,7 @@ export function registerModelsCli(program: Command) {
     .option("--provider <name>", "Filter by provider")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain line output", false)
+    .option("--discover", "Perform active discovery (e.g. Ollama scan)", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsListCommand(opts, defaultRuntime);

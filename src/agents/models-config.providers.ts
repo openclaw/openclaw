@@ -106,47 +106,82 @@ interface OllamaTagsResponse {
   models: OllamaModel[];
 }
 
-async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
+function getOllamaApiBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (url.pathname.endsWith("/v1") || url.pathname.endsWith("/v1/")) {
+      url.pathname = url.pathname.replace(/\/v1\/?$/, "");
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return baseUrl;
+  }
+}
+
+async function discoverOllamaModels(
+  apiBaseUrl: string,
+  options: { timeoutMs?: number; maxAttempts?: number } = {},
+): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
-  try {
-    const response = await fetch(`${OLLAMA_API_BASE_URL}/api/tags`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-      console.warn(`Failed to discover Ollama models: ${response.status}`);
-      return [];
+
+  const timeoutMs = options.timeoutMs ?? 2000;
+  const maxAttempts = options.maxAttempts ?? 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        if (attempt === maxAttempts) {
+          console.warn(
+            `Failed to discover Ollama models at ${apiBaseUrl} (attempt ${attempt}/${maxAttempts}): ${response.status}`,
+          );
+          return [];
+        }
+        continue;
+      }
+      const data = (await response.json()) as OllamaTagsResponse;
+      if (!data.models || data.models.length === 0) {
+        return [];
+      }
+      return data.models.map((model) => {
+        const modelId = model.name;
+        const isReasoning =
+          modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: OLLAMA_DEFAULT_COST,
+          contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+          // Disable streaming by default for Ollama to avoid SDK issue #1205
+          // See: https://github.com/badlogic/pi-mono/issues/1205
+          params: {
+            streaming: false,
+          },
+        };
+      });
+    } catch (error) {
+      if (attempt === maxAttempts) {
+        // Only log warning if we're not doing a "fast" check or if it's a real error (not timeout)
+        if (timeoutMs > 5000 || !(error instanceof Error && error.name === "TimeoutError")) {
+          console.warn(
+            `Failed to discover Ollama models at ${apiBaseUrl} (attempt ${attempt}/${maxAttempts}): ${String(error)}`,
+          );
+        }
+        return [];
+      }
+      // Wait a bit before retrying
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
     }
-    const data = (await response.json()) as OllamaTagsResponse;
-    if (!data.models || data.models.length === 0) {
-      console.warn("No Ollama models found on local instance");
-      return [];
-    }
-    return data.models.map((model) => {
-      const modelId = model.name;
-      const isReasoning =
-        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-      return {
-        id: modelId,
-        name: modelId,
-        reasoning: isReasoning,
-        input: ["text"],
-        cost: OLLAMA_DEFAULT_COST,
-        contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-        // Disable streaming by default for Ollama to avoid SDK issue #1205
-        // See: https://github.com/badlogic/pi-mono/issues/1205
-        params: {
-          streaming: false,
-        },
-      };
-    });
-  } catch (error) {
-    console.warn(`Failed to discover Ollama models: ${String(error)}`);
-    return [];
   }
+  return [];
 }
 
 function normalizeApiKeyConfig(value: string): string {
@@ -200,7 +235,7 @@ export function normalizeGoogleModelId(id: string): string {
 
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
-  const models = provider.models.map((model) => {
+  const models = provider.models?.map((model) => {
     const nextId = normalizeGoogleModelId(model.id);
     if (nextId === model.id) {
       return model;
@@ -405,10 +440,17 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
-async function buildOllamaProvider(): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels();
+async function buildOllamaProvider(options: {
+  baseUrl: string;
+  apiBaseUrl: string;
+  discover?: boolean;
+}): Promise<ProviderConfig> {
+  const discoveryOptions = options.discover
+    ? { timeoutMs: 30000, maxAttempts: 3 }
+    : { timeoutMs: 5000, maxAttempts: 1 };
+  const models = await discoverOllamaModels(options.apiBaseUrl, discoveryOptions);
   return {
-    baseUrl: OLLAMA_BASE_URL,
+    baseUrl: options.baseUrl,
     api: "openai-completions",
     models,
   };
@@ -443,6 +485,8 @@ export function buildQianfanProvider(): ProviderConfig {
 
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  config?: OpenClawConfig;
+  discover?: boolean;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -528,12 +572,29 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured
+  // Ollama provider
+  const explicitOllama = params.config?.models?.providers?.ollama;
   const ollamaKey =
+    explicitOllama?.apiKey ??
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
+
   if (ollamaKey) {
-    providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+    const apiBaseUrl = explicitOllama?.baseUrl
+      ? getOllamaApiBaseUrl(explicitOllama.baseUrl)
+      : (process.env.OLLAMA_API_BASE_URL ?? OLLAMA_API_BASE_URL);
+
+    const baseUrl =
+      explicitOllama?.baseUrl ??
+      process.env.OLLAMA_BASE_URL ??
+      (process.env.OLLAMA_API_BASE_URL ? `${process.env.OLLAMA_API_BASE_URL}/v1` : OLLAMA_BASE_URL);
+
+    if (!explicitOllama?.models || explicitOllama.models.length === 0 || params.discover) {
+      providers.ollama = {
+        ...(await buildOllamaProvider({ baseUrl, apiBaseUrl, discover: params.discover })),
+        apiKey: ollamaKey,
+      };
+    }
   }
 
   const qianfanKey =
