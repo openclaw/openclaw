@@ -252,26 +252,31 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeAllowFromWithStore({
-    allowFrom: allowFrom,
-    storeAllowFrom,
-  });
-  const senderAllowed = isSenderAllowed({
-    allow: dmAllow,
-    senderId,
-    senderUsername,
-  });
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
-    modeWhenAccessGroupsOff: "configured",
-  });
-  if (requireAuth && !commandAuthorized) {
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+  // For non-group (DM) messages, check the DM allowlist.
+  // Group messages are already authorized by the group policy checks above.
+  let commandAuthorized = true;
+  if (!isGroup) {
+    const dmAllow = normalizeAllowFromWithStore({
+      allowFrom: allowFrom,
+      storeAllowFrom,
     });
-    return null;
+    const senderAllowed = isSenderAllowed({
+      allow: dmAllow,
+      senderId,
+      senderUsername,
+    });
+    commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups,
+      authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+      modeWhenAccessGroupsOff: "configured",
+    });
+    if (requireAuth && !commandAuthorized) {
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+      });
+      return null;
+    }
   }
 
   return {
