@@ -65,6 +65,35 @@ It writes config/workspace on the host:
 
 Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
+### One-click run/stop (macOS)
+
+For a Finder double-click flow, use the launchers in repo root:
+
+- `Run-Real-Dispatch-Docker.command`
+- `Stop-Real-Dispatch-Docker.command`
+
+Start behavior:
+
+- terminates existing compose services (`down --remove-orphans`)
+- rebuilds the Docker image
+- starts `openclaw-gateway`
+- opens the dashboard at `http://127.0.0.1:18789/`
+- prints the current gateway token
+
+CLI equivalents:
+
+```bash
+pnpm docker:oneclick:start
+pnpm docker:oneclick:stop
+pnpm docker:oneclick:status
+pnpm docker:oneclick:logs
+```
+
+Notes:
+
+- Stop does not delete volumes.
+- If compose env values change, rerun start so `.env` is refreshed.
+
 ### Manual flow (compose)
 
 ```bash
