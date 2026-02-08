@@ -39,7 +39,14 @@ function resolveOpenAICodexGpt53FallbackModel(
   if (normalizedProvider !== "openai-codex") {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+
+  const lower = trimmedModelId.toLowerCase();
+  // Accept exact and version-suffixed variants (e.g. gpt-5.3-codex-2026-02-01)
+  // so we can be forward compatible with upstream naming.
+  if (
+    lower !== OPENAI_CODEX_GPT_53_MODEL_ID &&
+    !lower.startsWith(`${OPENAI_CODEX_GPT_53_MODEL_ID}-`)
+  ) {
     return undefined;
   }
 
@@ -164,13 +171,19 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+
+  // Normalize provider + model before resolving so minor formatting differences (case, whitespace,
+  // etc.) do not surface as "Unknown model".
+  const model = modelRegistry.find(normalizedProvider, trimmedModelId) as Model<Api> | null;
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+      (entry) =>
+        normalizeProviderId(entry.provider) === normalizedProvider && entry.id === trimmedModelId,
     );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
@@ -184,28 +197,29 @@ export function resolveModel(
     // Otherwise, if cfg.models.providers["openai-codex"] is configured, the generic fallback fires
     // with api: "openai-responses" instead of the correct "openai-codex-responses".
     const codexForwardCompat = resolveOpenAICodexGpt53FallbackModel(
-      provider,
-      modelId,
+      normalizedProvider,
+      trimmedModelId,
       modelRegistry,
     );
     if (codexForwardCompat) {
       return { model: codexForwardCompat, authStorage, modelRegistry };
     }
     const anthropicForwardCompat = resolveAnthropicOpus46ForwardCompatModel(
-      provider,
-      modelId,
+      normalizedProvider,
+      trimmedModelId,
       modelRegistry,
     );
     if (anthropicForwardCompat) {
       return { model: anthropicForwardCompat, authStorage, modelRegistry };
     }
-    const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
+
+    const providerCfg = providers[normalizedProvider] ?? providers[provider];
+    if (providerCfg || trimmedModelId.startsWith("mock-")) {
       const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
+        id: trimmedModelId,
+        name: trimmedModelId,
         api: providerCfg?.api ?? "openai-responses",
-        provider,
+        provider: normalizedProvider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,
         input: ["text"],
@@ -216,7 +230,7 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     return {
-      error: `Unknown model: ${provider}/${modelId}`,
+      error: `Unknown model: ${normalizedProvider}/${trimmedModelId}`,
       authStorage,
       modelRegistry,
     };
