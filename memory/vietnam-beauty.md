@@ -648,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `c4ffda2 fix: CORS whitelist + AI job auto-cleanup (A013 T4+T7) (02-08)`
 - `f7df844 docs: D031 UCP product registration and sales process guide (02-08)`
 - `d0bb803 docs: D030 R2 integration checklist - all tasks verified (02-08)`
 - `88b492c feat: R2 pipeline integration (T4+T5+T6) (02-08)`
 - `5ca718e feat: R2 utils, upload API, temp cleanup (T1+T2+T3) (02-08)`
-- `2b2f067 docs: D030 R2 storage integration plan (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
