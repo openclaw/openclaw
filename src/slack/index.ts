@@ -23,3 +23,13 @@ export { monitorSlackProvider } from "./monitor.js";
 export { probeSlack } from "./probe.js";
 export { sendMessageSlack } from "./send.js";
 export { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
+export {
+  setAssistantStatus,
+  clearAssistantStatus,
+  setAssistantSuggestedPrompts,
+  setAssistantThreadTitle,
+  type AssistantStatusParams,
+  type AssistantSuggestedPrompt,
+  type AssistantSuggestedPromptsParams,
+  type AssistantThreadTitleParams,
+} from "./assistant.js";
