@@ -32,14 +32,18 @@ import {
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import {
   readFirstUserMessageFromTranscript,
+  readFirstUserMessageFromTranscriptAsync,
   readLastMessagePreviewFromTranscript,
+  readLastMessagePreviewFromTranscriptAsync,
 } from "./session-utils.fs.js";
 
 export {
   archiveFileOnDisk,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
+  readFirstUserMessageFromTranscriptAsync,
   readLastMessagePreviewFromTranscript,
+  readLastMessagePreviewFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
@@ -722,6 +726,213 @@ export function listSessionsFromStore(params: {
     }
     return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
   });
+
+  return {
+    ts: now,
+    path: storePath,
+    count: finalSessions.length,
+    defaults: getSessionDefaults(cfg),
+    sessions: finalSessions,
+  };
+}
+
+/**
+ * Async version of listSessionsFromStore that uses non-blocking I/O.
+ * Issue #6628: Sync I/O blocks the event loop when listing sessions with derived titles.
+ *
+ * The sync version blocks because it reads transcript files synchronously in a .map() loop.
+ * This async version processes sessions concurrently (up to MAX_CONCURRENT) to avoid blocking.
+ */
+const MAX_CONCURRENT_SESSION_READS = 10;
+
+export async function listSessionsFromStoreAsync(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+}): Promise<SessionsListResult> {
+  const { cfg, storePath, store, opts } = params;
+  const now = Date.now();
+
+  const includeGlobal = opts.includeGlobal === true;
+  const includeUnknown = opts.includeUnknown === true;
+  const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
+  const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const label = typeof opts.label === "string" ? opts.label.trim() : "";
+  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const search = typeof opts.search === "string" ? opts.search.trim().toLowerCase() : "";
+  const activeMinutes =
+    typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
+      ? Math.max(1, Math.floor(opts.activeMinutes))
+      : undefined;
+
+  let sessions = Object.entries(store)
+    .filter(([key]) => {
+      if (!includeGlobal && key === "global") {
+        return false;
+      }
+      if (!includeUnknown && key === "unknown") {
+        return false;
+      }
+      if (agentId) {
+        if (key === "global" || key === "unknown") {
+          return false;
+        }
+        const parsed = parseAgentSessionKey(key);
+        if (!parsed) {
+          return false;
+        }
+        return normalizeAgentId(parsed.agentId) === agentId;
+      }
+      return true;
+    })
+    .filter(([key, entry]) => {
+      if (!spawnedBy) {
+        return true;
+      }
+      if (key === "unknown" || key === "global") {
+        return false;
+      }
+      return entry?.spawnedBy === spawnedBy;
+    })
+    .filter(([, entry]) => {
+      if (!label) {
+        return true;
+      }
+      return entry?.label === label;
+    })
+    .map(([key, entry]) => {
+      const updatedAt = entry?.updatedAt ?? null;
+      const input = entry?.inputTokens ?? 0;
+      const output = entry?.outputTokens ?? 0;
+      const total = entry?.totalTokens ?? input + output;
+      const parsed = parseGroupKey(key);
+      const channel = entry?.channel ?? parsed?.channel;
+      const subject = entry?.subject;
+      const groupChannel = entry?.groupChannel;
+      const space = entry?.space;
+      const id = parsed?.id;
+      const origin = entry?.origin;
+      const originLabel = origin?.label;
+      const displayName =
+        entry?.displayName ??
+        (channel
+          ? buildGroupDisplayName({
+              provider: channel,
+              subject,
+              groupChannel,
+              space,
+              id,
+              key,
+            })
+          : undefined) ??
+        entry?.label ??
+        originLabel;
+      const deliveryFields = normalizeSessionDeliveryFields(entry);
+      return {
+        key,
+        entry,
+        kind: classifySessionKey(key, entry),
+        label: entry?.label,
+        displayName,
+        channel,
+        subject,
+        groupChannel,
+        space,
+        chatType: entry?.chatType,
+        origin,
+        updatedAt,
+        sessionId: entry?.sessionId,
+        systemSent: entry?.systemSent,
+        abortedLastRun: entry?.abortedLastRun,
+        thinkingLevel: entry?.thinkingLevel,
+        verboseLevel: entry?.verboseLevel,
+        reasoningLevel: entry?.reasoningLevel,
+        elevatedLevel: entry?.elevatedLevel,
+        sendPolicy: entry?.sendPolicy,
+        inputTokens: entry?.inputTokens,
+        outputTokens: entry?.outputTokens,
+        totalTokens: total,
+        responseUsage: entry?.responseUsage,
+        modelProvider: entry?.modelProvider,
+        model: entry?.model,
+        contextTokens: entry?.contextTokens,
+        deliveryContext: deliveryFields.deliveryContext,
+        lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+        lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+        lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+      };
+    })
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  if (search) {
+    sessions = sessions.filter((s) => {
+      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+      return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
+    });
+  }
+
+  if (activeMinutes !== undefined) {
+    const cutoff = now - activeMinutes * 60_000;
+    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+  }
+
+  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+    const limit = Math.max(1, Math.floor(opts.limit));
+    sessions = sessions.slice(0, limit);
+  }
+
+  // Process sessions with async I/O to avoid blocking the event loop.
+  // Use bounded concurrency to limit file descriptor usage.
+  const finalSessions: GatewaySessionRow[] = [];
+  const needsFileReads = includeDerivedTitles || includeLastMessage;
+
+  if (!needsFileReads) {
+    // No file I/O needed - fast path
+    for (const s of sessions) {
+      const { entry: _entry, ...rest } = s;
+      finalSessions.push({ ...rest, derivedTitle: undefined, lastMessagePreview: undefined });
+    }
+  } else {
+    // Process in batches with concurrency limit
+    for (let i = 0; i < sessions.length; i += MAX_CONCURRENT_SESSION_READS) {
+      const batch = sessions.slice(i, i + MAX_CONCURRENT_SESSION_READS);
+      const batchResults = await Promise.all(
+        batch.map(async (s) => {
+          const { entry, key, ...rest } = s;
+          let derivedTitle: string | undefined;
+          let lastMessagePreview: string | undefined;
+          if (entry?.sessionId) {
+            // Extract agentId from session key for per-agent transcript resolution
+            const sessionAgentId = parseAgentSessionKey(key)?.agentId;
+            if (includeDerivedTitles) {
+              const firstUserMsg = await readFirstUserMessageFromTranscriptAsync(
+                entry.sessionId,
+                storePath,
+                entry.sessionFile,
+                sessionAgentId,
+              );
+              derivedTitle = deriveSessionTitle(entry, firstUserMsg);
+            }
+            if (includeLastMessage) {
+              const lastMsg = await readLastMessagePreviewFromTranscriptAsync(
+                entry.sessionId,
+                storePath,
+                entry.sessionFile,
+                sessionAgentId,
+              );
+              if (lastMsg) {
+                lastMessagePreview = lastMsg;
+              }
+            }
+          }
+          return { key, ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
+        }),
+      );
+      finalSessions.push(...batchResults);
+    }
+  }
 
   return {
     ts: now,

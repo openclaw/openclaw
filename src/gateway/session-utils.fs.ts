@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -186,6 +187,67 @@ export function readFirstUserMessageFromTranscript(
   return null;
 }
 
+/**
+ * Async version of readFirstUserMessageFromTranscript to avoid blocking the event loop.
+ * Issue #6628: Sync I/O in listGatewaySessions blocks the gateway during session listing.
+ */
+export async function readFirstUserMessageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  let filePath: string | undefined;
+  for (const p of candidates) {
+    try {
+      await fsPromises.access(p, fs.constants.R_OK);
+      filePath = p;
+      break;
+    } catch {
+      // not accessible
+    }
+  }
+  if (!filePath) {
+    return null;
+  }
+
+  let handle: fsPromises.FileHandle | null = null;
+  try {
+    handle = await fsPromises.open(filePath, "r");
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    if (bytesRead === 0) {
+      return null;
+    }
+    const chunk = buf.toString("utf-8", 0, bytesRead);
+    const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line);
+        const msg = parsed?.message as TranscriptMessage | undefined;
+        if (msg?.role === "user") {
+          const text = extractTextFromContent(msg.content);
+          if (text) {
+            return text;
+          }
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+  } catch {
+    // file read error
+  } finally {
+    await handle?.close();
+  }
+  return null;
+}
+
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
@@ -240,6 +302,72 @@ export function readLastMessagePreviewFromTranscript(
     if (fd !== null) {
       fs.closeSync(fd);
     }
+  }
+  return null;
+}
+
+/**
+ * Async version of readLastMessagePreviewFromTranscript to avoid blocking the event loop.
+ * Issue #6628: Sync I/O in listGatewaySessions blocks the gateway during session listing.
+ */
+export async function readLastMessagePreviewFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  let filePath: string | undefined;
+  for (const p of candidates) {
+    try {
+      await fsPromises.access(p, fs.constants.R_OK);
+      filePath = p;
+      break;
+    } catch {
+      // not accessible
+    }
+  }
+  if (!filePath) {
+    return null;
+  }
+
+  let handle: fsPromises.FileHandle | null = null;
+  try {
+    handle = await fsPromises.open(filePath, "r");
+    const stat = await handle.stat();
+    const size = stat.size;
+    if (size === 0) {
+      return null;
+    }
+
+    const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
+    const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
+    const buf = Buffer.alloc(readLen);
+    await handle.read(buf, 0, readLen, readStart);
+
+    const chunk = buf.toString("utf-8");
+    const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+    const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+    for (let i = tailLines.length - 1; i >= 0; i--) {
+      const line = tailLines[i];
+      try {
+        const parsed = JSON.parse(line);
+        const msg = parsed?.message as TranscriptMessage | undefined;
+        if (msg?.role === "user" || msg?.role === "assistant") {
+          const text = extractTextFromContent(msg.content);
+          if (text) {
+            return text;
+          }
+        }
+      } catch {
+        // skip malformed
+      }
+    }
+  } catch {
+    // file error
+  } finally {
+    await handle?.close();
   }
   return null;
 }
