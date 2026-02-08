@@ -33,6 +33,19 @@ export type SpoolWatcher = {
   processExisting: () => Promise<void>;
 };
 
+// Error codes that indicate fatal watcher failures requiring restart
+const FATAL_WATCH_ERRORS = new Set(["ENOSPC", "EMFILE", "ENFILE", "EACCES"]);
+
+/**
+ * Check if an error is a fatal filesystem watcher error.
+ */
+function isFatalWatchError(err: unknown): boolean {
+  if (err && typeof err === "object" && "code" in err) {
+    return FATAL_WATCH_ERRORS.has(String((err as { code: unknown }).code));
+  }
+  return false;
+}
+
 /**
  * Create a spool watcher that processes events from the spool directory.
  */
@@ -44,6 +57,15 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
   let processing = false;
   let pendingFiles: Set<string> = new Set();
   let processTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Promise that resolves when the current processing cycle completes.
+  // Used by stop() to wait for in-flight dispatches before returning.
+  let processingDoneResolve: (() => void) | null = null;
+  let processingDonePromise: Promise<void> | null = null;
+
+  // Recovery state for fatal watcher errors
+  let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  const RECOVERY_DELAY_MS = 5000;
 
   const eventsDir = resolveSpoolEventsDir();
   const deadLetterDir = resolveSpoolDeadLetterDir();
@@ -70,6 +92,11 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
     }
     processing = true;
 
+    // Create a promise that stop() can await to know when processing completes
+    processingDonePromise = new Promise((resolve) => {
+      processingDoneResolve = resolve;
+    });
+
     // Capture pending file paths and extract IDs (but don't remove yet - preserve on failure)
     // Also track non-event files (temp files, non-JSON) so we can clean them from the queue
     const capturedPaths = new Set<string>();
@@ -93,6 +120,9 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
 
     if (pendingIds.size === 0) {
       processing = false;
+      processingDoneResolve?.();
+      processingDoneResolve = null;
+      processingDonePromise = null;
       return;
     }
 
@@ -105,6 +135,9 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
     } catch (err) {
       // Batch initialization failed - leave pendingFiles intact for retry
       processing = false;
+      processingDoneResolve?.();
+      processingDoneResolve = null;
+      processingDonePromise = null;
       throw err;
     }
 
@@ -193,43 +226,68 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
       }
     } finally {
       processing = false;
+      processingDoneResolve?.();
+      processingDoneResolve = null;
+      processingDonePromise = null;
 
       // If more files arrived while processing, schedule another round
-      if (pendingFiles.size > 0) {
+      if (pendingFiles.size > 0 && running) {
         scheduleProcessing();
       }
     }
   };
 
-  const start = async () => {
-    if (running) {
+  /**
+   * Attempt to recover from a fatal watcher error by restarting.
+   */
+  const scheduleRecovery = () => {
+    if (recoveryTimer || !running) {
       return;
     }
-    running = true;
 
-    try {
-      // Ensure directory exists
-      await ensureSpoolEventsDir();
+    log.warn(`scheduling watcher recovery in ${RECOVERY_DELAY_MS}ms`);
 
-      // Check if stop() was called during the async init
+    recoveryTimer = setTimeout(async () => {
+      recoveryTimer = null;
+
       if (!running) {
         return;
       }
 
-      // Start watching (depth: 0 prevents recursive watching so nested files
-      // don't get misresolved to top-level paths during dispatch)
-      watcher = chokidar.watch(eventsDir, {
-        ignoreInitial: false, // Process existing files on startup
-        depth: 0, // Only watch immediate children, not subdirectories
-        awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-        usePolling: Boolean(process.env.VITEST),
-      });
-    } catch (err) {
-      // Reset state on startup failure to allow recovery
-      running = false;
-      watcher = null;
-      throw err;
-    }
+      try {
+        // Close the existing watcher if it exists
+        if (watcher) {
+          await watcher.close();
+          watcher = null;
+        }
+
+        // Restart the watcher
+        await startWatcher();
+        log.info("watcher recovered successfully");
+
+        // Re-scan for any files that may have been added during the outage
+        await processExisting();
+      } catch (err) {
+        log.error(`watcher recovery failed: ${String(err)}`);
+        // Schedule another recovery attempt
+        scheduleRecovery();
+      }
+    }, RECOVERY_DELAY_MS);
+  };
+
+  /**
+   * Internal function to start the chokidar watcher.
+   * Separated from start() to allow recovery to reuse it.
+   */
+  const startWatcher = async () => {
+    // Start watching (depth: 0 prevents recursive watching so nested files
+    // don't get misresolved to top-level paths during dispatch)
+    watcher = chokidar.watch(eventsDir, {
+      ignoreInitial: false, // Process existing files on startup
+      depth: 0, // Only watch immediate children, not subdirectories
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling: Boolean(process.env.VITEST),
+    });
 
     watcher.on("add", (filePath) => {
       if (!running) {
@@ -250,9 +308,39 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
 
     watcher.on("error", (err) => {
       log.error(`watcher error: ${String(err)}`);
+
+      // On fatal errors, attempt to recover
+      if (isFatalWatchError(err)) {
+        log.error("fatal watcher error detected, attempting recovery");
+        scheduleRecovery();
+      }
     });
 
     log.info(`watching ${eventsDir}`);
+  };
+
+  const start = async () => {
+    if (running) {
+      return;
+    }
+    running = true;
+
+    try {
+      // Ensure directory exists
+      await ensureSpoolEventsDir();
+
+      // Check if stop() was called during the async init
+      if (!running) {
+        return;
+      }
+
+      await startWatcher();
+    } catch (err) {
+      // Reset state on startup failure to allow recovery
+      running = false;
+      watcher = null;
+      throw err;
+    }
   };
 
   const stop = async () => {
@@ -260,9 +348,23 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
     const wasRunning = running;
     running = false;
 
+    // Clear any pending timers
     if (processTimer) {
       clearTimeout(processTimer);
       processTimer = null;
+    }
+
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
+
+    // Wait for any in-flight processing to complete before closing the watcher.
+    // This prevents duplicate event processing during config reload:
+    // if we return before dispatch completes, a new watcher could start and
+    // process the same event file that the old watcher is still handling.
+    if (processingDonePromise) {
+      await processingDonePromise;
     }
 
     // Always close watcher if it exists, even if running was already false
@@ -305,23 +407,5 @@ export function createSpoolWatcher(params: SpoolWatcherParams): SpoolWatcher {
     stop,
     getState,
     processExisting,
-  };
-}
-
-export type SpoolWatcherHandle = {
-  watcher: SpoolWatcher;
-  stop: () => Promise<void>;
-};
-
-/**
- * Start the spool watcher as a gateway sidecar.
- */
-export async function startSpoolWatcher(params: SpoolWatcherParams): Promise<SpoolWatcherHandle> {
-  const watcher = createSpoolWatcher(params);
-  await watcher.start();
-
-  return {
-    watcher,
-    stop: () => watcher.stop(),
   };
 }
