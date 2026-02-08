@@ -131,6 +131,8 @@ Related:
 
 ## Group policy
 
+> ⚠️ **Common mistake:** `groupAllowFrom` expects **phone numbers** (e.g., `"+15551234567"`), not group JIDs. To allowlist specific groups, use the `groups` config with group JIDs as keys (e.g., `"my-group@g.us": {}`). Putting a group JID in `groupAllowFrom` will silently fail to match anything.
+
 Control how group/room messages are handled per channel:
 
 ```json5
