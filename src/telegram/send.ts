@@ -69,7 +69,9 @@ type TelegramReactionOpts = {
 };
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const THREAD_NOT_FOUND_RE = /400:.*Bad Request:.*message thread not found/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+const log = createSubsystemLogger("telegram");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -225,6 +227,13 @@ export async function sendMessageTelegram(
     messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
+
+  // When Forum/Topics mode is toggled off, a stale message_thread_id persisted
+  // in the session store causes Telegram to reject sends with "message thread
+  // not found".  Detect this and retry once without the thread parameter.
+  const hasMessageThreadId = threadIdParams != null;
+  const isThreadNotFoundError = (err: unknown) =>
+    hasMessageThreadId && THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
   const quoteText = opts.quoteText?.trim();
   if (opts.replyToMessageId != null) {
     if (quoteText) {
@@ -237,225 +246,247 @@ export async function sendMessageTelegram(
     }
   }
   const hasThreadParams = Object.keys(threadParams).length > 0;
-  const request = createTelegramRetryRunner({
-    retry: opts.retry,
-    configRetry: account.config.retry,
-    verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
-  });
-  const logHttpError = createTelegramHttpLogger(cfg);
-  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
-    withTelegramApiErrorLogging({
-      operation: label ?? "request",
-      fn: () => request(fn, label),
-    }).catch((err) => {
-      logHttpError(label ?? "request", err);
-      throw err;
+
+  try {
+    const request = createTelegramRetryRunner({
+      retry: opts.retry,
+      configRetry: account.config.retry,
+      verbose: opts.verbose,
+      shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
     });
-  const wrapChatNotFound = (err: unknown) => {
-    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
-      return err;
-    }
-    return new Error(
-      [
-        `Telegram send failed: chat not found (chat_id=${chatId}).`,
-        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
-        `Input was: ${JSON.stringify(to)}.`,
-      ].join(" "),
-    );
-  };
-
-  const textMode = opts.textMode ?? "markdown";
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "telegram",
-    accountId: account.accountId,
-  });
-  const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
-
-  // Resolve link preview setting from config (default: enabled).
-  const linkPreviewEnabled = account.config.linkPreview ?? true;
-  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
-
-  const sendTelegramText = async (
-    rawText: string,
-    params?: Record<string, unknown>,
-    fallbackText?: string,
-  ) => {
-    const htmlText = renderHtmlText(rawText);
-    const baseParams = params ? { ...params } : {};
-    if (linkPreviewOptions) {
-      baseParams.link_preview_options = linkPreviewOptions;
-    }
-    const hasBaseParams = Object.keys(baseParams).length > 0;
-    const sendParams = {
-      parse_mode: "HTML" as const,
-      ...baseParams,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
-    };
-    const res = await requestWithDiag(
-      () => api.sendMessage(chatId, htmlText, sendParams),
-      "message",
-    ).catch(async (err) => {
-      // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
-      // When that happens, fall back to plain text so the message still delivers.
-      const errText = formatErrorMessage(err);
-      if (PARSE_ERR_RE.test(errText)) {
-        if (opts.verbose) {
-          console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
-        }
-        const fallback = fallbackText ?? rawText;
-        const plainParams = hasBaseParams ? baseParams : undefined;
-        return await requestWithDiag(
-          () =>
-            plainParams
-              ? api.sendMessage(chatId, fallback, plainParams)
-              : api.sendMessage(chatId, fallback),
-          "message-plain",
-        ).catch((err2) => {
-          throw wrapChatNotFound(err2);
-        });
+    const logHttpError = createTelegramHttpLogger(cfg);
+    const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+      withTelegramApiErrorLogging({
+        operation: label ?? "request",
+        fn: () => request(fn, label),
+      }).catch((err) => {
+        logHttpError(label ?? "request", err);
+        throw err;
+      });
+    const wrapChatNotFound = (err: unknown) => {
+      if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
+        return err;
       }
-      throw wrapChatNotFound(err);
-    });
-    return res;
-  };
+      return new Error(
+        [
+          `Telegram send failed: chat not found (chat_id=${chatId}).`,
+          "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+          `Input was: ${JSON.stringify(to)}.`,
+        ].join(" "),
+      );
+    };
 
-  if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes);
-    const kind = mediaKindFromMime(media.contentType ?? undefined);
-    const isGif = isGifMedia({
-      contentType: media.contentType,
-      fileName: media.fileName,
+    const textMode = opts.textMode ?? "markdown";
+    const tableMode = resolveMarkdownTableMode({
+      cfg,
+      channel: "telegram",
+      accountId: account.accountId,
     });
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
-    const file = new InputFile(media.buffer, fileName);
-    const { caption, followUpText } = splitTelegramCaption(text);
-    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
-    // If text exceeds Telegram's caption limit, send media without caption
-    // then send text as a separate follow-up message.
-    const needsSeparateText = Boolean(followUpText);
-    // When splitting, put reply_markup only on the follow-up text (the "main" content),
-    // not on the media message.
-    const baseMediaParams = {
-      ...(hasThreadParams ? threadParams : {}),
-      ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
-    };
-    const mediaParams = {
-      caption: htmlCaption,
-      ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
-      ...baseMediaParams,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
-    };
-    let result:
-      | Awaited<ReturnType<typeof api.sendPhoto>>
-      | Awaited<ReturnType<typeof api.sendVideo>>
-      | Awaited<ReturnType<typeof api.sendAudio>>
-      | Awaited<ReturnType<typeof api.sendVoice>>
-      | Awaited<ReturnType<typeof api.sendAnimation>>
-      | Awaited<ReturnType<typeof api.sendDocument>>;
-    if (isGif) {
-      result = await requestWithDiag(
-        () => api.sendAnimation(chatId, file, mediaParams),
-        "animation",
-      ).catch((err) => {
+    const renderHtmlText = (value: string) =>
+      renderTelegramHtmlText(value, { textMode, tableMode });
+
+    // Resolve link preview setting from config (default: enabled).
+    const linkPreviewEnabled = account.config.linkPreview ?? true;
+    const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+
+    const sendTelegramText = async (
+      rawText: string,
+      params?: Record<string, unknown>,
+      fallbackText?: string,
+    ) => {
+      const htmlText = renderHtmlText(rawText);
+      const baseParams = params ? { ...params } : {};
+      if (linkPreviewOptions) {
+        baseParams.link_preview_options = linkPreviewOptions;
+      }
+      const hasBaseParams = Object.keys(baseParams).length > 0;
+      const sendParams = {
+        parse_mode: "HTML" as const,
+        ...baseParams,
+        ...(opts.silent === true ? { disable_notification: true } : {}),
+      };
+      const res = await requestWithDiag(
+        () => api.sendMessage(chatId, htmlText, sendParams),
+        "message",
+      ).catch(async (err) => {
+        // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
+        // When that happens, fall back to plain text so the message still delivers.
+        const errText = formatErrorMessage(err);
+        if (PARSE_ERR_RE.test(errText)) {
+          if (opts.verbose) {
+            console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+          }
+          const fallback = fallbackText ?? rawText;
+          const plainParams = hasBaseParams ? baseParams : undefined;
+          return await requestWithDiag(
+            () =>
+              plainParams
+                ? api.sendMessage(chatId, fallback, plainParams)
+                : api.sendMessage(chatId, fallback),
+            "message-plain",
+          ).catch((err2) => {
+            throw wrapChatNotFound(err2);
+          });
+        }
         throw wrapChatNotFound(err);
       });
-    } else if (kind === "image") {
-      result = await requestWithDiag(() => api.sendPhoto(chatId, file, mediaParams), "photo").catch(
-        (err) => {
-          throw wrapChatNotFound(err);
-        },
-      );
-    } else if (kind === "video") {
-      result = await requestWithDiag(() => api.sendVideo(chatId, file, mediaParams), "video").catch(
-        (err) => {
-          throw wrapChatNotFound(err);
-        },
-      );
-    } else if (kind === "audio") {
-      const { useVoice } = resolveTelegramVoiceSend({
-        wantsVoice: opts.asVoice === true, // default false (backward compatible)
+      return res;
+    };
+
+    if (mediaUrl) {
+      const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+      const kind = mediaKindFromMime(media.contentType ?? undefined);
+      const isGif = isGifMedia({
         contentType: media.contentType,
-        fileName,
-        logFallback: logVerbose,
+        fileName: media.fileName,
       });
-      if (useVoice) {
+      const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
+      const file = new InputFile(media.buffer, fileName);
+      const { caption, followUpText } = splitTelegramCaption(text);
+      const htmlCaption = caption ? renderHtmlText(caption) : undefined;
+      // If text exceeds Telegram's caption limit, send media without caption
+      // then send text as a separate follow-up message.
+      const needsSeparateText = Boolean(followUpText);
+      // When splitting, put reply_markup only on the follow-up text (the "main" content),
+      // not on the media message.
+      const baseMediaParams = {
+        ...(hasThreadParams ? threadParams : {}),
+        ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
+      };
+      const mediaParams = {
+        caption: htmlCaption,
+        ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
+        ...baseMediaParams,
+        ...(opts.silent === true ? { disable_notification: true } : {}),
+      };
+      let result:
+        | Awaited<ReturnType<typeof api.sendPhoto>>
+        | Awaited<ReturnType<typeof api.sendVideo>>
+        | Awaited<ReturnType<typeof api.sendAudio>>
+        | Awaited<ReturnType<typeof api.sendVoice>>
+        | Awaited<ReturnType<typeof api.sendAnimation>>
+        | Awaited<ReturnType<typeof api.sendDocument>>;
+      if (isGif) {
         result = await requestWithDiag(
-          () => api.sendVoice(chatId, file, mediaParams),
-          "voice",
+          () => api.sendAnimation(chatId, file, mediaParams),
+          "animation",
         ).catch((err) => {
           throw wrapChatNotFound(err);
         });
+      } else if (kind === "image") {
+        result = await requestWithDiag(
+          () => api.sendPhoto(chatId, file, mediaParams),
+          "photo",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
+      } else if (kind === "video") {
+        result = await requestWithDiag(
+          () => api.sendVideo(chatId, file, mediaParams),
+          "video",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
+      } else if (kind === "audio") {
+        const { useVoice } = resolveTelegramVoiceSend({
+          wantsVoice: opts.asVoice === true, // default false (backward compatible)
+          contentType: media.contentType,
+          fileName,
+          logFallback: logVerbose,
+        });
+        if (useVoice) {
+          result = await requestWithDiag(
+            () => api.sendVoice(chatId, file, mediaParams),
+            "voice",
+          ).catch((err) => {
+            throw wrapChatNotFound(err);
+          });
+        } else {
+          result = await requestWithDiag(
+            () => api.sendAudio(chatId, file, mediaParams),
+            "audio",
+          ).catch((err) => {
+            throw wrapChatNotFound(err);
+          });
+        }
       } else {
         result = await requestWithDiag(
-          () => api.sendAudio(chatId, file, mediaParams),
-          "audio",
+          () => api.sendDocument(chatId, file, mediaParams),
+          "document",
         ).catch((err) => {
           throw wrapChatNotFound(err);
         });
       }
-    } else {
-      result = await requestWithDiag(
-        () => api.sendDocument(chatId, file, mediaParams),
-        "document",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
+      const mediaMessageId = String(result?.message_id ?? "unknown");
+      const resolvedChatId = String(result?.chat?.id ?? chatId);
+      if (result?.message_id) {
+        recordSentMessage(chatId, result.message_id);
+      }
+      recordChannelActivity({
+        channel: "telegram",
+        accountId: account.accountId,
+        direction: "outbound",
       });
+
+      // If text was too long for a caption, send it as a separate follow-up message.
+      // Use HTML conversion so markdown renders like captions.
+      if (needsSeparateText && followUpText) {
+        const textParams =
+          hasThreadParams || replyMarkup
+            ? {
+                ...threadParams,
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+              }
+            : undefined;
+        const textRes = await sendTelegramText(followUpText, textParams);
+        // Return the text message ID as the "main" message (it's the actual content).
+        return {
+          messageId: String(textRes?.message_id ?? mediaMessageId),
+          chatId: resolvedChatId,
+        };
+      }
+
+      return { messageId: mediaMessageId, chatId: resolvedChatId };
     }
-    const mediaMessageId = String(result?.message_id ?? "unknown");
-    const resolvedChatId = String(result?.chat?.id ?? chatId);
-    if (result?.message_id) {
-      recordSentMessage(chatId, result.message_id);
+
+    if (!text || !text.trim()) {
+      throw new Error("Message must be non-empty for Telegram sends");
+    }
+    const textParams =
+      hasThreadParams || replyMarkup
+        ? {
+            ...threadParams,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    const res = await sendTelegramText(text, textParams, opts.plainText);
+    const messageId = String(res?.message_id ?? "unknown");
+    if (res?.message_id) {
+      recordSentMessage(chatId, res.message_id);
     }
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
       direction: "outbound",
     });
-
-    // If text was too long for a caption, send it as a separate follow-up message.
-    // Use HTML conversion so markdown renders like captions.
-    if (needsSeparateText && followUpText) {
-      const textParams =
-        hasThreadParams || replyMarkup
-          ? {
-              ...threadParams,
-              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-            }
-          : undefined;
-      const textRes = await sendTelegramText(followUpText, textParams);
-      // Return the text message ID as the "main" message (it's the actual content).
-      return {
-        messageId: String(textRes?.message_id ?? mediaMessageId),
-        chatId: resolvedChatId,
-      };
+    return { messageId, chatId: String(res?.chat?.id ?? chatId) };
+  } catch (err) {
+    // When Forum/Topics mode is toggled off in a Telegram chat, the
+    // message_thread_id persisted in session state becomes stale and Telegram
+    // rejects the send with "message thread not found".  Retry once without
+    // the thread parameter so the message still delivers.
+    if (isThreadNotFoundError(err)) {
+      log.warn(
+        `telegram send failed with stale message_thread_id=${messageThreadId}, retrying without thread`,
+      );
+      return sendMessageTelegram(to, text, {
+        ...opts,
+        // Explicitly clear the thread id so the retry doesn't include it.
+        messageThreadId: undefined,
+      });
     }
-
-    return { messageId: mediaMessageId, chatId: resolvedChatId };
+    throw err;
   }
-
-  if (!text || !text.trim()) {
-    throw new Error("Message must be non-empty for Telegram sends");
-  }
-  const textParams =
-    hasThreadParams || replyMarkup
-      ? {
-          ...threadParams,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
-      : undefined;
-  const res = await sendTelegramText(text, textParams, opts.plainText);
-  const messageId = String(res?.message_id ?? "unknown");
-  if (res?.message_id) {
-    recordSentMessage(chatId, res.message_id);
-  }
-  recordChannelActivity({
-    channel: "telegram",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-  return { messageId, chatId: String(res?.chat?.id ?? chatId) };
 }
 
 export async function reactMessageTelegram(
