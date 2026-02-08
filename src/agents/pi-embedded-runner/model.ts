@@ -69,16 +69,14 @@ function resolveOpenAICodexGpt53FallbackModel(
   } as Model<Api>);
 }
 
-function resolveAnthropicOpus46ForwardCompatModel(
+// Provider-agnostic: works for anthropic (dashes: claude-opus-4-6),
+// github-copilot (dots: claude-opus-4.6), openrouter, etc.
+function resolveOpus46ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "anthropic") {
-    return undefined;
-  }
-
   const trimmedModelId = modelId.trim();
   const lower = trimmedModelId.toLowerCase();
   const isOpus46 =
@@ -191,7 +189,7 @@ export function resolveModel(
     if (codexForwardCompat) {
       return { model: codexForwardCompat, authStorage, modelRegistry };
     }
-    const anthropicForwardCompat = resolveAnthropicOpus46ForwardCompatModel(
+    const anthropicForwardCompat = resolveOpus46ForwardCompatModel(
       provider,
       modelId,
       modelRegistry,

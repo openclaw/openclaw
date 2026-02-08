@@ -4,13 +4,22 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
 
 // Copilot model ids vary by plan/org and can change.
-// We keep this list intentionally broad; if a model isn't available Copilot will
-// return an error and users can remove it from their config.
+// NOTE: this static list is a fallback only — the primary model catalog comes
+// from pi-ai's built-in registry (see models-config.providers.ts).
 const DEFAULT_MODEL_IDS = [
   "gpt-4o",
   "gpt-4.1",
   "gpt-4.1-mini",
   "gpt-4.1-nano",
+  "gpt-5",
+  "gpt-5-mini",
+  "gpt-5.1",
+  "gpt-5.2",
+  "claude-opus-4.5",
+  "claude-opus-4.6",
+  "claude-sonnet-4",
+  "claude-sonnet-4.5",
+  "claude-haiku-4.5",
   "o1",
   "o1-mini",
   "o3-mini",

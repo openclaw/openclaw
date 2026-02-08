@@ -207,6 +207,41 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds a github-copilot forward-compat fallback for claude-opus-4.6", () => {
+    const templateModel = {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      provider: "github-copilot",
+      api: "openai-completions",
+      baseUrl: "https://api.individual.githubcopilot.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 16000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "github-copilot" && modelId === "claude-opus-4.5") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("github-copilot", "claude-opus-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "claude-opus-4.6",
+      api: "openai-completions",
+      baseUrl: "https://api.individual.githubcopilot.com",
+      reasoning: true,
+    });
+  });
+
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();

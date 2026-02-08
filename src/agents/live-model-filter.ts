@@ -9,6 +9,15 @@ const ANTHROPIC_PREFIXES = [
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
 ];
+// GitHub Copilot uses dots instead of dashes for Claude model IDs.
+const COPILOT_CLAUDE_PREFIXES = [
+  "claude-opus-4.6",
+  "claude-opus-4.5",
+  "claude-sonnet-4.5",
+  "claude-sonnet-4",
+  "claude-haiku-4.5",
+];
+const COPILOT_GPT_PREFIXES = ["gpt-5", "gpt-4"];
 const OPENAI_MODELS = ["gpt-5.2", "gpt-5.0"];
 const CODEX_MODELS = [
   "gpt-5.2",
@@ -72,6 +81,10 @@ export function isModernModelRef(ref: ModelRef): boolean {
 
   if (provider === "xai") {
     return matchesPrefix(id, XAI_PREFIXES);
+  }
+
+  if (provider === "github-copilot") {
+    return matchesPrefix(id, COPILOT_CLAUDE_PREFIXES) || matchesPrefix(id, COPILOT_GPT_PREFIXES);
   }
 
   if (provider === "opencode" && id.endsWith("-free")) {
