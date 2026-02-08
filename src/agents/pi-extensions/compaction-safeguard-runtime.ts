@@ -1,6 +1,9 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
+
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
+  model?: Model<Api>;
 };
 
 // Session-scoped runtime registry keyed by object identity.
