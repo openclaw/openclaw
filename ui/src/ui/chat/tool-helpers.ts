@@ -35,3 +35,36 @@ export function getTruncatedPreview(text: string): string {
   }
   return lines.length < allLines.length ? preview + "…" : preview;
 }
+
+/**
+ * Escapes HTML characters in a string.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+/**
+ * Converts URLs in the text to clickable HTML links.
+ * Automatically escapes the input text before adding links to prevent XSS.
+ */
+export function linkifyUrls(text: string): string {
+  const escaped = escapeHtml(text);
+  const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
+  return escaped.replace(urlRegex, (url) => {
+    let trailing = "";
+    // Trim common trailing punctuation chars that might be part of the sentence
+    while (url.length > 0 && /[.,)\]?!:;]$/.test(url)) {
+      trailing = url.charAt(url.length - 1) + trailing;
+      url = url.slice(0, -1);
+    }
+    if (url.length === 0) {
+      return trailing;
+    }
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="chat-link">${url}</a>${trailing}`;
+  });
+}
