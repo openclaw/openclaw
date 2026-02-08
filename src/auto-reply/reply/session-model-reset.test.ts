@@ -79,7 +79,8 @@ describe("session model reset on /new", () => {
     expect(result.resetTriggered).toBe(true);
 
     // Verify stale model fields are cleared
-    const store = loadSessionStore(storePath);
+    // Use skipCache to avoid reading stale cached values from prior saveSessionStore calls
+    const store = loadSessionStore(storePath, { skipCache: true });
     const entry = store[sessionKey];
 
     expect(entry?.sessionId).not.toBe("session-1"); // New session ID
@@ -130,7 +131,8 @@ describe("session model reset on /new", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
 
-    const store = loadSessionStore(storePath);
+    // Use skipCache to avoid reading stale cached values
+    const store = loadSessionStore(storePath, { skipCache: true });
     const entry = store[sessionKey];
 
     expect(entry?.model).toBeUndefined();
