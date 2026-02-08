@@ -15,8 +15,9 @@ export function extractModelDirective(
     return { cleaned: "", hasDirective: false };
   }
 
+  // Match /model or //model (Matrix clients escape unrecognized slash commands as //)
   const modelMatch = body.match(
-    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
+    /(?:^|\s)\/\/?model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
   );
 
   const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
@@ -24,8 +25,9 @@ export function extractModelDirective(
     modelMatch || aliases.length === 0
       ? null
       : body.match(
+          // Match /alias or //alias (Matrix clients escape unrecognized slash commands as //)
           new RegExp(
-            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
+            `(?:^|\\s)\\/\\/?(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
             "i",
           ),
         );
