@@ -551,6 +551,21 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    caution: z
+      .object({
+        enabled: z.boolean().optional(),
+        tools: z.record(z.string(), z.boolean()).optional(),
+        auditor: z
+          .object({
+            model: z.string().optional(),
+            timeoutMs: z.number().int().positive().optional(),
+            failMode: z.enum(["block", "warn", "allow"]).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

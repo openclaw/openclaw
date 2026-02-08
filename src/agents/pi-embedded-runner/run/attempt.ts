@@ -204,6 +204,24 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
+    // Create caution context for intent-aware audit (if enabled)
+    const { createCautionContext } = await import("../../../security/caution-context.js");
+    const { emitAgentEvent } = await import("../../../infra/agent-events.js");
+    const cautionContext = createCautionContext({
+      config: params.config,
+      originalUserMessage: params.prompt,
+      auditorModel: params.model,
+      modelRegistry: params.modelRegistry,
+      onBlock: (toolName, reason) => {
+        log.warn(`caution audit blocked: tool=${toolName} reason=${reason}`);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "security",
+          data: { type: "caution_block", tool: toolName, reason },
+        });
+      },
+    });
+
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -243,6 +261,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          cautionContext,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });

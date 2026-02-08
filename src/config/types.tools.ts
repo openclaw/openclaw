@@ -323,6 +323,24 @@ export type MemorySearchConfig = {
   };
 };
 
+export type CautionAuditorConfig = {
+  /** Model alias for the audit call (default: "fast"). */
+  model?: string;
+  /** Max time (ms) for the audit LLM call (default: 3000). */
+  timeoutMs?: number;
+  /** Behavior on auditor failure/timeout: "block" | "warn" | "allow" (default: "block"). */
+  failMode?: "block" | "warn" | "allow";
+};
+
+export type CautionConfig = {
+  /** Enable caution mode with shipped defaults (default: true). */
+  enabled?: boolean;
+  /** Per-tool caution overrides (tool name -> true/false). */
+  tools?: Record<string, boolean>;
+  /** Auditor LLM configuration. */
+  auditor?: CautionAuditorConfig;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -332,6 +350,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Caution mode: intent-aware audit for tool outputs. */
+  caution?: CautionConfig;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
