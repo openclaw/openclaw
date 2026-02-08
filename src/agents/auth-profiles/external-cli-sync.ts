@@ -1,11 +1,13 @@
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import {
+  readCodexCliCredentialsCached,
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
+  CODEX_CLI_PROFILE_ID,
   QWEN_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
   log,
@@ -31,17 +33,18 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
 }
 
 function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
-  if (!cred) {
+  if (!cred || cred.type !== "oauth") {
     return false;
   }
-  if (cred.type !== "oauth" && cred.type !== "token") {
-    return false;
-  }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal" &&
+    cred.provider !== "openai-codex"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {
-    return true;
+    return false;
   }
   return cred.expires > now + EXTERNAL_CLI_NEAR_EXPIRY_MS;
 }
@@ -125,6 +128,20 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
       MINIMAX_CLI_PROFILE_ID,
       "minimax-portal",
       () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+      now,
+    )
+  ) {
+    mutated = true;
+  }
+
+  // Sync from Codex CLI (~/.codex/auth.json) so OpenClaw can use ChatGPT subscription
+  // without the openai-codex auth plugin
+  if (
+    syncExternalCliCredentialsForProvider(
+      store,
+      CODEX_CLI_PROFILE_ID,
+      "openai-codex",
+      () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,
     )
   ) {
