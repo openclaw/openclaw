@@ -133,6 +133,7 @@ export const AgentDefaultsSchema = z
         z.literal("instant"),
         z.literal("thinking"),
         z.literal("message"),
+        z.literal("deferred"),
       ])
       .optional(),
     heartbeat: HeartbeatSchema,

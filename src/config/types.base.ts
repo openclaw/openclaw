@@ -1,7 +1,7 @@
 import type { NormalizedChatType } from "../channels/chat-type.js";
 
 export type ReplyMode = "text" | "command";
-export type TypingMode = "never" | "instant" | "thinking" | "message";
+export type TypingMode = "never" | "instant" | "thinking" | "message" | "deferred";
 export type SessionScope = "per-sender" | "global";
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 export type ReplyToMode = "off" | "first" | "all";
