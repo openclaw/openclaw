@@ -4,7 +4,6 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord } from "../send.js";
 
@@ -77,31 +76,6 @@ export async function deliverDiscordReply(params: {
         mediaUrl: extra,
         accountId: params.accountId,
       });
-    }
-  }
-
-  // Fire message_sent hook with combined text from all payloads
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner) {
-    const fullText = params.replies
-      .map((p) => p.text ?? "")
-      .filter(Boolean)
-      .join("\n");
-    if (fullText) {
-      void hookRunner
-        .runMessageSent(
-          {
-            to: params.target,
-            content: fullText,
-            success: true,
-          },
-          {
-            channelId: "discord",
-            accountId: params.accountId,
-            conversationId: params.target,
-          },
-        )
-        .catch(() => {});
     }
   }
 }
