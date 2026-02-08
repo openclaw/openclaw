@@ -137,11 +137,43 @@ export function createCanvasTool(): AnyAgentTool {
             typeof params.quality === "number" && Number.isFinite(params.quality)
               ? params.quality
               : undefined;
-          const raw = (await invoke("canvas.snapshot", {
-            format,
-            maxWidth,
-            quality,
-          })) as { payload?: unknown };
+          const delayMs =
+            typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
+              ? params.delayMs
+              : undefined;
+
+          // Helper to take snapshot
+          const takeSnapshot = async () =>
+            (await invoke("canvas.snapshot", {
+              format,
+              maxWidth,
+              quality,
+            })) as { payload?: unknown };
+
+          let raw: { payload?: unknown };
+          try {
+            raw = await takeSnapshot();
+          } catch (err) {
+            // Auto-present if canvas not yet shown
+            const msg = err instanceof Error ? err.message : String(err);
+            if (/canvas not presented/i.test(msg)) {
+              // Present with default target
+              const presentParams: Record<string, unknown> = {};
+              if (typeof params.target === "string" && params.target.trim()) {
+                presentParams.url = params.target.trim();
+              } else {
+                presentParams.url = "clawd-canvas";
+              }
+              await invoke("canvas.present", presentParams);
+              // Wait for canvas to initialize if delayMs provided
+              if (delayMs && delayMs > 0) {
+                await new Promise((r) => setTimeout(r, delayMs));
+              }
+              raw = await takeSnapshot();
+            } else {
+              throw err;
+            }
+          }
           const payload = parseCanvasSnapshotPayload(raw?.payload);
           const filePath = canvasSnapshotTempPath({
             ext: payload.format === "jpeg" ? "jpg" : payload.format,
