@@ -92,12 +92,32 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
+function sanitizeForDisplay(value: unknown): unknown {
+  try {
+    // Test if value can be stringified (no circular refs, not too large)
+    const str = JSON.stringify(value);
+    // If the serialized string is too large (>100KB), truncate it
+    if (str.length > 100_000) {
+      return `[Large object: ${str.length} bytes]`;
+    }
+    // Re-parse to ensure it's a clean copy
+    return JSON.parse(str);
+  } catch (err) {
+    // Circular reference or other serialization error
+    if (err instanceof Error && err.message.includes("circular")) {
+      return "[Circular reference]";
+    }
+    // Other errors - just return a placeholder
+    return "[Unable to display]";
+  }
+}
+
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
     name: entry.name,
-    arguments: entry.args ?? {},
+    arguments: sanitizeForDisplay(entry.args ?? {}),
   });
   if (entry.output) {
     content.push({
@@ -275,7 +295,30 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry.updatedAt = now;
   }
 
-  entry.message = buildToolStreamMessage(entry);
+  try {
+    entry.message = buildToolStreamMessage(entry);
+  } catch (err) {
+    console.error("[tool-stream] buildToolStreamMessage failed:", err);
+    // Create a minimal error message to prevent UI breakage
+    entry.message = {
+      role: "assistant",
+      toolCallId: entry.toolCallId,
+      runId: entry.runId,
+      content: [
+        {
+          type: "toolcall",
+          name: entry.name,
+          arguments: {},
+        },
+        {
+          type: "toolresult",
+          name: entry.name,
+          text: "[Error displaying tool result]",
+        },
+      ],
+      timestamp: entry.startedAt,
+    };
+  }
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }
