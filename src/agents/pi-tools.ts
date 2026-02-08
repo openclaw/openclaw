@@ -55,7 +55,9 @@ import {
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
-  return normalized === "openai" || normalized === "openai-codex";
+  return (
+    normalized === "openai" || normalized === "openai-codex" || normalized === "github-copilot"
+  );
 }
 
 function isApplyPatchAllowedForModel(params: {
