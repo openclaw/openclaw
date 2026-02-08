@@ -13,8 +13,8 @@ import type { SecretsProvider } from "./provider.js";
 
 /** Options for the GCP Secret Manager provider. */
 export interface GcpSecretsProviderOptions {
-  /** GCP project ID. If omitted, uses the default project from ADC. */
-  project?: string;
+  /** GCP project ID. Required — Secret Manager does not support automatic project discovery. */
+  project: string;
 }
 
 export class GcpSecretsProviderError extends Error {

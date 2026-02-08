@@ -269,7 +269,7 @@ function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): Secrets
       return createVaultSecretsProvider(config.vault);
     default:
       throw new SecretsProviderError(
-        `Unknown secrets provider: "${config.provider}". Supported: gcp, env. Stubs available: aws, keyring, 1password, doppler, bitwarden, vault`,
+        `Unknown secrets provider: "${config.provider}". Supported: gcp, env, keyring. Stubs available: aws, 1password, doppler, bitwarden, vault`,
       );
   }
 }
