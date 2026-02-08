@@ -16,6 +16,7 @@ describe("isCloudCodeAssistFormatError", () => {
       "messages.1.content.1.tool_use.id",
       "tool_use.id should match pattern",
       "invalid request format",
+      "Field required",
     ];
     for (const sample of samples) {
       expect(isCloudCodeAssistFormatError(sample)).toBe(true);
