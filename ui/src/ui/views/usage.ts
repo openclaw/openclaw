@@ -1,4 +1,5 @@
 import { html, svg, nothing } from "lit";
+import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "../usage-helpers.ts";
 
 // Inline styles for usage view (app uses light DOM, so static styles don't work)
@@ -2461,19 +2462,6 @@ function formatIsoDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function formatDurationShort(ms?: number): string {
-  if (!ms || ms <= 0) {
-    return "0s";
-  }
-  if (ms >= 60_000) {
-    return `${Math.round(ms / 60000)}m`;
-  }
-  if (ms >= 1000) {
-    return `${Math.round(ms / 1000)}s`;
-  }
-  return `${Math.round(ms)}ms`;
-}
-
 function parseYmdDate(dateStr: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) {
@@ -2498,23 +2486,6 @@ function formatFullDate(dateStr: string): string {
     return dateStr;
   }
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
-}
-
-function formatDurationMs(ms?: number): string {
-  if (!ms || ms <= 0) {
-    return "—";
-  }
-  const totalSeconds = Math.round(ms / 1000);
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60) % 60;
-  const hours = Math.floor(totalSeconds / 3600);
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
 }
 
 function downloadTextFile(filename: string, content: string, type = "text/plain") {
@@ -3467,7 +3438,10 @@ function renderUsageInsights(
     stats.throughputCostPerMin !== undefined
       ? `${formatCost(stats.throughputCostPerMin, 4)} / min`
       : "—";
-  const avgDurationLabel = stats.durationCount > 0 ? formatDurationShort(stats.avgDurationMs) : "—";
+  const avgDurationLabel =
+    stats.durationCount > 0
+      ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ?? "—")
+      : "—";
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
   const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
@@ -3672,7 +3646,7 @@ function renderSessionsCard(
       parts.push(`errors:${s.usage.messageCounts.errors}`);
     }
     if (showColumn("duration") && s.usage?.durationMs) {
-      parts.push(`dur:${formatDurationMs(s.usage.durationMs)}`);
+      parts.push(`dur:${formatDurationCompact(s.usage.durationMs, { spaced: true }) ?? "—"}`);
     }
     return parts;
   };
@@ -3976,7 +3950,7 @@ function renderSessionSummary(session: UsageSessionEntry) {
       </div>
       <div class="session-summary-card">
         <div class="session-summary-title">Duration</div>
-        <div class="session-summary-value">${formatDurationMs(usage.durationMs)}</div>
+        <div class="session-summary-value">${formatDurationCompact(usage.durationMs, { spaced: true }) ?? "—"}</div>
         <div class="session-summary-meta">${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}</div>
       </div>
     </div>
