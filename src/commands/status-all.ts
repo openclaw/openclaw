@@ -376,10 +376,26 @@ export async function statusAllCommand(
       (a) => a.lastActiveAgeMs != null && a.lastActiveAgeMs <= aliveThresholdMs,
     ).length;
 
+    // Resolve default model for Model row
+    const defaultModel: string = (() => {
+      const cfgModel = cfg.agents?.defaults?.model as unknown;
+      if (typeof cfgModel === "string" && cfgModel.trim()) {
+        return cfgModel.trim();
+      }
+      if (cfgModel && typeof cfgModel === "object" && cfgModel !== null) {
+        const obj = cfgModel as Record<string, unknown>;
+        if (typeof obj.primary === "string" && obj.primary.trim()) {
+          return obj.primary.trim();
+        }
+      }
+      return "unknown";
+    })();
+
     const overviewRows = [
       { Item: "Version", Value: VERSION },
       { Item: "OS", Value: osSummary.label },
       { Item: "Node", Value: process.versions.node },
+      { Item: "Model", Value: defaultModel },
       {
         Item: "Config",
         Value: snap?.path?.trim() ? snap.path.trim() : "(unknown config path)",

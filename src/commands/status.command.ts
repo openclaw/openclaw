@@ -264,9 +264,14 @@ export async function statusCommand(
   })();
 
   const defaults = summary.sessions.defaults;
-  const defaultCtx = defaults.contextTokens
-    ? ` (${formatKTokens(defaults.contextTokens)} ctx)`
-    : "";
+
+  // Build model value with context tokens for dedicated Model row
+  const model = defaults.model || "unknown";
+  const modelValue =
+    defaults.contextTokens && defaults.contextTokens > 0
+      ? `${model} (${formatKTokens(defaults.contextTokens)} ctx)`
+      : model;
+
   const eventsValue =
     summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
 
@@ -372,6 +377,7 @@ export async function statusCommand(
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
+    { Item: "Model", Value: modelValue },
     {
       Item: "Tailscale",
       Value:
@@ -398,7 +404,7 @@ export async function statusCommand(
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
       Item: "Sessions",
-      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
+      Value: `${summary.sessions.count} active · ${storeLabel}`,
     },
   ];
 
