@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import {
+  resolveDefenderWorkspace,
+  runDefenderRuntimeMonitor,
+} from "../../security/defender-client.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -660,6 +664,22 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+
+      // Defender network gate: if runtime-monitor.sh is present, validate URL before fetch
+      const defenderWorkspace = resolveDefenderWorkspace();
+      const networkCheck = await runDefenderRuntimeMonitor(
+        defenderWorkspace,
+        "check-network",
+        [url, ""],
+        5_000,
+      );
+      if (!networkCheck.ok) {
+        return jsonResult({
+          ok: false,
+          error: "URL blocked by security policy (defender).",
+        });
+      }
+
       const result = await runWebFetch({
         url,
         extractMode,

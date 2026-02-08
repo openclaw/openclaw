@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveDefenderWorkspace, runDefenderAudit } from "../security/defender-client.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath } from "../utils.js";
 import {
@@ -410,6 +411,24 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const spec = findInstallSpec(entry, params.installId);
   const warnings = await collectSkillInstallScanWarnings(entry);
+
+  // Defender audit: if openclaw-defender audit-skills.sh is present, run it; abort install on failure
+  const skillDir = path.resolve(entry.skill.baseDir);
+  const defenderWorkspace = resolveDefenderWorkspace(workspaceDir);
+  const auditResult = await runDefenderAudit(defenderWorkspace, skillDir, timeoutMs);
+  if (!auditResult.ok) {
+    return withWarnings(
+      {
+        ok: false,
+        message: `Skill failed security audit. Install aborted. ${auditResult.stderr ?? "audit failed"}`,
+        stdout: "",
+        stderr: auditResult.stderr ?? "",
+        code: 1,
+      },
+      warnings,
+    );
+  }
+
   if (!spec) {
     return withWarnings(
       {
