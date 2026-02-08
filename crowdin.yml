@@ -3,32 +3,32 @@
 "preserve_hierarchy": true
 
 files:
-  - source: /docs/**/*.md
-    translation: /docs/%two_letters_code%/%original_path%/%original_file_name%
+  - source: docs/**/*.md
+    translation: docs/%two_letters_code%/%original_path%/%original_file_name%
     ignore:
-      - /docs/ja/**
-      - /docs/ko/**
-      - /docs/zh-TW/**
-      - /docs/pt-BR/**
-      - /docs/es/**
-      - /docs/fr/**
-      - /docs/de/**
-      - /docs/vi/**
-      - /docs/sv/**
-      - /docs/fil/**
-      - /docs/nl/**
-      - /docs/ur/**
-      - /docs/ar/**
-      - /docs/hi/**
-      - /docs/da/**
-      - /docs/pl/**
-      - /docs/th/**
-      - /docs/tr/**
-      - /docs/my/**
-      - /docs/ru/**
-      - /docs/zh-CN/**
-      - /docs/.i18n/**
-      - /docs/security/**
+      - docs/ja/**
+      - docs/ko/**
+      - docs/zh-TW/**
+      - docs/pt-BR/**
+      - docs/es/**
+      - docs/fr/**
+      - docs/de/**
+      - docs/vi/**
+      - docs/sv/**
+      - docs/fil/**
+      - docs/nl/**
+      - docs/ur/**
+      - docs/ar/**
+      - docs/hi/**
+      - docs/da/**
+      - docs/pl/**
+      - docs/th/**
+      - docs/tr/**
+      - docs/my/**
+      - docs/ru/**
+      - docs/zh-CN/**
+      - docs/.i18n/**
+      - docs/security/**
     languages_mapping:
       two_letters_code:
         zh-TW: zh-TW
