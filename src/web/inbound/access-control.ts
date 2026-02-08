@@ -82,7 +82,10 @@ export async function checkInboundAccessControl(params: {
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
   // - "disabled": block all group messages entirely
-  // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+  // - "allowlist": when a `groups` config maps group JIDs, only those groups are
+  //   accepted (any participant can chat); otherwise falls back to sender-based
+  //   filtering via groupAllowFrom/allowFrom. Command authorization still uses
+  //   groupAllowFrom regardless.
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "open";
   if (params.group && groupPolicy === "disabled") {
