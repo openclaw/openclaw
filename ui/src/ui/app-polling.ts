@@ -57,7 +57,7 @@ export function startDebugPolling(host: PollingHost) {
       return;
     }
     void loadDebug(host as unknown as OpenClawApp);
-  }, 3000);
+  }, 10000);
 }
 
 export function stopDebugPolling(host: PollingHost) {
