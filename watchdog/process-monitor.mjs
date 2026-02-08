@@ -296,10 +296,12 @@ export class ProcessMonitor {
 
     this.process.stdout.on("data", (chunk) => {
       logStream.write(`[${timestamp()}] [stdout] ${chunk}`);
+      process.stdout.write(chunk);
     });
 
     this.process.stderr.on("data", (chunk) => {
       logStream.write(`[${timestamp()}] [stderr] ${chunk}`);
+      process.stderr.write(chunk);
     });
 
     this.process.on("exit", (code, signal) => {
