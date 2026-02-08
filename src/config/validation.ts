@@ -83,7 +83,11 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
-export function validateConfigObject(
+/**
+ * Validates config without applying runtime defaults.
+ * Use this when you need the raw validated config (e.g., for writing back to file).
+ */
+export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
@@ -124,9 +128,20 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelDefaults(
-      applyAgentDefaults(applySessionDefaults(validated.data as OpenClawConfig)),
-    ),
+    config: validated.data as OpenClawConfig,
+  };
+}
+
+export function validateConfigObject(
+  raw: unknown,
+): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+  const result = validateConfigObjectRaw(raw);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
   };
 }
 
