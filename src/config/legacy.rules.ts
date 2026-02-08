@@ -2,6 +2,11 @@ import type { LegacyConfigRule } from "./legacy.shared.js";
 
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
+    path: ["aliases"],
+    message:
+      'Root-level "aliases" is no longer supported. Use `openclaw models aliases add` to manage model aliases, or move aliases to agents.defaults.models with the "alias" field.',
+  },
+  {
     path: ["whatsapp"],
     message: "whatsapp config moved to channels.whatsapp (auto-migrated on load).",
   },
