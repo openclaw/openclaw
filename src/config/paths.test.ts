@@ -222,4 +222,19 @@ describe("state + config path candidates", () => {
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
   });
+
+  it("resolveConfigPath respects CLAWDBOT_CONFIG_PATH as legacy fallback", () => {
+    const env = { CLAWDBOT_CONFIG_PATH: "/tmp/legacy/clawdbot.json" } as NodeJS.ProcessEnv;
+    const resolved = resolveConfigPath(env);
+    expect(resolved).toBe("/tmp/legacy/clawdbot.json");
+  });
+
+  it("resolveConfigPath prefers OPENCLAW_CONFIG_PATH over CLAWDBOT_CONFIG_PATH", () => {
+    const env = {
+      OPENCLAW_CONFIG_PATH: "/tmp/new/openclaw.json",
+      CLAWDBOT_CONFIG_PATH: "/tmp/legacy/clawdbot.json",
+    } as NodeJS.ProcessEnv;
+    const resolved = resolveConfigPath(env);
+    expect(resolved).toBe("/tmp/new/openclaw.json");
+  });
 });
