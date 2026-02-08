@@ -1,5 +1,6 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
+import { releaseAllSessionLocks } from "../../agents/session-write-lock.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
@@ -53,6 +54,16 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
+          // Release all session write locks before restart to prevent stale locks.
+          // After SIGUSR1 restart, the PID stays the same but in-memory HELD_LOCKS
+          // is cleared. Without this cleanup, disk lock files would appear valid
+          // (same PID, not stale yet) and block sessions for up to 30 minutes.
+          // See: https://github.com/openclaw/openclaw/issues/4043
+          try {
+            await releaseAllSessionLocks();
+          } catch (err) {
+            gatewayLog.warn(`failed to release session locks: ${String(err)}`);
+          }
           shuttingDown = false;
           restartResolver?.();
         } else {
