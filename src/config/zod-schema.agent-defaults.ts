@@ -43,6 +43,47 @@ export const AgentDefaultsSchema = z
           .strict(),
       )
       .optional(),
+    modelRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        rules: z
+          .object({
+            status_check: z.string().optional(),
+            file_operation: z.string().optional(),
+            draft_message: z.string().optional(),
+            general: z.string().optional(),
+            proposal_creation: z.string().optional(),
+            technical_discussion: z.string().optional(),
+            analysis: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        keywords: z
+          .object({
+            local_triggers: z.array(z.string()).optional(),
+            haiku_triggers: z.array(z.string()).optional(),
+            sonnet_triggers: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        learning: z
+          .object({
+            enabled: z.boolean().optional(),
+            trackPerformance: z.boolean().optional(),
+            optimizeAfterTasks: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        override: z
+          .object({
+            minConfidence: z.number().min(0).max(1).optional(),
+            fallback: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),

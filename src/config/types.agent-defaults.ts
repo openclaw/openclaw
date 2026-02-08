@@ -93,6 +93,46 @@ export type CliBackendConfig = {
   serialize?: boolean;
 };
 
+export type ModelRoutingConfig = {
+  /** Enable intelligent model routing based on task complexity. */
+  enabled?: boolean;
+  /** Task-based routing rules (taskType -> provider/model). */
+  rules?: {
+    status_check?: string;
+    file_operation?: string;
+    draft_message?: string;
+    general?: string;
+    proposal_creation?: string;
+    technical_discussion?: string;
+    analysis?: string;
+  };
+  /** Keywords for each model tier. */
+  keywords?: {
+    /** Triggers for local model (simple tasks). */
+    local_triggers?: string[];
+    /** Triggers for Haiku model (medium tasks). */
+    haiku_triggers?: string[];
+    /** Triggers for Sonnet model (complex tasks). */
+    sonnet_triggers?: string[];
+  };
+  /** Learning and optimization settings. */
+  learning?: {
+    /** Enable learning from routing decisions. */
+    enabled?: boolean;
+    /** Track performance metrics. */
+    trackPerformance?: boolean;
+    /** Optimize routing rules after N tasks. */
+    optimizeAfterTasks?: number;
+  };
+  /** Override and fallback settings. */
+  override?: {
+    /** Minimum confidence to trigger routing override (0-1). */
+    minConfidence?: number;
+    /** Fallback model when confidence is low. */
+    fallback?: string;
+  };
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
@@ -100,6 +140,8 @@ export type AgentDefaultsConfig = {
   imageModel?: AgentModelListConfig;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Intelligent model routing based on task complexity. */
+  modelRouting?: ModelRoutingConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
