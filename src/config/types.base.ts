@@ -76,6 +76,21 @@ export type SessionResetByTypeConfig = {
   thread?: SessionResetConfig;
 };
 
+/**
+ * Pre-reset hook configuration.
+ * When enabled, triggers an agent turn before session reset to allow wrap-up tasks.
+ */
+export type SessionPreResetConfig = {
+  /** Enable the pre-reset hook. Default: false */
+  enabled?: boolean;
+  /** Prompt to send to the agent before reset */
+  prompt?: string;
+  /** Timeout in seconds for the agent turn. Default: 30 */
+  timeoutSeconds?: number;
+  /** Skip hook if session has no messages. Default: true */
+  skipIfEmpty?: boolean;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -88,6 +103,8 @@ export type SessionConfig = {
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
+  /** Pre-reset hook: trigger agent turn before session reset for wrap-up tasks */
+  preReset?: SessionPreResetConfig;
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;

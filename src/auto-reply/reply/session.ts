@@ -27,6 +27,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { runPreResetHook } from "../../sessions/pre-reset-hook.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
@@ -196,6 +197,18 @@ export async function initSessionState(params: {
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+
+  // Pre-reset hook: give the agent a chance to write notes before clearing the session.
+  if (resetTriggered && entry) {
+    await runPreResetHook({
+      cfg,
+      sessionKey,
+      sessionEntry: entry,
+      storePath,
+      agentId,
+    });
+  }
+
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,

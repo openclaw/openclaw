@@ -15,6 +15,23 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+/**
+ * Pre-reset hook configuration.
+ * When enabled, triggers an agent turn before session reset to allow wrap-up tasks.
+ */
+export const SessionPreResetConfigSchema = z
+  .object({
+    /** Enable the pre-reset hook. Default: false */
+    enabled: z.boolean().optional(),
+    /** Prompt to send to the agent before reset */
+    prompt: z.string().optional(),
+    /** Timeout in seconds for the agent turn. Default: 30 */
+    timeoutSeconds: z.number().int().min(5).max(120).optional(),
+    /** Skip hook if session has no messages. Default: true */
+    skipIfEmpty: z.boolean().optional(),
+  })
+  .strict();
+
 export const SessionSendPolicySchema = z
   .object({
     default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
@@ -64,6 +81,8 @@ export const SessionSchema = z
       .strict()
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
+    /** Pre-reset hook: trigger agent turn before session reset for wrap-up tasks */
+    preReset: SessionPreResetConfigSchema.optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: z
