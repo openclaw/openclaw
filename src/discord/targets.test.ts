@@ -106,7 +106,12 @@ describe("resolveDiscordTarget", () => {
 });
 
 describe("normalizeDiscordMessagingTarget", () => {
-  it("defaults raw numeric ids to channels", () => {
-    expect(normalizeDiscordMessagingTarget("123")).toBe("channel:123");
+  it("throws for ambiguous raw numeric ids", () => {
+    expect(() => normalizeDiscordMessagingTarget("123")).toThrow(/Ambiguous Discord recipient/);
+  });
+
+  it("accepts explicit prefixes", () => {
+    expect(normalizeDiscordMessagingTarget("user:123")).toBe("user:123");
+    expect(normalizeDiscordMessagingTarget("channel:456")).toBe("channel:456");
   });
 });
