@@ -715,6 +715,18 @@ async function runExecProcess(opts: {
       const status: "completed" | "failed" = isSuccess ? "completed" : "failed";
       markExited(session, code, exitSignal, status);
       maybeNotifyOnExit(session, status);
+
+      // Cleanup file descriptors to prevent FD leaks
+      if (child) {
+        try {
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.removeAllListeners();
+        } catch {
+          // Ignore cleanup errors - process may have already closed streams
+        }
+      }
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
@@ -773,6 +785,17 @@ async function runExecProcess(opts: {
         }
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+
+        // Cleanup file descriptors on error to prevent FD leaks
+        try {
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.removeAllListeners();
+        } catch {
+          // Ignore cleanup errors
+        }
+
         const aggregated = session.aggregated.trim();
         const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
         settle({
