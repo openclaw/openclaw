@@ -69,29 +69,68 @@ _RESOLVE_FIELD_MASK = (
 
 def _validate_place_id(place_id: str | None) -> None:
     """
-    Validate Google Places API place_id format to prevent path traversal.
+    Validate Google Places API place_id format to prevent path traversal and injection attacks.
 
-    Google Place IDs are often base64-ish and can include characters like '+', '/', and '='.
-    This validation prevents path traversal attacks while allowing legitimate place_id formats.
+    This validation:
+    1. Ensures the input is a non-empty string
+    2. Validates length (10-300 characters)
+    3. Explicitly blocks path traversal sequences
+    4. Rejects dangerous characters while allowing valid Google Place ID characters
+    5. Implements URL path normalization to prevent encoding bypasses
 
     Args:
-        place_id: The place ID string to validate.
+        place_id: The place ID string to validate
 
     Raises:
-        HTTPException: If place_id format is invalid.
+        HTTPException: If place_id format is invalid or contains traversal patterns
     """
+    # Check for non-empty string
     if not isinstance(place_id, str) or not place_id:
         raise HTTPException(
             status_code=400,
             detail="Invalid place_id: must be a non-empty string."
         )
 
+    # Validate length
     if len(place_id) < 10 or len(place_id) > 300:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid place_id length: {len(place_id)}. Expected 10-300 characters."
         )
-    if re.search(r"[\s\\?#<>|\*%$&'\";`]", place_id):
+
+    # Normalize the path to detect encoded traversal attempts
+    normalized_path = place_id.replace('%2e', '.').replace('%2f', '/')
+
+    # Explicitly block path traversal patterns
+    traversal_patterns = [
+        r'\.\./',      # ../
+        r'\./',        # ./ (current directory)
+        r'^\./',       # Starts with ./ (current directory)
+        r'^\.\.',      # Starts with .. (parent directory)
+        r'\/$',        # Ends with /
+        r'\\$',        # Ends with \
+        r'\/[^/]+?\/\.\.',  # Contains /../
+        r'\\\\[^\\]+?\\\.\.', # Contains \..\
+        r'%2e%2e%2f',  # URL-encoded ../
+        r'%2e%2f',     # URL-encoded ./ (current directory)
+    ]
+
+    for pattern in traversal_patterns:
+        if re.search(pattern, normalized_path, re.IGNORECASE):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid place_id format: contains path traversal sequences."
+            )
+
+    # Check for mixed slashes which could indicate traversal attempts
+    if '/' in normalized_path and '\\' in normalized_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid place_id format: contains mixed path separators."
+        )
+
+    # Allow alphanumeric, '+', '/', '=', '_', and '-' but reject dangerous characters
+    if re.search(r'[\s?#<>|\*%$&\'";`]', place_id):
         raise HTTPException(
             status_code=400,
             detail="Invalid place_id format: contains illegal characters."
