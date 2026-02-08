@@ -4,6 +4,7 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
+  resetScheduledRestartTracking,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -54,6 +55,7 @@ export async function runGatewayLoop(params: {
         server = null;
         if (isRestart) {
           shuttingDown = false;
+          resetScheduledRestartTracking();
           restartResolver?.();
         } else {
           cleanupSignals();

@@ -49,7 +49,11 @@ async function main() {
     { setGatewayWsLogStyle },
     { setVerbose },
     { acquireGatewayLock, GatewayLockError },
-    { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
+    {
+      consumeGatewaySigusr1RestartAuthorization,
+      isGatewaySigusr1RestartExternallyAllowed,
+      resetScheduledRestartTracking,
+    },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
   ] = await Promise.all([
@@ -153,6 +157,7 @@ async function main() {
         server = null;
         if (isRestart) {
           shuttingDown = false;
+          resetScheduledRestartTracking();
           restartResolver?.();
         } else {
           cleanupSignals();

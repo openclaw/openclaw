@@ -13,10 +13,12 @@ export type RestartAttempt = {
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
+const SIGUSR1_DEBOUNCE_WINDOW_MS = 3000;
 
 let sigusr1AuthorizedCount = 0;
 let sigusr1AuthorizedUntil = 0;
 let sigusr1ExternalAllowed = false;
+let lastScheduledRestartTs = 0;
 
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
   if (sigusr1AuthorizedCount <= 0) {
@@ -56,6 +58,18 @@ export function consumeGatewaySigusr1RestartAuthorization(): boolean {
     sigusr1AuthorizedUntil = 0;
   }
   return true;
+}
+
+export function isGatewaySigusr1RestartRecentlyScheduled(now = Date.now()): boolean {
+  if (lastScheduledRestartTs === 0) {
+    return false;
+  }
+  const elapsed = now - lastScheduledRestartTs;
+  return elapsed < SIGUSR1_DEBOUNCE_WINDOW_MS;
+}
+
+export function resetScheduledRestartTracking() {
+  lastScheduledRestartTs = 0;
 }
 
 function formatSpawnDetail(result: {
@@ -189,6 +203,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
+  lastScheduledRestartTs = Date.now();
   authorizeGatewaySigusr1Restart(delayMs);
   const pid = process.pid;
   const hasListener = process.listenerCount("SIGUSR1") > 0;
@@ -218,5 +233,6 @@ export const __testing = {
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
     sigusr1ExternalAllowed = false;
+    resetScheduledRestartTracking();
   },
 };

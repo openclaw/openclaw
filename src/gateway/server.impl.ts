@@ -32,7 +32,10 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import {
+  setGatewaySigusr1RestartPolicy,
+  isGatewaySigusr1RestartRecentlyScheduled,
+} from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -589,6 +592,7 @@ export async function startGatewayServer(
     readSnapshot: readConfigFileSnapshot,
     onHotReload: applyHotReload,
     onRestart: requestGatewayRestart,
+    isRestartRecentlyScheduled: isGatewaySigusr1RestartRecentlyScheduled,
     log: {
       info: (msg) => logReload.info(msg),
       warn: (msg) => logReload.warn(msg),
