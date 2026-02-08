@@ -187,7 +187,41 @@ export async function acquireSessionWriteLock(params: {
       const stale = !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;
       const alive = payload?.pid ? isAlive(payload.pid) : false;
       if (stale || !alive) {
-        await fs.rm(lockPath, { force: true });
+        // Atomic stale lock takeover: rename instead of delete+create
+        // This closes the TOCTOU race window
+        const tempLockPath = `${lockPath}.${process.pid}.${Date.now()}`;
+        try {
+          const tempHandle = await fs.open(tempLockPath, "wx");
+          await tempHandle.writeFile(
+            JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+            "utf8",
+          );
+          await tempHandle.close();
+          // Atomic rename - if another process already took over, this will fail
+          await fs.rename(tempLockPath, lockPath);
+          // Reopen the lock file to hold the handle
+          const handle = await fs.open(lockPath, "r+");
+          HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
+          return {
+            release: async () => {
+              const current = HELD_LOCKS.get(normalizedSessionFile);
+              if (!current) {
+                return;
+              }
+              current.count -= 1;
+              if (current.count > 0) {
+                return;
+              }
+              HELD_LOCKS.delete(normalizedSessionFile);
+              await current.handle.close();
+              await fs.rm(current.lockPath, { force: true });
+            },
+          };
+        } catch {
+          // Cleanup temp file if takeover failed
+          await fs.rm(tempLockPath, { force: true }).catch(() => {});
+          // Another process won the race, continue waiting
+        }
         continue;
       }
 
