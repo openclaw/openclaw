@@ -200,13 +200,29 @@ export function resolveModel(
       return { model: anthropicForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
+
+    // Check if provider has an auth profile configured (e.g. "openrouter:default")
+    const hasAuthProfile = Object.keys(cfg?.auth?.profiles ?? {}).some((key) => {
+      const colonIdx = key.indexOf(":");
+      return colonIdx > 0 && normalizeProviderId(key.slice(0, colonIdx)) === normalizedProvider;
+    });
+
+    if (providerCfg || hasAuthProfile || modelId.startsWith("mock-")) {
+      // Known provider base URLs for dynamic model routing
+      const providerBaseUrls: Record<string, string> = {
+        openrouter: "https://openrouter.ai/api/v1",
+        together: "https://api.together.xyz/v1",
+        groq: "https://api.groq.com/openai/v1",
+        deepseek: "https://api.deepseek.com/v1",
+      };
+      const baseUrl = providerCfg?.baseUrl ?? providerBaseUrls[normalizedProvider];
+
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
         api: providerCfg?.api ?? "openai-responses",
         provider,
-        baseUrl: providerCfg?.baseUrl,
+        baseUrl,
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

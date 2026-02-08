@@ -288,6 +288,16 @@ export function buildAllowedModelSet(params: {
 
   const allowedKeys = new Set<string>();
   const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+
+  // Extract providers from auth.profiles (e.g. "openrouter:default" → "openrouter")
+  const authProfileProviders = new Set<string>();
+  for (const profileKey of Object.keys(params.cfg.auth?.profiles ?? {})) {
+    const colonIdx = profileKey.indexOf(":");
+    if (colonIdx > 0) {
+      authProfileProviders.add(normalizeProviderId(profileKey.slice(0, colonIdx)));
+    }
+  }
+
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
@@ -302,6 +312,9 @@ export function buildAllowedModelSet(params: {
     } else if (configuredProviders[providerKey] != null) {
       // Explicitly configured providers should be allowlist-able even when
       // they don't exist in the curated model catalog.
+      allowedKeys.add(key);
+    } else if (authProfileProviders.has(providerKey)) {
+      // Providers with auth profiles configured should also be allowable
       allowedKeys.add(key);
     }
   }
