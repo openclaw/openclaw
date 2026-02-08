@@ -136,6 +136,6 @@ describe("docker-setup.sh", () => {
   it("keeps docker-compose gateway command in sync", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose).not.toContain("gateway-daemon");
-    expect(compose).toContain('"gateway"');
+    expect(compose).toMatch(/['"]gateway['"]/);
   });
 });
