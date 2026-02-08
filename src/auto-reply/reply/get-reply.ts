@@ -1,6 +1,7 @@
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -79,7 +80,10 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   if (opts?.isHeartbeat) {
-    const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
+    // Check per-agent heartbeat.model first, then fall back to defaults
+    const perAgentHeartbeatModel = resolveAgentConfig(cfg, agentId)?.heartbeat?.model?.trim() ?? "";
+    const defaultHeartbeatModel = agentCfg?.heartbeat?.model?.trim() ?? "";
+    const heartbeatRaw = perAgentHeartbeatModel || defaultHeartbeatModel;
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
