@@ -108,7 +108,7 @@ describe("noteSessionSecretsWarnings", () => {
     expect(noteCall).toContain("--dry-run");
   });
 
-  it("large file count (>200) — samples randomly instead of scanning all", async () => {
+  it("large file count (>200) — samples deterministically instead of scanning all", async () => {
     // Create 300 mock files
     const mockFiles = Array.from(
       { length: 300 },
@@ -121,12 +121,12 @@ describe("noteSessionSecretsWarnings", () => {
 
     await noteSessionSecretsWarnings();
 
-    // Should only read 200 files (random sample)
+    // Should only read 200 files (deterministic sample)
     expect(mockReadFile).toHaveBeenCalledTimes(200);
 
     const noteCall = mockNote.mock.calls[0][0];
     expect(noteCall).toContain("Scanned 200 session file(s)");
-    expect(noteCall).toContain("(random sample)");
+    expect(noteCall).toContain("(deterministic sample)");
     expect(noteCall).toContain("no obvious unredacted secrets detected");
   });
 
@@ -155,7 +155,7 @@ describe("noteSessionSecretsWarnings", () => {
 
     const noteCall = mockNote.mock.calls[0][0];
     expect(noteCall).toContain("Found unredacted secrets in 50 of 200");
-    expect(noteCall).toContain("(random sample)");
+    expect(noteCall).toContain("(deterministic sample)");
     expect(noteCall).toContain("25%"); // 50/200 = 25%
     expect(noteCall).toContain("openclaw sessions scrub");
   });

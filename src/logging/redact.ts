@@ -48,11 +48,18 @@ function parsePattern(raw: string): RegExp | null {
   if (!raw.trim()) {
     return null;
   }
-  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
+  // Split on the *last* unescaped `/` to handle patterns containing literal slashes
+  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/s);
   try {
     if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
+      // Find the last `/` that isn't escaped, to correctly split source from flags
+      const lastSlash = raw.lastIndexOf("/");
+      if (lastSlash > 0) {
+        const source = raw.slice(1, lastSlash);
+        const flagStr = raw.slice(lastSlash + 1);
+        const flags = flagStr.includes("g") ? flagStr : `${flagStr}g`;
+        return new RegExp(source, flags);
+      }
     }
     return new RegExp(raw, "gi");
   } catch {

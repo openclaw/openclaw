@@ -9,13 +9,12 @@ import { note } from "../terminal/note.js";
 /**
  * Randomly shuffle an array using Fisher-Yates algorithm.
  */
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
+/**
+ * Deterministic sample: sort paths and take first N for stable, reproducible results.
+ * Avoids nondeterministic "flapping" warnings across runs.
+ */
+function deterministicSample<T>(array: T[], n: number): T[] {
+  return [...array].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, n);
 }
 
 async function scanFileForSecrets(
@@ -72,7 +71,7 @@ export async function noteSessionSecretsWarnings(_cfg?: OpenClawConfig): Promise
   let readErrors = 0;
 
   // Scan all files if <=200, otherwise sample 200 randomly to avoid long delays
-  const sampled = files.length > 200 ? shuffleArray(files).slice(0, 200) : files;
+  const sampled = files.length > 200 ? deterministicSample(files, 200) : files;
   const sampleSize = sampled.length;
 
   for (const file of sampled) {
@@ -94,7 +93,7 @@ export async function noteSessionSecretsWarnings(_cfg?: OpenClawConfig): Promise
 
   if (filesWithSecrets > 0) {
     const percentage = Math.round((filesWithSecrets / sampleSize) * 100);
-    const sampledNote = files.length > 200 ? " (random sample)" : "";
+    const sampledNote = files.length > 200 ? " (deterministic sample)" : "";
     warnings.push(
       `- Found unredacted secrets in ${filesWithSecrets} of ${sampleSize} session files scanned${sampledNote} (~${percentage}%).`,
     );
@@ -108,7 +107,7 @@ export async function noteSessionSecretsWarnings(_cfg?: OpenClawConfig): Promise
     warnings.push("  Note: Runtime redaction is already enabled (read-time protection).");
     warnings.push("  The scrub command provides at-rest scrubbing for historical sessions.");
   } else {
-    const sampledNote = files.length > 200 ? " (random sample)" : "";
+    const sampledNote = files.length > 200 ? " (deterministic sample)" : "";
     warnings.push(
       `- Scanned ${sampleSize} session file(s)${sampledNote}, no obvious unredacted secrets detected.`,
     );
