@@ -82,6 +82,23 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
+
+  it("uses OPENCLAW_HOME when deriving profile state dir", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      HOME: "/home/other",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/fallback",
+    });
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw-home", ".openclaw-work"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(
+      path.join("/srv/openclaw-home", ".openclaw-work", "openclaw.json"),
+    );
+  });
 });
 
 describe("formatCliCommand", () => {

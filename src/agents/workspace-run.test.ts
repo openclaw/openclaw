@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {
@@ -70,7 +70,7 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackReason).toBe("missing");
     expect(result.agentId).toBe("main");
-    expect(result.workspaceDir).toBe(path.resolve(DEFAULT_AGENT_WORKSPACE_DIR));
+    expect(result.workspaceDir).toBe(path.resolve(resolveDefaultAgentWorkspaceDir(process.env)));
   });
 
   it("throws for malformed agent session keys", () => {
