@@ -108,6 +108,7 @@ function resolveAnthropicOpus46ForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      contextWindow: 1_000_000,
     } as Model<Api>);
   }
 
