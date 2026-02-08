@@ -51,6 +51,10 @@ const BASE_METHODS = [
   "sessions.reset",
   "sessions.delete",
   "sessions.compact",
+  "sessions.resolve",
+  "sessions.usage",
+  "sessions.usage.timeseries",
+  "sessions.usage.logs",
   "last-heartbeat",
   "set-heartbeats",
   "wake",
@@ -80,14 +84,19 @@ const BASE_METHODS = [
   "system-presence",
   "system-event",
   "send",
+  "poll",
   "agent",
   "agent.identity.get",
   "agent.wait",
   "browser.request",
+  // WebChat browser-based login
+  "web.login.start",
+  "web.login.wait",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
   "chat.send",
+  "chat.inject",
 ];
 
 export function listGatewayMethods(): string[] {
