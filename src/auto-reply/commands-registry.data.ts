@@ -173,6 +173,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "resources",
+      nativeName: "resources",
+      description: "Show CPU, memory, and disk usage.",
+      textAlias: "/resources",
+      acceptsArgs: true,
+      category: "status",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

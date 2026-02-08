@@ -61,6 +61,8 @@
 - TypeScript checks: `pnpm tsgo`
 - Lint/format: `pnpm check`
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Docker compose tip: if using `OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, set `COMPOSE_FILE=docker-compose.yml:docker-compose.extra.yml` (e.g., in `.env`) so `docker compose ...` commands always include the extra mounts.
+- Docker setup tip: `docker-setup.sh` updates `.env`. If you edit `.env`, export it before running (`set -a; source ./.env; set +a`) so the script regenerates `docker-compose.extra.yml` with your changes.
 
 ## Coding Style & Naming Conventions
 

@@ -1,0 +1,12 @@
+services:
+  openclaw-gateway:
+    volumes:
+      - ${LOG_NGINX_SYSTEM_DIR}:/home/node/logs/nginx-system:ro,z
+      - ${LOG_NGINX_SITES_DIR}:/home/node/logs/nginx-sites:ro,z
+      - ${LOG_PHP_FPM_DIR}:/home/node/logs/php-fpm:ro,z
+
+  openclaw-cli:
+    volumes:
+      - ${LOG_NGINX_SYSTEM_DIR}:/home/node/logs/nginx-system:ro,z
+      - ${LOG_NGINX_SITES_DIR}:/home/node/logs/nginx-sites:ro,z
+      - ${LOG_PHP_FPM_DIR}:/home/node/logs/php-fpm:ro,z

@@ -151,6 +151,8 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
   return { shouldContinue: false, reply };
 };
 
+export { handleResourcesCommand } from "./commands-resources.js";
+
 export const handleContextCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

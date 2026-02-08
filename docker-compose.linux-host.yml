@@ -1,0 +1,6 @@
+services:
+  openclaw-gateway:
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+      - /:/host:ro

@@ -23,6 +23,19 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 Step-by-step VPS guide: [exe.dev](/install/exe-dev)
 
+## Docker Compose on Linux Hosts (EC2)
+
+If you run the Gateway and CLI in Docker on Linux, expect a few Linux-specific gotchas:
+
+- Use a separate config dir for the CLI container so it can run in `gateway.mode=remote` without breaking the Gateway (which must stay `gateway.mode=local`). Example: mount `OPENCLAW_CLI_CONFIG_DIR` to `/home/node/.openclaw` in the CLI service.
+- Run containers as your host UID/GID to avoid `EACCES` on mounted config: set `user: "${OPENCLAW_UID}:${OPENCLAW_GID}"` and export those in `.env`.
+- If a host log directory is owned by a specific service group (for example `apache`), add that GID to the container via `group_add` so the container user can read it (example: `group_add: ["48"]`).
+- If SELinux is enforcing, add `:z` to bind mounts (for example `/var/log/php-fpm:/home/node/logs/php-fpm:ro,z`).
+- If the host log directory is restricted (for example `apache:root` with `600` files), add the group to the container (`group_add: ["48"]`) and set ACLs on the host so files are readable.
+- If you split compose files, include all of them via `COMPOSE_FILE=...` so mounts and host tweaks are applied.
+- Control UI over HTTP requires `gateway.controlUi.allowInsecureAuth: true` and a gateway token in the UI (or use HTTPS/localhost).
+- WhatsApp is a bundled plugin (disabled by default); enable it in both Gateway config and CLI config if those are separate.
+
 ## Install
 
 - [Getting Started](/start/getting-started)
