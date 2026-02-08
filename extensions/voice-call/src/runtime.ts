@@ -16,6 +16,19 @@ import {
   VoiceCallWebhookServer,
 } from "./webhook.js";
 
+/**
+ * Validate voice-call configuration for security constraints.
+ * Throws if production environment has dangerous settings.
+ */
+function validateSecurityConfig(config: VoiceCallConfig): void {
+  if (process.env.NODE_ENV === "production" && config.skipSignatureVerification) {
+    throw new Error(
+      "voiceCall.skipSignatureVerification must not be enabled in production. " +
+      "This disables webhook signature verification and allows webhook spoofing attacks."
+    );
+  }
+}
+
 export type VoiceCallRuntime = {
   config: VoiceCallConfig;
   provider: VoiceCallProvider;
@@ -108,6 +121,8 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const config = resolveVoiceCallConfig(rawConfig);
+
+  validateSecurityConfig(config);
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");

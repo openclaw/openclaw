@@ -367,6 +367,12 @@ export function verifyTwilioWebhook(
 ): TwilioVerificationResult {
   // Allow skipping verification for development/testing
   if (options?.skipVerification) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "skipSignatureVerification is not allowed in production environments. " +
+        "Set NODE_ENV to a non-production value to use this option."
+      );
+    }
     return { ok: true, reason: "verification skipped (dev mode)" };
   }
 
