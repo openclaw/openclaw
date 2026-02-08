@@ -62,15 +62,28 @@ export class ExecApprovalManager {
   }
 
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
-    const pending = this.pending.get(recordId);
+    // Try exact match first
+    let pending = this.pending.get(recordId);
+    
+    // If not found and recordId looks like a short slug, try prefix matching
+    if (!pending && recordId.length < 36) {
+      for (const [fullId, entry] of this.pending.entries()) {
+        if (fullId.startsWith(recordId)) {
+          pending = entry;
+          break;
+        }
+      }
+    }
+    
     if (!pending) {
       return false;
     }
+    
     clearTimeout(pending.timer);
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;
     pending.record.resolvedBy = resolvedBy ?? null;
-    this.pending.delete(recordId);
+    this.pending.delete(pending.record.id);
     pending.resolve(decision);
     return true;
   }
