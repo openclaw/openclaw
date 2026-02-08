@@ -14,7 +14,11 @@ import {
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export {
+  ensureAuthProfileStore,
+  invalidateOAuthToken,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -136,6 +140,8 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  /** Force refresh OAuth tokens even if local expires has not passed (use after 401) */
+  forceRefresh?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -146,6 +152,7 @@ export async function resolveApiKeyForProvider(params: {
       store,
       profileId,
       agentDir: params.agentDir,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -177,6 +184,7 @@ export async function resolveApiKeyForProvider(params: {
         store,
         profileId: candidate,
         agentDir: params.agentDir,
+        forceRefresh: params.forceRefresh,
       });
       if (resolved) {
         const mode = store.profiles[candidate]?.type;

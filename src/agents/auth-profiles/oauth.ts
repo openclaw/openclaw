@@ -36,6 +36,7 @@ function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): stri
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
+  forceRefresh?: boolean;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
@@ -52,7 +53,8 @@ async function refreshOAuthTokenWithLock(params: {
       return null;
     }
 
-    if (Date.now() < cred.expires) {
+    // Skip cache if forceRefresh is set (e.g., after receiving 401 from server)
+    if (!params.forceRefresh && Date.now() < cred.expires) {
       return {
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
@@ -110,6 +112,7 @@ async function tryResolveOAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  forceRefresh?: boolean;
 }): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
@@ -124,7 +127,8 @@ async function tryResolveOAuthProfile(params: {
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  // Skip cache if forceRefresh is set (e.g., after receiving 401 from server)
+  if (!params.forceRefresh && Date.now() < cred.expires) {
     return {
       apiKey: buildOAuthApiKey(cred.provider, cred),
       provider: cred.provider,
@@ -135,6 +139,7 @@ async function tryResolveOAuthProfile(params: {
   const refreshed = await refreshOAuthTokenWithLock({
     profileId,
     agentDir: params.agentDir,
+    forceRefresh: params.forceRefresh,
   });
   if (!refreshed) {
     return null;
@@ -146,11 +151,57 @@ async function tryResolveOAuthProfile(params: {
   };
 }
 
+/**
+ * Invalidate an OAuth token, forcing a refresh on next use.
+ * Call this when receiving a 401 from the provider, indicating the token
+ * was revoked server-side before the local expires timestamp.
+ */
+export async function invalidateOAuthToken(params: {
+  profileId: string;
+  agentDir?: string;
+}): Promise<void> {
+  const authPath = resolveAuthStorePath(params.agentDir);
+  ensureAuthStoreFile(authPath);
+
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await lockfile.lock(authPath, {
+      ...AUTH_STORE_LOCK_OPTIONS,
+    });
+
+    const store = ensureAuthProfileStore(params.agentDir);
+    const cred = store.profiles[params.profileId];
+    if (!cred || cred.type !== "oauth") {
+      return;
+    }
+    // Set expires to 0 to force refresh on next use
+    store.profiles[params.profileId] = {
+      ...cred,
+      expires: 0,
+    };
+    saveAuthProfileStore(store, params.agentDir);
+    log.info("invalidated OAuth token due to server rejection", {
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+    });
+  } finally {
+    if (release) {
+      try {
+        await release();
+      } catch {
+        // ignore unlock errors
+      }
+    }
+  }
+}
+
 export async function resolveApiKeyForProfile(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  /** Force refresh even if local expires has not passed (use after 401) */
+  forceRefresh?: boolean;
 }): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
@@ -190,7 +241,8 @@ export async function resolveApiKeyForProfile(params: {
     }
     return { apiKey: token, provider: cred.provider, email: cred.email };
   }
-  if (Date.now() < cred.expires) {
+  // Skip cache if forceRefresh is set (e.g., after receiving 401 from server)
+  if (!params.forceRefresh && Date.now() < cred.expires) {
     return {
       apiKey: buildOAuthApiKey(cred.provider, cred),
       provider: cred.provider,
@@ -202,6 +254,7 @@ export async function resolveApiKeyForProfile(params: {
     const result = await refreshOAuthTokenWithLock({
       profileId,
       agentDir: params.agentDir,
+      forceRefresh: params.forceRefresh,
     });
     if (!result) {
       return null;
@@ -234,6 +287,7 @@ export async function resolveApiKeyForProfile(params: {
           store: refreshedStore,
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
+          forceRefresh: params.forceRefresh,
         });
         if (fallbackResolved) {
           return fallbackResolved;
