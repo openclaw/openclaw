@@ -628,12 +628,23 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return lower.includes("unknown model") || lower.includes("model not found");
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
