@@ -30,8 +30,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 }
 
 const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
+// Tightened regex to avoid false positives like "in context of" or "for context"
+// Must match actual context overflow patterns, not incidental use of "context"
 const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+  /\bcontext\s+overflow\b|\bcontext\s+(?:window|length)\b.{0,30}(?:too\s+(?:large|long)|exceed|limit|max(?:imum)?|tokens)|\b(?:prompt|request|input)\s+(?:is\s+)?(?:too\s+(?:large|long)|exceed|limit|max(?:imum)?)/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {

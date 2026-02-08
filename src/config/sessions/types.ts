@@ -93,6 +93,14 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Count of consecutive context overflow failures.
+   * Used by circuit breaker to prevent infinite overflow loops.
+   * Reset on successful agent run.
+   */
+  consecutiveOverflowCount?: number;
+  /** Timestamp (ms) of the last overflow failure. */
+  lastOverflowAt?: number;
 };
 
 export function mergeSessionEntry(

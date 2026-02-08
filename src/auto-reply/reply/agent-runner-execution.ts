@@ -23,6 +23,7 @@ import {
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -37,6 +38,49 @@ import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runne
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+
+// Circuit breaker constants to prevent infinite overflow loops (#8596)
+const MAX_CONSECUTIVE_OVERFLOWS = 3;
+const OVERFLOW_CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Update overflow tracking in session state.
+ * Called when overflow occurs (increment) or on success (reset).
+ */
+async function updateOverflowState(params: {
+  storePath?: string;
+  sessionKey?: string;
+  increment: boolean;
+}): Promise<void> {
+  const { storePath, sessionKey, increment } = params;
+  if (!storePath || !sessionKey) {
+    return;
+  }
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async (entry) => {
+        if (increment) {
+          return {
+            consecutiveOverflowCount: (entry.consecutiveOverflowCount ?? 0) + 1,
+            lastOverflowAt: Date.now(),
+          };
+        }
+        // Reset on success
+        if (entry.consecutiveOverflowCount && entry.consecutiveOverflowCount > 0) {
+          return {
+            consecutiveOverflowCount: 0,
+            lastOverflowAt: undefined,
+          };
+        }
+        return null;
+      },
+    });
+  } catch {
+    // Best effort - don't fail the main flow
+  }
+}
 
 export type AgentRunLoopResult =
   | {
@@ -97,6 +141,27 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let didResetAfterCompactionFailure = false;
+
+  // Circuit breaker: check for repeated overflow failures (#8596)
+  const sessionEntry = params.getActiveSessionEntry();
+  const overflowCount = sessionEntry?.consecutiveOverflowCount ?? 0;
+  const lastOverflow = sessionEntry?.lastOverflowAt ?? 0;
+  const withinWindow = Date.now() - lastOverflow < OVERFLOW_CIRCUIT_BREAKER_WINDOW_MS;
+  if (overflowCount >= MAX_CONSECUTIVE_OVERFLOWS && withinWindow) {
+    defaultRuntime.warn(
+      `Circuit breaker triggered: ${overflowCount} consecutive overflows in session ${params.sessionKey}. ` +
+        `Returning static message without LLM call.`,
+    );
+    return {
+      kind: "final",
+      payload: {
+        text:
+          "⚠️ Context overflow circuit breaker: This session has hit the context limit " +
+          `${overflowCount} times in a row. Use /new to start a fresh conversation, ` +
+          "or try a model with a larger context window.",
+      },
+    };
+  }
 
   while (true) {
     try {
@@ -478,6 +543,12 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
         didResetAfterCompactionFailure = true;
+        // Track overflow for circuit breaker (#8596)
+        await updateOverflowState({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          increment: true,
+        });
         return {
           kind: "final",
           payload: {
@@ -511,6 +582,12 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(message))
       ) {
         didResetAfterCompactionFailure = true;
+        // Track overflow for circuit breaker (#8596)
+        await updateOverflowState({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          increment: true,
+        });
         return {
           kind: "final",
           payload: {
@@ -583,6 +660,15 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
           : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
+      // Track overflow for circuit breaker (#8596)
+      if (isContextOverflow || isCompactionFailure) {
+        await updateOverflowState({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          increment: true,
+        });
+      }
+
       return {
         kind: "final",
         payload: {
@@ -591,6 +677,13 @@ export async function runAgentTurnWithFallback(params: {
       };
     }
   }
+
+  // Reset overflow counter on successful run (#8596)
+  await updateOverflowState({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    increment: false,
+  });
 
   return {
     kind: "success",

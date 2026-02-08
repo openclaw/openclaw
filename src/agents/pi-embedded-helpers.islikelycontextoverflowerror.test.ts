@@ -31,4 +31,18 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes incidental 'context' phrases (fix for #8847)", () => {
+    // These should NOT trigger context overflow detection
+    const falsePositives = [
+      "Processing in context of search results",
+      "For context, here's the error message",
+      "In the context of this operation",
+      "Additional context: memory allocation failed",
+      "Providing context for the request",
+    ];
+    for (const sample of falsePositives) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
 });
