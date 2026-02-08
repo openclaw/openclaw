@@ -13,7 +13,7 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 //
 // To keep sessions resilient (and avoid "silent" WhatsApp non-replies), we auto-downscale
 // and recompress base64 image blocks when they exceed these limits.
-const MAX_IMAGE_DIMENSION_PX = 2000;
+const MAX_IMAGE_DIMENSION_PX = 1200;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 

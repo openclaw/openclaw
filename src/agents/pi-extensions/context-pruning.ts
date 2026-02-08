@@ -7,7 +7,7 @@
 
 export { default } from "./context-pruning/extension.js";
 
-export { pruneContextMessages } from "./context-pruning/pruner.js";
+export { capToolResultMessages, pruneContextMessages } from "./context-pruning/pruner.js";
 export type {
   ContextPruningConfig,
   ContextPruningToolMatch,
@@ -16,4 +16,5 @@ export type {
 export {
   computeEffectiveSettings,
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
+  DEFAULT_MAX_TOOL_RESULT_CHARS,
 } from "./context-pruning/settings.js";
