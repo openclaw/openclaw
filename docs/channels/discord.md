@@ -173,7 +173,7 @@ Example “single server, only allow me, only allow #help”:
           users: ["YOUR_USER_ID"],
           requireMention: true,
           channels: {
-            help: { allow: true, requireMention: true },
+            YOUR_CHANNEL_ID: { allow: true, requireMention: true },
           },
         },
       },
@@ -191,6 +191,7 @@ Example “single server, only allow me, only allow #help”:
 Notes:
 
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
+- Channel keys accept numeric IDs (recommended) or slugs; numeric IDs avoid ambiguity and skip name resolution.
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`) also count as mentions for guild messages.
 - Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - If `channels` is present, any channel not listed is denied by default.

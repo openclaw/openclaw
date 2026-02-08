@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
+const isMacOS = process.platform === "darwin";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
 
@@ -19,7 +20,8 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     pool: "forks",
-    maxWorkers: isCI ? ciWorkers : localWorkers,
+    // Use a single worker on macOS CI to avoid vitest worker crash (vitest#8564).
+    maxWorkers: isMacOS && isCI ? 1 : isCI ? ciWorkers : localWorkers,
     include: ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"],
     setupFiles: ["test/setup.ts"],
     exclude: [

@@ -52,4 +52,48 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.guildId).toBe("g1");
     expect(res[0]?.channelId).toBe("123");
   });
+
+  it("resolves guild/channel by numeric ids", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Guild One" }]);
+      }
+      if (url.endsWith("/channels/222")) {
+        return jsonResponse({ id: "222", name: "help", guild_id: "111", type: 0 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111/222"],
+      fetcher,
+    });
+
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("111");
+    expect(res[0]?.channelId).toBe("222");
+  });
+
+  it("resolves guild:ID/channelId format", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Guild One" }]);
+      }
+      if (url.endsWith("/channels/222")) {
+        return jsonResponse({ id: "222", name: "help", guild_id: "111", type: 0 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["guild:111/222"],
+      fetcher,
+    });
+
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("111");
+    expect(res[0]?.channelId).toBe("222");
+  });
 });
