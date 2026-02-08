@@ -127,11 +127,13 @@ const APPROVAL_SLUG_LENGTH = 8;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyListener<T> = (event: T) => void;
+type PtyDisposable = { dispose: () => void };
 type PtyHandle = {
   pid: number;
   write: (data: string | Buffer) => void;
-  onData: (listener: PtyListener<string>) => void;
-  onExit: (listener: PtyListener<PtyExitEvent>) => void;
+  onData: (listener: PtyListener<string>) => PtyDisposable;
+  onExit: (listener: PtyListener<PtyExitEvent>) => PtyDisposable;
+  kill: (signal?: string) => void;
 };
 type PtySpawn = (
   file: string,
@@ -439,6 +441,8 @@ async function runExecProcess(opts: {
   let child: ChildProcessWithoutNullStreams | null = null;
   let pty: PtyHandle | null = null;
   let stdin: SessionStdin | undefined;
+  let ptyDataDisposable: PtyDisposable | null = null;
+  let ptyExitDisposable: PtyDisposable | null = null;
 
   if (opts.sandbox) {
     const { child: spawned } = await spawnWithFallback({
@@ -685,7 +689,7 @@ async function runExecProcess(opts: {
 
   if (pty) {
     const cursorResponse = buildCursorPositionResponse();
-    pty.onData((data) => {
+    ptyDataDisposable = pty.onData((data) => {
       const raw = data.toString();
       const { cleaned, requests } = stripDsrRequests(raw);
       if (requests > 0) {
@@ -754,10 +758,18 @@ async function runExecProcess(opts: {
     };
 
     if (pty) {
-      pty.onExit((event) => {
+      ptyExitDisposable = pty.onExit((event) => {
         const rawSignal = event.signal ?? null;
         const normalizedSignal = rawSignal === 0 ? null : rawSignal;
         handleExit(event.exitCode ?? null, normalizedSignal);
+        // Clean up PTY resources to prevent FD leaks
+        try {
+          ptyDataDisposable?.dispose();
+          ptyExitDisposable?.dispose();
+          pty.kill();
+        } catch {
+          // Ignore cleanup errors
+        }
       });
     } else if (child) {
       child.once("close", (code, exitSignal) => {
