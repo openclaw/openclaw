@@ -51,7 +51,7 @@ type TelegramSendOpts = {
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
 };
 
 type TelegramSendResult = {
@@ -179,18 +179,32 @@ export function buildInlineKeyboard(
   if (!buttons?.length) {
     return undefined;
   }
+
   const rows = buttons
     .map((row) =>
       row
-        .filter((button) => button?.text && button?.callback_data)
-        .map(
-          (button): InlineKeyboardButton => ({
-            text: button.text,
-            callback_data: button.callback_data,
-          }),
-        ),
+        .map((button): InlineKeyboardButton | null => {
+          const text = button?.text?.trim();
+          if (!text) {
+            return null;
+          }
+
+          const url = button?.url?.trim();
+          if (url) {
+            return { text, url };
+          }
+
+          const callbackData = button?.callback_data?.trim();
+          if (callbackData) {
+            return { text, callback_data: callbackData };
+          }
+
+          return null;
+        })
+        .filter((button): button is InlineKeyboardButton => button != null),
     )
     .filter((row) => row.length > 0);
+
   if (rows.length === 0) {
     return undefined;
   }
@@ -555,7 +569,7 @@ type TelegramEditOpts = {
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<{ text: string; callback_data?: string; url?: string }>>;
   /** Optional config injection to avoid global loadConfig() (improves testability). */
   cfg?: ReturnType<typeof loadConfig>;
 };
