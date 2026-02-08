@@ -1,4 +1,4 @@
-import { type FilesUploadV2Arguments, type WebClient } from "@slack/web-api";
+import { type FilesUploadV2Arguments, type KnownBlock, type WebClient } from "@slack/web-api";
 import type { SlackTokenSource } from "./accounts.js";
 import {
   chunkMarkdownTextWithMode,
@@ -33,6 +33,9 @@ type SlackSendOpts = {
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
+  /** Optional Block Kit blocks payload. When provided, `text` serves as the
+   *  plain-text fallback for notifications and accessibility. */
+  blocks?: KnownBlock[];
 };
 
 export type SlackSendResult = {
@@ -194,6 +197,9 @@ export async function sendMessageSlack(
       const response = await client.chat.postMessage({
         channel: channelId,
         text: chunk,
+        // Only attach blocks to the first chunk — subsequent chunks are
+        // overflow text that doesn't map to the original block payload.
+        ...(opts.blocks && chunk === chunks[0] ? { blocks: opts.blocks } : {}),
         thread_ts: opts.threadTs,
       });
       lastMessageId = response.ts ?? lastMessageId;

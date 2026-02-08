@@ -122,6 +122,10 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Use Slack's native `chat.startStream` / `appendStream` / `stopStream`
+   *  API to deliver replies as a single live-updating message.
+   *  Requires `blockStreaming` to also be enabled. Default: false. */
+  streaming?: boolean;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;

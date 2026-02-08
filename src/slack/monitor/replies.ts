@@ -1,3 +1,4 @@
+import type { KnownBlock } from "@slack/web-api";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -30,10 +31,12 @@ export async function deliverReplies(params: {
       if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
+      const blocks = payload.channelData?.slackBlocks as KnownBlock[] | undefined;
       await sendMessageSlack(params.target, trimmed, {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        blocks,
       });
     } else {
       let first = true;
