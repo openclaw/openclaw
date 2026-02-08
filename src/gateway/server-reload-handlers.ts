@@ -18,11 +18,18 @@ import { CommandLane } from "../process/lanes.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
+import {
+  buildGatewaySpoolService,
+  startGatewaySpoolWatcher,
+  stopGatewaySpoolWatcher,
+  type GatewaySpoolState,
+} from "./server-spool.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
+  spoolState: GatewaySpoolState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
 
@@ -41,6 +48,7 @@ export function createGatewayReloadHandlers(params: {
   logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
+  logSpool: { info: (msg: string) => void; error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   const applyHotReload = async (
@@ -75,6 +83,22 @@ export function createGatewayReloadHandlers(params: {
       void nextState.cronState.cron
         .start()
         .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
+    }
+
+    if (plan.restartSpool) {
+      await stopGatewaySpoolWatcher(state.spoolState).catch(() => {});
+      nextState.spoolState = buildGatewaySpoolService({
+        cfg: nextConfig,
+        deps: params.deps,
+        broadcast: params.broadcast,
+      });
+      if (nextState.spoolState.spoolEnabled) {
+        void startGatewaySpoolWatcher(nextState.spoolState)
+          .then(() => params.logSpool.info("spool watcher restarted"))
+          .catch((err) => params.logSpool.error(`failed to start: ${String(err)}`));
+      } else {
+        params.logSpool.info("spool watcher disabled");
+      }
     }
 
     if (plan.restartBrowserControl) {

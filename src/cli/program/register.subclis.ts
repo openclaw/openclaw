@@ -137,6 +137,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "spool",
+    description: "Event-driven dispatch",
+    register: async (program) => {
+      const mod = await import("../spool-cli.js");
+      mod.registerSpoolCli(program);
+    },
+  },
+  {
     name: "dns",
     description: "DNS helpers",
     register: async (program) => {
