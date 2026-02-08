@@ -46,7 +46,7 @@ describe("config compaction settings", () => {
     });
   });
 
-  it("defaults compaction mode to safeguard", async () => {
+  it("defaults compaction mode to default", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
@@ -72,7 +72,7 @@ describe("config compaction settings", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(cfg.agents?.defaults?.compaction?.mode).toBe("default");
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(9000);
     });
   });
