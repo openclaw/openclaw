@@ -129,7 +129,8 @@ upsert_env() {
   local -a keys=("$@")
   local tmp
   tmp="$(mktemp)"
-  declare -A seen=()
+  
+  local seen=" "
 
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -137,8 +138,8 @@ upsert_env() {
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen["$k"]=1
+          eval "printf '%s=%s\n' \"\$k\" \"\${$k-}\" >>\"\$tmp\""
+          seen="${seen}${k} "
           replaced=true
           break
         fi
@@ -150,13 +151,14 @@ upsert_env() {
   fi
 
   for k in "${keys[@]}"; do
-    if [[ -z "${seen[$k]:-}" ]]; then
-      printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+    if [[ "$seen" != *" $k "* ]]; then
+      eval "printf '%s=%s\n' \"\$k\" \"\${$k-}\" >>\"\$tmp\""
     fi
   done
 
   mv "$tmp" "$file"
 }
+
 
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
