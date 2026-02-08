@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { MigrationService } from "../services/MigrationService.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
 export type ResolvedGatewayAuthMode = "token" | "password";
 
@@ -202,14 +203,15 @@ export function resolveGatewayAuth(params: {
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const authConfig = params.authConfig ?? {};
+  // const env = params.env ?? process.env; // Unused, we use MigrationService directly
+
+  // Use MigrationService for "Deprecation & Fallback" logic
+  // We explicitly pass 'env' to support testing mocks.
   const env = params.env ?? process.env;
-  const token =
-    authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
-  const password =
-    authConfig.password ??
-    env.OPENCLAW_GATEWAY_PASSWORD ??
-    env.CLAWDBOT_GATEWAY_PASSWORD ??
-    undefined;
+  const token = authConfig.token ?? MigrationService.getEnv("GATEWAY_TOKEN", env);
+
+  const password = authConfig.password ?? MigrationService.getEnv("GATEWAY_PASSWORD", env);
+
   const mode: ResolvedGatewayAuth["mode"] = authConfig.mode ?? (password ? "password" : "token");
   const allowTailscale =
     authConfig.allowTailscale ?? (params.tailscaleMode === "serve" && mode !== "password");

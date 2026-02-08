@@ -9,6 +9,7 @@ import {
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { MigrationService } from "../services/MigrationService.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -212,8 +213,7 @@ export async function callGateway<T = Record<string, unknown>>(
         ? typeof remote?.token === "string" && remote.token.trim().length > 0
           ? remote.token.trim()
           : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+        : MigrationService.getEnv("GATEWAY_TOKEN")?.trim() ||
           (typeof authToken === "string" && authToken.trim().length > 0
             ? authToken.trim()
             : undefined)
@@ -221,8 +221,7 @@ export async function callGateway<T = Record<string, unknown>>(
   const password =
     explicitAuth.password ||
     (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+      ? MigrationService.getEnv("GATEWAY_PASSWORD")?.trim() ||
         (isRemoteMode
           ? typeof remote?.password === "string" && remote.password.trim().length > 0
             ? remote.password.trim()

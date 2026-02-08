@@ -35,9 +35,14 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   return `ai.openclaw.${normalized}`;
 }
 
+/**
+ * Resolves legacy launch agent labels.
+ * Note: We ignore the 'profile' parameter because legacy versions (ClawdBot/MoltBot) did not support
+ * named profiles. They always used fixed service labels.
+ */
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
   void profile;
-  return [];
+  return ["ai.clawdbot.gateway", "ai.moltbot.gateway"];
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
