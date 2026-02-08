@@ -26,6 +26,63 @@ export type ChatHost = {
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 
+// Message queue persistence
+const QUEUE_STORAGE_KEY_PREFIX = "openclaw:chat:queue:";
+const QUEUE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function getQueueStorageKey(sessionKey: string): string {
+  return `${QUEUE_STORAGE_KEY_PREFIX}${sessionKey}`;
+}
+
+function saveQueueToStorage(sessionKey: string, queue: ChatQueueItem[]): void {
+  try {
+    const key = getQueueStorageKey(sessionKey);
+    if (queue.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(queue));
+    }
+  } catch (err) {
+    // localStorage may be unavailable or full - fail silently
+    console.warn("Failed to persist chat queue:", err);
+  }
+}
+
+function loadQueueFromStorage(sessionKey: string): ChatQueueItem[] {
+  try {
+    const key = getQueueStorageKey(sessionKey);
+    const stored = localStorage.getItem(key);
+    if (!stored) {
+      return [];
+    }
+    const parsed = JSON.parse(stored) as ChatQueueItem[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    // Filter out stale messages (>24h old)
+    const now = Date.now();
+    const fresh = parsed.filter((item) => {
+      const age = now - (item.createdAt || 0);
+      return age < QUEUE_MAX_AGE_MS;
+    });
+    // Save filtered queue back if we removed stale entries
+    if (fresh.length !== parsed.length) {
+      saveQueueToStorage(sessionKey, fresh);
+    }
+    return fresh;
+  } catch (err) {
+    console.warn("Failed to load chat queue from storage:", err);
+    return [];
+  }
+}
+
+export function restoreQueueFromStorage(host: ChatHost): void {
+  const restored = loadQueueFromStorage(host.sessionKey);
+  if (restored.length > 0) {
+    host.chatQueue = restored;
+  }
+}
+
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
 }
@@ -89,6 +146,7 @@ function enqueueChatMessage(
       refreshSessions,
     },
   ];
+  saveQueueToStorage(host.sessionKey, host.chatQueue);
 }
 
 async function sendChatMessageNow(
@@ -143,17 +201,20 @@ async function flushChatQueue(host: ChatHost) {
     return;
   }
   host.chatQueue = rest;
+  saveQueueToStorage(host.sessionKey, host.chatQueue);
   const ok = await sendChatMessageNow(host, next.text, {
     attachments: next.attachments,
     refreshSessions: next.refreshSessions,
   });
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
+    saveQueueToStorage(host.sessionKey, host.chatQueue);
   }
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  saveQueueToStorage(host.sessionKey, host.chatQueue);
 }
 
 export async function handleSendChat(
@@ -203,6 +264,9 @@ export async function handleSendChat(
 }
 
 export async function refreshChat(host: ChatHost) {
+  // Restore any queued messages from localStorage
+  restoreQueueFromStorage(host);
+
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
@@ -211,6 +275,9 @@ export async function refreshChat(host: ChatHost) {
     refreshChatAvatar(host),
   ]);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+
+  // Try to flush queue in case agent is idle
+  void flushChatQueue(host);
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
