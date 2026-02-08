@@ -69,9 +69,21 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
   const repair = await repairLaunchAgentBootstrap({ env: params.env });
   if (!repair.ok) {
-    params.runtime.error(
-      `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,
-    );
+    if (repair.isGuiDomainError) {
+      params.runtime.error(
+        `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}\n\n` +
+          `This error typically occurs when:\n` +
+          `  • Running via SSH without a GUI session\n` +
+          `  • Running in a container or non-standard environment\n` +
+          `  • The user account lacks a launchd GUI domain\n\n` +
+          `Try running this command from a local terminal with a GUI session,\n` +
+          `or use 'openclaw gateway start' to run the gateway directly.`,
+      );
+    } else {
+      params.runtime.error(
+        `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,
+      );
+    }
     return false;
   }
 

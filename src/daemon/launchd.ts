@@ -233,14 +233,16 @@ export async function readLaunchAgentRuntime(
 
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
-}): Promise<{ ok: boolean; detail?: string }> {
+}): Promise<{ ok: boolean; detail?: string; isGuiDomainError?: boolean }> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    const detail = (boot.stderr || boot.stdout).trim() || undefined;
+    const isGuiDomainError = detail?.toLowerCase().includes("could not find domain") ?? false;
+    return { ok: false, detail, isGuiDomainError };
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
@@ -436,7 +438,21 @@ export async function installLaunchAgent({
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    throw new Error(`launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim());
+    const detail = (boot.stderr || boot.stdout).trim() || undefined;
+    const isGuiDomainError = detail?.toLowerCase().includes("could not find domain") ?? false;
+    const detailSuffix = detail ? `: ${detail}` : "";
+    if (isGuiDomainError) {
+      throw new Error(
+        `launchctl bootstrap failed${detailSuffix}\n\n` +
+          `This error typically occurs when:\n` +
+          `  • Running via SSH without a GUI session\n` +
+          `  • Running in a container or non-standard environment\n` +
+          `  • The user account lacks a launchd GUI domain\n\n` +
+          `Try running this command from a local terminal with a GUI session,\n` +
+          `or use 'openclaw gateway start' to run the gateway directly.`,
+      );
+    }
+    throw new Error(`launchctl bootstrap failed${detailSuffix}`);
   }
   await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
