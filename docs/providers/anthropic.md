@@ -26,6 +26,22 @@ openclaw onboard
 openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
+### Environment variables
+
+OpenClaw supports the following environment variables for Anthropic API authentication (checked in order):
+
+| Variable                | Priority | Description                       |
+| ----------------------- | -------- | --------------------------------- |
+| `ANTHROPIC_OAUTH_TOKEN` | 1st      | OAuth token authentication        |
+| `ANTHROPIC_API_KEY`     | 2nd      | Standard API key (sk-ant-...)     |
+| `ANTHROPIC_AUTH_TOKEN`  | 3rd      | Alternative auth token (fallback) |
+
+```bash
+# Set any of these (higher priority takes precedence)
+export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_AUTH_TOKEN="your_token_here"
+```
+
 ### Config snippet
 
 ```json5
