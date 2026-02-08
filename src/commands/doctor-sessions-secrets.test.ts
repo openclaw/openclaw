@@ -10,9 +10,14 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
   findSessionFiles: mockFindSessionFiles,
 }));
 
-vi.mock("../logging/redact.js", () => ({
-  getDefaultRedactPatterns: mockGetDefaultRedactPatterns,
-}));
+vi.mock("../logging/redact.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../logging/redact.js")>("../logging/redact.js");
+  return {
+    getDefaultRedactPatterns: mockGetDefaultRedactPatterns,
+    parsePattern: actual.parsePattern,
+  };
+});
 
 vi.mock("../terminal/note.js", () => ({
   note: mockNote,

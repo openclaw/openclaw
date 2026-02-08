@@ -44,21 +44,38 @@ function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
-function parsePattern(raw: string): RegExp | null {
+function findLastUnescapedSlash(s: string): number {
+  for (let i = s.length - 1; i >= 0; i--) {
+    if (s[i] === "/") {
+      // Count preceding backslashes — odd means this slash is escaped
+      let backslashes = 0;
+      for (let j = i - 1; j >= 0 && s[j] === "\\"; j--) {
+        backslashes++;
+      }
+      if (backslashes % 2 === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+export function parsePattern(raw: string): RegExp | null {
   if (!raw.trim()) {
     return null;
   }
-  // Split on the *last* unescaped `/` to handle patterns containing literal slashes
-  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/s);
   try {
-    if (match) {
-      // Find the last `/` that isn't escaped, to correctly split source from flags
-      const lastSlash = raw.lastIndexOf("/");
-      if (lastSlash > 0) {
-        const source = raw.slice(1, lastSlash);
-        const flagStr = raw.slice(lastSlash + 1);
-        const flags = flagStr.includes("g") ? flagStr : `${flagStr}g`;
-        return new RegExp(source, flags);
+    // Check if it looks like a /pattern/flags string
+    if (raw.startsWith("/")) {
+      const lastSlash = findLastUnescapedSlash(raw.slice(1));
+      if (lastSlash >= 0) {
+        const splitPos = lastSlash + 1; // adjust for the slice(1)
+        const source = raw.slice(1, splitPos);
+        const flagStr = raw.slice(splitPos + 1);
+        if (/^[gimsuy]*$/.test(flagStr)) {
+          const flags = flagStr.includes("g") ? flagStr : `${flagStr}g`;
+          return new RegExp(source, flags);
+        }
       }
     }
     return new RegExp(raw, "gi");

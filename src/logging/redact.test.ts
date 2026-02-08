@@ -83,6 +83,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
+  it("handles patterns with escaped slashes correctly", () => {
+    // Pattern: /https:\/\/secret\.example\.com\/key=([A-Za-z0-9]+)/i
+    const input = "https://secret.example.com/key=abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: ["/https:\\/\\/secret\\.example\\.com\\/key=([A-Za-z0-9]+)/i"],
+    });
+    expect(output).toBe("https://secret.example.com/key=abcdef…ghij");
+  });
+
   it("skips redaction when mode is off", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, {

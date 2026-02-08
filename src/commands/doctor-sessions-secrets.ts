@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { findSessionFiles } from "../gateway/session-utils.fs.js";
-import { getDefaultRedactPatterns } from "../logging/redact.js";
+import { getDefaultRedactPatterns, parsePattern } from "../logging/redact.js";
 import { note } from "../terminal/note.js";
 
 /**
@@ -37,24 +37,9 @@ async function scanFileForSecrets(
 }
 
 function compilePatterns(patterns: string[]): RegExp[] {
-  return patterns
-    .map((pattern) => {
-      try {
-        // All patterns should have global flag for proper testing
-        const hasGlobalFlag = pattern.match(/\/([gimsuy]*)$/)?.[1]?.includes("g");
-        if (pattern.startsWith("/") && pattern.includes("/", 1)) {
-          const match = pattern.match(/^\/(.+)\/([gimsuy]*)$/);
-          if (match) {
-            const flags = hasGlobalFlag ? match[2] : `${match[2]}g`;
-            return new RegExp(match[1], flags);
-          }
-        }
-        return new RegExp(pattern, "gi");
-      } catch {
-        return null;
-      }
-    })
-    .filter((re): re is RegExp => re !== null);
+  // Reuse parsePattern from redact.ts to ensure doctor uses the same parsing
+  // logic as runtime redaction — no divergence in pattern compilation.
+  return patterns.map(parsePattern).filter((re): re is RegExp => re !== null);
 }
 
 export async function noteSessionSecretsWarnings(_cfg?: OpenClawConfig): Promise<void> {
