@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentTimeoutMs,
   resolveSubagentAnnounceDeliveryTimeoutMs,
@@ -21,12 +22,12 @@ describe("resolveAgentTimeoutMs", () => {
     expect(
       resolveSubagentAnnounceMaxAgeMs({
         agents: { defaults: { subagents: { announceMaxAgeMs: 30_000 } } },
-      } as any),
+      } as OpenClawConfig),
     ).toBe(30_000);
     expect(
       resolveSubagentAnnounceMaxAgeMs({
         agents: { defaults: { subagents: { announceMaxAgeMs: -1 } } },
-      } as any),
+      } as OpenClawConfig),
     ).toBe(10 * 60 * 1000);
   });
 });
