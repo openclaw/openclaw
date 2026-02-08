@@ -21,14 +21,23 @@ export async function dispatchInboundMessage(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
+  const { logVerbose } = await import("../globals.js");
+  logVerbose(
+    `dispatchInboundMessage: ENTRY - SessionKey=${params.ctx.SessionKey}, Provider=${params.ctx.Provider}`,
+  );
   const finalized = finalizeInboundContext(params.ctx);
-  return await dispatchReplyFromConfig({
+  logVerbose(`dispatchInboundMessage: calling dispatchReplyFromConfig...`);
+  const result = await dispatchReplyFromConfig({
     ctx: finalized,
     cfg: params.cfg,
     dispatcher: params.dispatcher,
     replyOptions: params.replyOptions,
     replyResolver: params.replyResolver,
   });
+  logVerbose(
+    `dispatchInboundMessage: dispatchReplyFromConfig completed - queuedFinal=${result.queuedFinal}`,
+  );
+  return result;
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {

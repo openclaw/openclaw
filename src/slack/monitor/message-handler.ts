@@ -6,6 +6,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import { logVerbose } from "../../globals.js";
 import { dispatchPreparedSlackMessage } from "./message-handler/dispatch.js";
 import { prepareSlackMessage } from "./message-handler/prepare.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
@@ -53,8 +54,10 @@ export function createSlackMessageHandler(params: {
       return !hasControlCommand(text, ctx.cfg);
     },
     onFlush: async (entries) => {
+      logVerbose(`slack message-handler: onFlush called with ${entries.length} entries`);
       const last = entries.at(-1);
       if (!last) {
+        logVerbose(`slack message-handler: onFlush - no entries, returning`);
         return;
       }
       const combinedText =
@@ -69,6 +72,9 @@ export function createSlackMessageHandler(params: {
         ...last.message,
         text: combinedText,
       };
+      logVerbose(
+        `slack message-handler: preparing message, channel=${syntheticMessage.channel}, text="${combinedText.slice(0, 50)}..."`,
+      );
       const prepared = await prepareSlackMessage({
         ctx,
         account,
@@ -79,6 +85,7 @@ export function createSlackMessageHandler(params: {
         },
       });
       if (!prepared) {
+        logVerbose(`slack message-handler: prepareSlackMessage returned null, skipping`);
         return;
       }
       if (entries.length > 1) {
@@ -89,7 +96,9 @@ export function createSlackMessageHandler(params: {
           prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
         }
       }
+      logVerbose(`slack message-handler: calling dispatchPreparedSlackMessage...`);
       await dispatchPreparedSlackMessage(prepared);
+      logVerbose(`slack message-handler: dispatchPreparedSlackMessage completed`);
     },
     onError: (err) => {
       ctx.runtime.error?.(`slack inbound debounce flush failed: ${String(err)}`);
@@ -97,7 +106,11 @@ export function createSlackMessageHandler(params: {
   });
 
   return async (message, opts) => {
+    logVerbose(
+      `slack message-handler: received message, channel=${message.channel}, user=${message.user}, source=${opts.source}, text="${(message.text ?? "").slice(0, 50)}..."`,
+    );
     if (opts.source === "message" && message.type !== "message") {
+      logVerbose(`slack message-handler: skipping - type=${message.type} is not "message"`);
       return;
     }
     if (
@@ -106,11 +119,14 @@ export function createSlackMessageHandler(params: {
       message.subtype !== "file_share" &&
       message.subtype !== "bot_message"
     ) {
+      logVerbose(`slack message-handler: skipping - subtype=${message.subtype}`);
       return;
     }
     if (ctx.markMessageSeen(message.channel, message.ts)) {
+      logVerbose(`slack message-handler: skipping - message already seen`);
       return;
     }
+    logVerbose(`slack message-handler: enqueueing message to debouncer`);
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };

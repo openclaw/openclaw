@@ -14,6 +14,9 @@ import { resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies } from "../replies.js";
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
+  logVerbose(
+    `dispatchPreparedSlackMessage: ENTRY - channel=${prepared.message.channel}, user=${prepared.message.user}, replyTarget=${prepared.replyTarget}`,
+  );
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -130,6 +133,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     onIdle: typingCallbacks.onIdle,
   });
 
+  logVerbose(`dispatchPreparedSlackMessage: calling dispatchInboundMessage...`);
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
@@ -145,6 +149,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       onModelSelected,
     },
   });
+  logVerbose(
+    `dispatchPreparedSlackMessage: dispatchInboundMessage completed - queuedFinal=${queuedFinal}, counts=${JSON.stringify(counts)}`,
+  );
   markDispatchIdle();
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
