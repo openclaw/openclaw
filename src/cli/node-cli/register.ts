@@ -36,11 +36,29 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
-    .action(async (opts) => {
+    .option(
+      "--caps <list>",
+      "Comma-separated list of capabilities (e.g. system,canvas,camera) or '*' for all",
+    )
+    .option(
+      "--commands <list>",
+      "Comma-separated list of allowed commands (e.g. system.*,canvas.*) or '*' for all",
+    )
+    .action(async (opts: Record<string, any>) => {
       const existing = await loadNodeHostConfig();
       const host =
         (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
       const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+
+      const parseList = (val: unknown) => {
+        if (!val || typeof val !== "string") return undefined;
+        if (val === "*") return ["*"];
+        return val
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      };
+
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
@@ -48,6 +66,8 @@ export function registerNodeCli(program: Command) {
         gatewayTlsFingerprint: opts.tlsFingerprint,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
+        caps: parseList(opts.caps),
+        commands: parseList(opts.commands),
       });
     });
 
@@ -55,7 +75,7 @@ export function registerNodeCli(program: Command) {
     .command("status")
     .description("Show node host status")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: Record<string, any>) => {
       await runNodeDaemonStatus(opts);
     });
 
@@ -68,10 +88,18 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
+    .option(
+      "--caps <list>",
+      "Comma-separated list of capabilities (e.g. system,canvas,camera) or '*' for all",
+    )
+    .option(
+      "--commands <list>",
+      "Comma-separated list of allowed commands (e.g. system.*,canvas.*) or '*' for all",
+    )
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: Record<string, any>) => {
       await runNodeDaemonInstall(opts);
     });
 
@@ -79,7 +107,7 @@ export function registerNodeCli(program: Command) {
     .command("uninstall")
     .description("Uninstall the node host service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: Record<string, any>) => {
       await runNodeDaemonUninstall(opts);
     });
 
@@ -87,7 +115,7 @@ export function registerNodeCli(program: Command) {
     .command("stop")
     .description("Stop the node host service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: Record<string, any>) => {
       await runNodeDaemonStop(opts);
     });
 
@@ -95,7 +123,7 @@ export function registerNodeCli(program: Command) {
     .command("restart")
     .description("Restart the node host service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts: Record<string, any>) => {
       await runNodeDaemonRestart(opts);
     });
 }

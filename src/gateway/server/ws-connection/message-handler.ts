@@ -231,6 +231,20 @@ export function attachGatewayWsMessageHandler(params: {
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
 
+  // #region agent log
+  fetch("http://127.0.0.1:7248/ingest/76484035-eb07-4958-b88d-99d863bb621e", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "message-handler.ts:232",
+      message: "WS message received",
+      data: { isClosed: isClosed() },
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      hypothesisId: "A",
+    }),
+  }).catch(() => {});
+  // #endregion
   socket.on("message", async (data) => {
     if (isClosed()) {
       return;
@@ -410,6 +424,24 @@ export function attachGatewayWsMessageHandler(params: {
         const allowControlUiBypass = allowInsecureControlUi || disableControlUiDeviceAuth;
         const device = disableControlUiDeviceAuth ? null : deviceRaw;
 
+        // #region agent log
+        fetch("http://127.0.0.1:7248/ingest/76484035-eb07-4958-b88d-99d863bb621e", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            location: "message-handler.ts:413",
+            message: "authorizeGatewayConnect call",
+            data: {
+              authMode: resolvedAuth.mode,
+              hasToken: !!connectParams.auth?.token,
+              isLocalClient,
+            },
+            timestamp: Date.now(),
+            sessionId: "debug-session",
+            hypothesisId: "B",
+          }),
+        }).catch(() => {});
+        // #endregion
         const authResult = await authorizeGatewayConnect({
           auth: resolvedAuth,
           connectAuth: connectParams.auth,
@@ -732,8 +764,36 @@ export function attachGatewayWsMessageHandler(params: {
             return true;
           };
 
+          // #region agent log
+          fetch("http://127.0.0.1:7248/ingest/76484035-eb07-4958-b88d-99d863bb621e", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "message-handler.ts:735",
+              message: "Check pairing",
+              data: { deviceId: device.id, devicePublicKey },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              hypothesisId: "C",
+            }),
+          }).catch(() => {});
+          // #endregion
           const paired = await getPairedDevice(device.id);
           const isPaired = paired?.publicKey === devicePublicKey;
+          // #region agent log
+          fetch("http://127.0.0.1:7248/ingest/76484035-eb07-4958-b88d-99d863bb621e", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              location: "message-handler.ts:737",
+              message: "Pairing result",
+              data: { isPaired, pairedPublicKey: paired?.publicKey },
+              timestamp: Date.now(),
+              sessionId: "debug-session",
+              hypothesisId: "C",
+            }),
+          }).catch(() => {});
+          // #endregion
           if (!isPaired) {
             const ok = await requirePairing("not-paired");
             if (!ok) {

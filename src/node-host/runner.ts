@@ -53,6 +53,8 @@ type NodeHostRunOptions = {
   gatewayTlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  caps?: string[];
+  commands?: string[];
 };
 
 type SystemRunParams = {
@@ -607,12 +609,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
-    commands: [
-      "system.run",
-      "system.which",
-      "system.execApprovals.get",
-      "system.execApprovals.set",
+    caps: opts.caps ?? [
+      "system",
+      "canvas",
+      "camera",
+      "screen",
+      "location",
+      ...(browserProxyEnabled ? ["browser"] : []),
+    ],
+    commands: opts.commands ?? [
+      "system.*",
+      "canvas.*",
+      "camera.*",
+      "screen.*",
+      "location.*",
       ...(browserProxyEnabled ? ["browser.proxy"] : []),
     ],
     pathEnv,

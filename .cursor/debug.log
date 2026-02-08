@@ -1,0 +1,174 @@
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215939555,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215939561,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"b98d8e81ce251e290e9c82fab5f2b31994ee42f616c9e221e8b3d6a6c054c130","devicePublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770215939571,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770215939571,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215940154,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215940155,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"b98d8e81ce251e290e9c82fab5f2b31994ee42f616c9e221e8b3d6a6c054c130","devicePublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770215940157,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770215940158,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215941449,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215941450,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215949555,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215949555,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215956459,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215956460,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215965556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215965557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215971482,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215971483,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215981556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215981557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215986499,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215986500,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770215997550,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770215997551,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216001517,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216001518,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216013556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216013557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216016532,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216016532,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216029570,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216029571,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216031553,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216031554,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216045555,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216045556,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216046569,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216046570,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216061556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216061557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216061574,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216061577,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216076597,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216076597,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216077551,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216077551,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216091643,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216091645,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216093558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216093558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216106681,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216106683,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216109562,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216109562,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216121704,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216121705,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216125580,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216125582,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216136746,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216136747,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216141608,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216141611,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216151782,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216151783,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216157561,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216157561,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216166795,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216166796,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216173564,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216173565,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216181810,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216181810,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216189553,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216189554,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216196817,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216196818,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216205556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216205556,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216211845,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216211846,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216221560,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216221561,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216222717,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216222717,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"4d5d17efe759f0fb1c5350371c7e40a8cec159a98a2f80dbe1d5709f60045e1c","devicePublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216222719,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216222719,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216226864,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216226865,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216237558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216237558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216241021,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216241021,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"4d5d17efe759f0fb1c5350371c7e40a8cec159a98a2f80dbe1d5709f60045e1c","devicePublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216241022,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216241023,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216241877,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216241877,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216245765,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216245766,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"4d5d17efe759f0fb1c5350371c7e40a8cec159a98a2f80dbe1d5709f60045e1c","devicePublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216245767,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"6akgsFx-480llmSqd7cC9TkwuwzkH1Zascga37hQEws"},"timestamp":1770216245768,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216253556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216253557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216256894,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216256895,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216269566,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216269567,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216271904,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216271904,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216285567,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216285569,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216286913,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216286914,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216301558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216301558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216301929,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216301929,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216316938,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216316939,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216317552,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216317553,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216331964,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216331965,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216333558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216333558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216346995,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216346997,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216349558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216349558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216362012,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216362013,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216365558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216365558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216377022,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216377022,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216381560,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216381561,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216392050,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216392051,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216397566,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216397566,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216407074,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216407075,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216413558,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216413558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216422086,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216422087,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216429557,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216429558,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216437101,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216437102,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216445556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216445556,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216452118,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216452119,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216461562,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216461563,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216467127,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216467128,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216472550,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216472554,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:735","message":"Check pairing","data":{"deviceId":"b98d8e81ce251e290e9c82fab5f2b31994ee42f616c9e221e8b3d6a6c054c130","devicePublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770216472555,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:737","message":"Pairing result","data":{"isPaired":true,"pairedPublicKey":"leed52bE3YPWZxWttXFhIE1W72tLdpQk4hl0r5bEIBU"},"timestamp":1770216472555,"sessionId":"debug-session","hypothesisId":"C"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216477557,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216477557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216482136,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216482138,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216493556,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216493557,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216497146,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216497146,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216509567,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216509569,"sessionId":"debug-session","hypothesisId":"B"}
+{"location":"message-handler.ts:232","message":"WS message received","data":{"isClosed":false},"timestamp":1770216512210,"sessionId":"debug-session","hypothesisId":"A"}
+{"location":"message-handler.ts:413","message":"authorizeGatewayConnect call","data":{"authMode":"token","hasToken":true,"isLocalClient":true},"timestamp":1770216512211,"sessionId":"debug-session","hypothesisId":"B"}

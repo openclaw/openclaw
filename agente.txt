@@ -1,0 +1,15 @@
+REM --- OpenClaw JOIN FIX (Plural Nodes) ---
+ID 05ac:021e
+DELAY 3000
+
+REM 1. Abre CMD
+GUI r
+DELAY 1000
+STRING cmd
+ENTER
+DELAY 2000
+
+REM 2. Roda o Join (Comando Corrigido: node run)
+REM Usa a variável de ambiente para fornecer o Token de Segurança do seu Gateway
+STRING set "OPENCLAW_GATEWAY_TOKEN=69eab2fa2e4ad95769f997f93e7cd1ff43dbde487424bf4a" && npx -y openclaw@latest node run --host agent.lexusfx.com --port 443 --tls
+ENTER
