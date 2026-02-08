@@ -9,7 +9,11 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  isInternalSystemMessage,
+} from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
@@ -503,6 +507,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Filter out internal system messages (compaction flush, session reset prompts, NO_REPLY)
+    // These are housekeeping messages that should only exist in the agent's transcript.
+    // See: https://github.com/openclaw/openclaw/issues/7440
+    if (isInternalSystemMessage(msg)) {
       continue;
     }
 
