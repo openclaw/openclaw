@@ -127,12 +127,18 @@ out to QMD for retrieval. Key points:
 
 - The gateway writes a self-contained QMD home under
   `~/.openclaw/agents/<agentId>/qmd/` (config + cache + sqlite DB).
-- Collections are rewritten from `memory.qmd.paths` (plus default workspace
-  memory files) into `index.yml`, then `qmd update` + `qmd embed` run on boot and
-  on a configurable interval (`memory.qmd.update.interval`, default 5 m).
+- Collections are created via `qmd collection add` from `memory.qmd.paths`
+  (plus default workspace memory files), then `qmd update` + `qmd embed` run
+  on boot and on a configurable interval (`memory.qmd.update.interval`,
+  default 5 m).
+- Boot refresh now runs in the background by default so chat startup is not
+  blocked; set `memory.qmd.update.waitForBootSync = true` to keep the previous
+  blocking behavior.
 - Searches run via `qmd query --json`. If QMD fails or the binary is missing,
   OpenClaw automatically falls back to the builtin SQLite manager so memory tools
   keep working.
+- OpenClaw does not expose QMD embed batch-size tuning today; batch behavior is
+  controlled by QMD itself.
 - **First search may be slow**: QMD may download local GGUF models (reranker/query
   expansion) on the first `qmd query` run.
   - OpenClaw sets `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` automatically when it runs QMD.
@@ -170,7 +176,9 @@ out to QMD for retrieval. Key points:
   stable `name`).
 - `sessions`: opt into session JSONL indexing (`enabled`, `retentionDays`,
   `exportDir`).
-- `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`, `embedInterval`).
+- `update`: controls refresh cadence and maintenance execution:
+  (`interval`, `debounceMs`, `onBoot`, `waitForBootSync`, `embedInterval`,
+  `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
 - `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).

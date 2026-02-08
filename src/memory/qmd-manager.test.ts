@@ -4,30 +4,35 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => {
-  const spawn = vi.fn((_cmd: string, _args: string[]) => {
-    const stdout = new EventEmitter();
-    const stderr = new EventEmitter();
-    const child = new EventEmitter() as {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: () => void;
-      emit: (event: string, code: number) => boolean;
-    };
-    child.stdout = stdout;
-    child.stderr = stderr;
-    child.kill = () => {
+type MockChild = EventEmitter & {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: (signal?: NodeJS.Signals) => void;
+  closeWith: (code?: number | null) => void;
+};
+
+function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = new EventEmitter() as MockChild;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.closeWith = (code = 0) => {
+    child.emit("close", code);
+  };
+  child.kill = () => {
+    // Let timeout rejection win in tests that simulate hung QMD commands.
+  };
+  if (params?.autoClose !== false) {
+    const delayMs = params?.closeDelayMs ?? 0;
+    setTimeout(() => {
       child.emit("close", 0);
-    };
-    setImmediate(() => {
-      stdout.emit("data", "");
-      stderr.emit("data", "");
-      child.emit("close", 0);
-    });
-    return child;
-  });
-  return { spawn };
-});
+    }, delayMs);
+  }
+  return child;
+}
+
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "../config/config.js";
@@ -44,7 +49,8 @@ describe("QmdMemoryManager", () => {
   const agentId = "main";
 
   beforeEach(async () => {
-    spawnMock.mockClear();
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => createMockChild());
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-manager-test-"));
     workspaceDir = path.join(tmpRoot, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -94,6 +100,190 @@ describe("QmdMemoryManager", () => {
     // By default we refresh embeddings less frequently than index updates.
     expect(spawnMock.mock.calls.length).toBe(baselineCalls + 3);
 
+    await manager.close();
+  });
+
+  it("runs boot update in background by default", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let releaseUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        releaseUpdate = () => child.closeWith(0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
+    const race = await Promise.race([
+      createPromise.then(() => "created" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 80)),
+    ]);
+    expect(race).toBe("created");
+
+    if (!releaseUpdate) {
+      throw new Error("update child missing");
+    }
+    releaseUpdate();
+    const manager = await createPromise;
+    await manager?.close();
+  });
+
+  it("can be configured to block startup on boot update", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let releaseUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        releaseUpdate = () => child.closeWith(0);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved });
+    const race = await Promise.race([
+      createPromise.then(() => "created" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 80)),
+    ]);
+    expect(race).toBe("timeout");
+
+    if (!releaseUpdate) {
+      throw new Error("update child missing");
+    }
+    releaseUpdate();
+    const manager = await createPromise;
+    await manager?.close();
+  });
+
+  it("times out collection bootstrap commands", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: false,
+            commandTimeoutMs: 15,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        return createMockChild({ autoClose: false });
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    await manager?.close();
+  });
+
+  it("times out qmd update during sync when configured", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            updateTimeoutMs: 20,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        return createMockChild({ autoClose: false });
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    await expect(manager.sync({ reason: "manual" })).rejects.toThrow(
+      "qmd update timed out after 20ms",
+    );
+    await manager.close();
+  });
+
+  it("logs and continues when qmd embed times out", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            embedTimeoutMs: 20,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "embed") {
+        return createMockChild({ autoClose: false });
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
     await manager.close();
   });
 

@@ -26,6 +26,10 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
     expect(resolved.qmd?.command).toBe("qmd");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
+    expect(resolved.qmd?.update.waitForBootSync).toBe(false);
+    expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
+    expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
+    expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
   });
 
   it("parses quoted qmd command paths", () => {
@@ -66,5 +70,27 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom).toBeDefined();
     const workspaceRoot = resolveAgentWorkspaceDir(cfg, "main");
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
+  });
+
+  it("resolves qmd update timeout overrides", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          update: {
+            waitForBootSync: true,
+            commandTimeoutMs: 12_000,
+            updateTimeoutMs: 480_000,
+            embedTimeoutMs: 360_000,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.update.waitForBootSync).toBe(true);
+    expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);
+    expect(resolved.qmd?.update.updateTimeoutMs).toBe(480_000);
+    expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
   });
 });
