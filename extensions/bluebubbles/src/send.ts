@@ -422,15 +422,13 @@ export async function sendMessageBlueBubbles(
     );
   }
   const effectId = resolveEffectId(opts.effectId);
-  const needsPrivateApi = Boolean(opts.replyToMessageGuid || effectId);
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
     message: strippedText,
+    // Always use private-api: AppleScript fallback is broken on macOS Tahoe (-1700).
+    method: "private-api",
   };
-  if (needsPrivateApi) {
-    payload.method = "private-api";
-  }
 
   // Add reply threading support
   if (opts.replyToMessageGuid) {
