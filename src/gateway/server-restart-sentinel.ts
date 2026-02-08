@@ -67,11 +67,12 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
+  const accountId = origin?.accountId ?? entry?.lastAccountId;
   const resolved = resolveOutboundTarget({
     channel,
     to,
     cfg,
-    accountId: origin?.accountId,
+    accountId,
     mode: "implicit",
   });
   if (!resolved.ok) {
