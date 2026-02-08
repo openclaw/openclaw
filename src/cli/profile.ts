@@ -39,7 +39,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    if (sawCommand) {
+    if (sawCommand && arg !== "--profile" && !arg.startsWith("--profile=")) {
       out.push(arg);
       continue;
     }
