@@ -160,7 +160,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
-  const mode = cfg.gateway?.mode;
+  let mode = cfg.gateway?.mode;
+
+  // Auto-repair: if config has gateway settings (e.g. auth) but mode is
+  // missing, default to "local" so existing installs aren't blocked after
+  // upgrades or partial config writes.  See #10767.
+  if (!mode && configExists && cfg.gateway) {
+    mode = "local";
+    gatewayLog.info("gateway.mode was unset; defaulting to local");
+  }
+
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(

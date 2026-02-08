@@ -92,6 +92,7 @@ export function applyNonInteractiveGatewayConfig(params: {
     ...nextConfig,
     gateway: {
       ...nextConfig.gateway,
+      mode: nextConfig.gateway?.mode ?? "local",
       port,
       bind,
       tailscale: {
