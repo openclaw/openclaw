@@ -421,10 +421,11 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
 
-    // Pick a phrase once per waiting session.
+    // Pick a phrase once per waiting session (read from config each time to support hot-reload).
     if (!waitingPhrase) {
-      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
-      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+      const phrases = config.ui?.waitingPhrases ?? defaultWaitingPhrases;
+      const idx = Math.floor(Math.random() * phrases.length);
+      waitingPhrase = phrases[idx] ?? phrases[0] ?? "waiting";
     }
 
     waitingTick = 0;
