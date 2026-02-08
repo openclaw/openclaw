@@ -147,8 +147,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
 
 function resolveRequesterStoreKey(
   cfg: ReturnType<typeof loadConfig>,
-  requesterSessionKey: string,
-): string {
+  requesterSessionKey: string | undefined,
+): string | undefined {
+  if (!requesterSessionKey) {
+    return undefined;
+  }
   const raw = requesterSessionKey.trim();
   if (!raw) {
     return raw;
@@ -167,9 +170,15 @@ function resolveRequesterStoreKey(
   return `agent:${agentId}:${raw}`;
 }
 
-function loadRequesterSessionEntry(requesterSessionKey: string) {
+function loadRequesterSessionEntry(requesterSessionKey: string | undefined) {
+  if (!requesterSessionKey) {
+    return { cfg: loadConfig(), entry: undefined, canonicalKey: undefined };
+  }
   const cfg = loadConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
+  if (!canonicalKey) {
+    return { cfg, entry: undefined, canonicalKey: undefined };
+  }
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
@@ -178,13 +187,15 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
 }
 
 async function maybeQueueSubagentAnnounce(params: {
-  requesterSessionKey: string;
+  requesterSessionKey: string | undefined;
   triggerMessage: string;
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
 }): Promise<"steered" | "queued" | "none"> {
-  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const { cfg, entry, canonicalKey } = loadRequesterSessionEntry(params.requesterSessionKey);
+  if (!canonicalKey || !entry) {
+    return "none";
+  }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     return "none";
@@ -348,7 +359,7 @@ export type SubagentRunOutcome = {
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
-  requesterSessionKey: string;
+  requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -464,28 +475,34 @@ export async function runSubagentAnnounceFlow(params: {
 
     // Send to main agent - it will respond in its own voice
     let directOrigin = requesterOrigin;
-    if (!directOrigin) {
+    if (!directOrigin && params.requesterSessionKey) {
       const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
       directOrigin = deliveryContextFromSession(entry);
     }
-    await callGateway({
-      method: "agent",
-      params: {
-        sessionKey: params.requesterSessionKey,
-        message: triggerMessage,
-        deliver: true,
-        channel: directOrigin?.channel,
-        accountId: directOrigin?.accountId,
-        to: directOrigin?.to,
-        threadId:
-          directOrigin?.threadId != null && directOrigin.threadId !== ""
-            ? String(directOrigin.threadId)
-            : undefined,
-        idempotencyKey: crypto.randomUUID(),
-      },
-      expectFinal: true,
-      timeoutMs: 60_000,
-    });
+
+    // Only send announcement if we have a valid session key
+    if (params.requesterSessionKey) {
+      await callGateway({
+        method: "agent",
+        params: {
+          sessionKey: params.requesterSessionKey,
+          message: triggerMessage,
+          deliver: true,
+          channel: directOrigin?.channel,
+          accountId: directOrigin?.accountId,
+          to: directOrigin?.to,
+          threadId:
+            directOrigin?.threadId != null && directOrigin.threadId !== ""
+              ? String(directOrigin.threadId)
+              : undefined,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        expectFinal: true,
+        timeoutMs: 60_000,
+      });
+    } else {
+      defaultRuntime.log("No requesterSessionKey provided, skipping announcement");
+    }
 
     didAnnounce = true;
   } catch (err) {
