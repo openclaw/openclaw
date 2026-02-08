@@ -8,24 +8,37 @@ IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "Missing dependency: $1" >&2
-    exit 1
-  fi
-}
-
-require_cmd docker
-if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose not available (try: docker compose version)" >&2
+# Detect container runtime: prefer docker, fall back to podman
+if command -v docker >/dev/null 2>&1; then
+  CONTAINER_CMD="docker"
+elif command -v podman >/dev/null 2>&1; then
+  CONTAINER_CMD="podman"
+else
+  echo "Missing dependency: docker or podman" >&2
   exit 1
 fi
+
+# Verify compose support
+if ! $CONTAINER_CMD compose version >/dev/null 2>&1; then
+  if [[ "$CONTAINER_CMD" == "podman" ]]; then
+    echo "Podman Compose not available (try: podman compose version or install podman-compose)" >&2
+  else
+    echo "Docker Compose not available (try: docker compose version)" >&2
+  fi
+  exit 1
+fi
+
+echo "==> Using container runtime: $CONTAINER_CMD"
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+
+# Export host UID/GID for container user mapping (fixes permission issues with mounted volumes)
+export OPENCLAW_HOST_UID="$(id -u)"
+export OPENCLAW_HOST_GID="$(id -g)"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -117,7 +130,7 @@ fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_ARGS+=("-f" "$compose_file")
 done
-COMPOSE_HINT="docker compose"
+COMPOSE_HINT="$CONTAINER_CMD compose"
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
 done
@@ -168,10 +181,12 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES
+  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_HOST_UID \
+  OPENCLAW_HOST_GID
 
-echo "==> Building Docker image: $IMAGE_NAME"
-docker build \
+echo "==> Building container image: $IMAGE_NAME"
+$CONTAINER_CMD build \
   --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/Dockerfile" \
@@ -186,7 +201,7 @@ echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
+$CONTAINER_CMD compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
 
 echo ""
 echo "==> Provider setup (optional)"
@@ -200,7 +215,7 @@ echo "Docs: https://docs.openclaw.ai/channels"
 
 echo ""
 echo "==> Starting gateway"
-docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
+$CONTAINER_CMD compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
 
 echo ""
 echo "Gateway running with host port mapping."
