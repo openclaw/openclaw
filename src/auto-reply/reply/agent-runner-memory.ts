@@ -162,20 +162,23 @@ export async function runMemoryFlushIfNeeded(params: {
         });
       },
     });
-    let memoryFlushCompactionCount =
+    const preFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
+
+    // Track the flush against the compaction cycle that triggered it.
+    // If compaction completes during the flush, the cycle advances; we still want
+    // a future flush to be eligible if context grows again in the new cycle.
+    let memoryFlushCompactionCount = preFlushCompactionCount;
+
     if (memoryCompactionCompleted) {
-      const nextCount = await incrementCompactionCount({
+      await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
     }
     if (params.storePath && params.sessionKey) {
       try {

@@ -182,6 +182,100 @@ describe("runReplyAgent memory flush", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(2);
-    expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+    expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
+  });
+
+  it("allows another flush if context grows again after a compaction during flush", async () => {
+    runEmbeddedPiAgentMock.mockReset();
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    let flushCalls = 0;
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+        flushCalls += 1;
+        if (flushCalls === 1) {
+          params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry: false },
+          });
+        }
+        return { payloads: [], meta: {} };
+      }
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    const base = createBaseRun({ storePath, sessionEntry });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun: base.followupRun,
+      queueKey: "main",
+      resolvedQueue: base.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: base.typing,
+      sessionCtx: base.sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const afterFirst = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const nextEntry = afterFirst[sessionKey];
+    // Simulate context growing again while still in the same compaction cycle.
+    nextEntry.totalTokens = 80_000;
+    await seedSessionStore({ storePath, sessionKey, entry: nextEntry });
+
+    const base2 = createBaseRun({ storePath, sessionEntry: nextEntry });
+    await runReplyAgent({
+      commandBody: "hello again",
+      followupRun: base2.followupRun,
+      queueKey: "main",
+      resolvedQueue: base2.resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: base2.typing,
+      sessionCtx: base2.sessionCtx,
+      sessionEntry: nextEntry,
+      sessionStore: { [sessionKey]: nextEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(flushCalls).toBe(2);
   });
 });
