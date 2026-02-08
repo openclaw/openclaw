@@ -100,6 +100,16 @@ function countJsonlLines(filePath: string): number {
 
 function findOtherStateDirs(stateDir: string): string[] {
   const resolvedState = path.resolve(stateDir);
+  // Resolve symlinks to get the real path for comparison
+  // This prevents false positives on systems where /home is a symlink (e.g., Fedora Silverblue)
+  let realState: string;
+  try {
+    realState = fs.realpathSync(resolvedState);
+  } catch {
+    // If realpath fails, fall back to resolved path
+    realState = resolvedState;
+  }
+
   const roots =
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
@@ -119,7 +129,16 @@ function findOtherStateDirs(stateDir: string): string[] {
       }
       const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
       for (const candidate of candidates) {
-        if (candidate === resolvedState) {
+        // Resolve candidate symlinks too for accurate comparison
+        let realCandidate: string;
+        try {
+          realCandidate = fs.realpathSync(candidate);
+        } catch {
+          // If realpath fails (e.g., doesn't exist), use the resolved path
+          realCandidate = candidate;
+        }
+
+        if (realCandidate === realState) {
           continue;
         }
         if (existsDir(candidate)) {
