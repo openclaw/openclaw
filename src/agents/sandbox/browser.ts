@@ -196,6 +196,10 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      // Sandbox mode: bind to 0.0.0.0 so containers can reach the bridge
+      // server, and advertise docker bridge IP in the baseUrl.
+      // Fixes #8273: Sandbox browser unreachable from agent container
+      sandboxMode: true,
       onEnsureAttachTarget,
     });
   };

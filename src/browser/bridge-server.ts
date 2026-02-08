@@ -17,14 +17,26 @@ export type BrowserBridge = {
   state: BrowserServerState;
 };
 
+/**
+ * Default Docker bridge gateway IP (linux). When binding to 0.0.0.0, containers
+ * need this IP to reach the host.
+ */
+const DEFAULT_DOCKER_BRIDGE_IP = "172.17.0.1";
+
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
   port?: number;
   authToken?: string;
+  /**
+   * When true (sandbox mode), binds to 0.0.0.0 and advertises docker bridge IP.
+   * This allows containers to reach the bridge server on the host.
+   */
+  sandboxMode?: boolean;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
-  const host = params.host ?? "127.0.0.1";
+  // In sandbox mode, bind to all interfaces so containers can reach us
+  const bindHost = params.sandboxMode ? "0.0.0.0" : (params.host ?? "127.0.0.1");
   const port = params.port ?? 0;
 
   const app = express();
@@ -55,7 +67,7 @@ export async function startBrowserBridgeServer(params: {
   registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
   const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, host, () => resolve(s));
+    const s = app.listen(port, bindHost, () => resolve(s));
     s.once("error", reject);
   });
 
@@ -65,7 +77,11 @@ export async function startBrowserBridgeServer(params: {
   state.port = resolvedPort;
   state.resolved.controlPort = resolvedPort;
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  // When bound to 0.0.0.0 (sandbox mode), advertise the docker bridge IP
+  // so containers can reach us. Otherwise use the explicit host or localhost.
+  const advertisedHost =
+    bindHost === "0.0.0.0" ? DEFAULT_DOCKER_BRIDGE_IP : (params.host ?? "127.0.0.1");
+  const baseUrl = `http://${advertisedHost}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
