@@ -4,8 +4,16 @@ import path from "node:path";
 import { resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
 
-export async function ensureDir(dir: string) {
-  await fs.promises.mkdir(dir, { recursive: true });
+export async function ensureDir(dir: string, mode?: number) {
+  await fs.promises.mkdir(dir, { recursive: true, mode });
+  // Also fix permissions if directory already existed with wrong mode
+  if (mode !== undefined) {
+    try {
+      await fs.promises.chmod(dir, mode);
+    } catch {
+      // best-effort: may fail on some filesystems
+    }
+  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {
