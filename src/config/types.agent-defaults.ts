@@ -26,7 +26,7 @@ export type AgentModelListConfig = {
 };
 
 export type AgentContextPruningConfig = {
-  mode?: "off" | "cache-ttl";
+  mode?: "off" | "cache-ttl" | "always";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
   keepLastAssistants?: number;

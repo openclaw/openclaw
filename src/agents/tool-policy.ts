@@ -27,6 +27,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "sessions_send",
     "sessions_spawn",
     "session_status",
+    "tool_result_get",
   ],
   // UI helpers
   "group:ui": ["browser", "canvas"],
@@ -50,6 +51,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "sessions_send",
     "sessions_spawn",
     "session_status",
+    "tool_result_get",
     "memory_search",
     "memory_get",
     "web_search",

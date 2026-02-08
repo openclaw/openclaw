@@ -355,31 +355,22 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   }
 
   const authMode = resolveAnthropicDefaultAuthMode(cfg);
-  if (!authMode) {
-    return cfg;
-  }
 
   let mutated = false;
   const nextDefaults = { ...defaults };
   const contextPruning = defaults.contextPruning ?? {};
-  const heartbeat = defaults.heartbeat ?? {};
 
   if (defaults.contextPruning?.mode === undefined) {
+    // Default ON (always) for token efficiency. Users can disable with mode="off".
     nextDefaults.contextPruning = {
       ...contextPruning,
-      mode: "cache-ttl",
-      ttl: defaults.contextPruning?.ttl ?? "1h",
+      mode: "always",
     };
     mutated = true;
   }
 
-  if (defaults.heartbeat?.every === undefined) {
-    nextDefaults.heartbeat = {
-      ...heartbeat,
-      every: authMode === "oauth" ? "1h" : "30m",
-    };
-    mutated = true;
-  }
+  // Heartbeat defaults were previously tuned for Anthropic caching; keep them opt-in.
+  // (User preference: proactive/heartbeat default off.)
 
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};

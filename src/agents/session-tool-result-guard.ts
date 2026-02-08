@@ -1,41 +1,66 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import path from "node:path";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import { makeExternalizedToolResultDigest, storeToolResultPayload } from "./tool-result-store.js";
 
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
+
+// New default: externalize large tool results instead of permanently truncating them.
+// This keeps the session transcript small (token-efficient), while allowing the model to
+// fetch the full content on demand.
+const DEFAULT_EXTERNALIZE_TOOL_RESULT_CHARS = 12_000;
 
 /**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
  */
-function capToolResultSize(msg: AgentMessage): AgentMessage {
+function analyzeToolResultContent(msg: AgentMessage): {
+  ok: boolean;
+  totalTextChars: number;
+  hasImages: boolean;
+} {
   const role = (msg as { role?: string }).role;
   if (role !== "toolResult") {
-    return msg;
+    return { ok: false, totalTextChars: 0, hasImages: false };
   }
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
-    return msg;
+    return { ok: false, totalTextChars: 0, hasImages: false };
   }
 
-  // Calculate total text size
   let totalTextChars = 0;
+  let hasImages = false;
   for (const block of content) {
-    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-      const text = (block as TextContent).text;
-      if (typeof text === "string") {
-        totalTextChars += text.length;
-      }
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    if (type === "image") {
+      hasImages = true;
+      continue;
+    }
+    if (type !== "text") {
+      continue;
+    }
+    const text = (block as TextContent).text;
+    if (typeof text === "string") {
+      totalTextChars += text.length;
     }
   }
 
-  if (totalTextChars <= HARD_MAX_TOOL_RESULT_CHARS) {
+  return { ok: true, totalTextChars, hasImages };
+}
+
+function truncateToolResultForPersistence(msg: AgentMessage, totalTextChars: number): AgentMessage {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content) || totalTextChars <= HARD_MAX_TOOL_RESULT_CHARS) {
     return msg;
   }
 
@@ -184,11 +209,68 @@ export function installSessionToolResultGuard(
       if (id) {
         pending.delete(id);
       }
-      // Apply hard size cap before persistence to prevent oversized tool results
-      // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(nextMessage);
+      const analysis = analyzeToolResultContent(nextMessage);
+
+      let persistedMessage = nextMessage;
+
+      // Externalize large text-only tool results so they don't permanently bloat the transcript.
+      if (
+        id &&
+        analysis.ok &&
+        !analysis.hasImages &&
+        analysis.totalTextChars > DEFAULT_EXTERNALIZE_TOOL_RESULT_CHARS
+      ) {
+        const sessionFile = (
+          sessionManager as { getSessionFile?: () => string | null }
+        ).getSessionFile?.();
+        const sessionId = (
+          sessionManager as { getSessionId?: () => string | null }
+        ).getSessionId?.();
+
+        if (sessionFile && sessionId) {
+          const sessionDir = path.dirname(sessionFile);
+          const stored = storeToolResultPayload({
+            message: nextMessage,
+            options: {
+              sessionDir,
+              sessionId,
+              toolCallId: id,
+            },
+            preview: {
+              headChars: 1500,
+              tailChars: 1500,
+            },
+          });
+
+          if (stored) {
+            const digest = makeExternalizedToolResultDigest({
+              toolName,
+              toolCallId: id,
+              storedRef: stored.ref,
+              originalChars: stored.totalTextChars,
+              previewHead: stored.previewHead,
+              previewTail: stored.previewTail,
+              maxDigestChars: 4000,
+            });
+            persistedMessage = {
+              ...(nextMessage as unknown as Record<string, unknown>),
+              content: [{ type: "text", text: digest }],
+            } as AgentMessage;
+          }
+        }
+      }
+
+      // Safety net: hard truncate if the persisted tool result is still enormous.
+      const persistedAnalysis = analyzeToolResultContent(persistedMessage);
+      if (persistedAnalysis.ok) {
+        persistedMessage = truncateToolResultForPersistence(
+          persistedMessage,
+          persistedAnalysis.totalTextChars,
+        );
+      }
+
       return originalAppend(
-        persistToolResult(capped, {
+        persistToolResult(persistedMessage, {
           toolCallId: id ?? undefined,
           toolName,
           isSynthetic: false,
