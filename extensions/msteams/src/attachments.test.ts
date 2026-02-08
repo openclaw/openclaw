@@ -117,7 +117,7 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/img");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/img", { redirect: "manual" });
       expect(saveMediaBufferMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.png");
@@ -144,7 +144,7 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/dl");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/dl", { redirect: "manual" });
       expect(media).toHaveLength(1);
     });
 
@@ -169,7 +169,7 @@ describe("msteams attachments", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf", { redirect: "manual" });
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.pdf");
       expect(media[0]?.placeholder).toBe("<media:document>");
@@ -197,7 +197,7 @@ describe("msteams attachments", () => {
       });
 
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png");
+      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png", { redirect: "manual" });
     });
 
     it("stores inline data:image base64 payloads", async () => {
@@ -297,6 +297,65 @@ describe("msteams attachments", () => {
 
       expect(media).toHaveLength(0);
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("VULN-083: blocks redirects to non-allowed hosts", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      // This test verifies that if an allowed URL redirects to a non-allowed host,
+      // the redirect is not followed and the content is not downloaded.
+      // This prevents SSRF via open redirect on allowed domains.
+      //
+      // The vulnerability: fetchFn(params.url) at line 93 in download.ts doesn't use
+      // redirect: "manual", so it auto-follows redirects. We simulate this by having
+      // the mock return the redirected content when redirect is not "manual".
+      let ssrfAttempted = false;
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const redirectManual = opts?.redirect === "manual";
+
+        // First request to allowed host - if redirect is not manual, simulate auto-follow
+        if (url === "https://graph.microsoft.com/redirect") {
+          if (redirectManual) {
+            // With redirect: manual, return the 302 response
+            return new Response(null, {
+              status: 302,
+              headers: { location: "http://169.254.169.254/latest/meta-data/" },
+            });
+          }
+          // Without redirect: manual, fetch auto-follows - simulate SSRF success
+          ssrfAttempted = true;
+          return new Response("iam-credentials-leaked", {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+          });
+        }
+        // Direct request to internal URL (shouldn't happen if properly protected)
+        if (url.includes("169.254.169.254")) {
+          ssrfAttempted = true;
+          return new Response("iam-credentials-leaked", {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+          });
+        }
+        return new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [
+          { contentType: "image/png", contentUrl: "https://graph.microsoft.com/redirect" },
+        ],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["graph.microsoft.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      // The fix should use redirect: "manual" and validate the redirect destination.
+      // Without the fix, ssrfAttempted would be true because auto-redirect is followed.
+      expect(ssrfAttempted).toBe(false);
+      // Should not have downloaded anything since redirect was to non-allowed host
+      expect(media).toHaveLength(0);
     });
   });
 

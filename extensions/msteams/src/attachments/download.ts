@@ -82,6 +82,59 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+const MAX_REDIRECTS = 5;
+
+/**
+ * Fetch a URL with redirect validation to prevent SSRF via open redirect.
+ * All redirects are validated against the allowlist before following.
+ */
+async function fetchWithRedirectValidation(params: {
+  url: string;
+  fetchFn: typeof fetch;
+  allowHosts: string[];
+  init?: RequestInit;
+  maxRedirects?: number;
+}): Promise<Response> {
+  const maxRedirects = params.maxRedirects ?? MAX_REDIRECTS;
+  let currentUrl = params.url;
+  let redirectCount = 0;
+
+  while (true) {
+    const res = await params.fetchFn(currentUrl, {
+      ...params.init,
+      redirect: "manual",
+    });
+
+    if (!isRedirectStatus(res.status)) {
+      return res;
+    }
+
+    redirectCount++;
+    if (redirectCount > maxRedirects) {
+      // Too many redirects - return the redirect response as-is
+      return res;
+    }
+
+    const redirectUrl = readRedirectUrl(currentUrl, res);
+    if (!redirectUrl) {
+      // No valid redirect location - return the response as-is
+      return res;
+    }
+
+    // Validate redirect destination against allowlist to prevent SSRF
+    if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+      // Redirect to non-allowed host - return error response
+      return new Response(null, { status: 403, statusText: "Redirect blocked" });
+    }
+
+    currentUrl = redirectUrl;
+  }
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
@@ -90,7 +143,12 @@ async function fetchWithAuthFallback(params: {
   authAllowHosts: string[];
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url);
+  // Use redirect: manual to validate redirect destinations against allowlist (SSRF protection)
+  const firstAttempt = await fetchWithRedirectValidation({
+    url: params.url,
+    fetchFn,
+    allowHosts: params.allowHosts,
+  });
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -117,7 +175,12 @@ async function fetchWithAuthFallback(params: {
       }
       const redirectUrl = readRedirectUrl(params.url, res);
       if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
-        const redirectRes = await fetchFn(redirectUrl);
+        // Use redirect validation for follow-up requests as well (SSRF protection)
+        const redirectRes = await fetchWithRedirectValidation({
+          url: redirectUrl,
+          fetchFn,
+          allowHosts: params.allowHosts,
+        });
         if (redirectRes.ok) {
           return redirectRes;
         }
@@ -125,9 +188,11 @@ async function fetchWithAuthFallback(params: {
           (redirectRes.status === 401 || redirectRes.status === 403) &&
           isUrlAllowed(redirectUrl, params.authAllowHosts)
         ) {
-          const redirectAuthRes = await fetchFn(redirectUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-            redirect: "manual",
+          const redirectAuthRes = await fetchWithRedirectValidation({
+            url: redirectUrl,
+            fetchFn,
+            allowHosts: params.allowHosts,
+            init: { headers: { Authorization: `Bearer ${token}` } },
           });
           if (redirectAuthRes.ok) {
             return redirectAuthRes;
