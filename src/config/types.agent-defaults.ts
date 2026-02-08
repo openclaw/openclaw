@@ -206,10 +206,14 @@ export type AgentDefaultsConfig = {
     maxConcurrent?: number;
     /** Auto-archive sub-agent sessions after N minutes (default: 60). */
     archiveAfterMinutes?: number;
+    /** Max age in ms for queued subagent announce messages before dropping (default: 600000). */
+    announceMaxAgeMs?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Timeout (ms) for sub-agent announce delivery to the requester. Default: 60000. */
+    announceDeliveryTimeoutMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

@@ -61,7 +61,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 describe("subagent announce formatting", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const mod = await import("./subagent-announce.js");
+    mod.__resetSubagentAnnounceStateForTests?.();
     agentSpy.mockClear();
     sessionsDeleteSpy.mockClear();
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
@@ -105,6 +107,80 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Findings:");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
+  });
+
+  it("deduplicates repeated announce for the same run", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-same-001",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "same run dedupe task unique",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-same-001",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "same run dedupe task unique",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("alerts when same task executes with multiple run ids", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-multi-001",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "multi run alert task unique",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-multi-002",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "multi run alert task unique",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    const secondMessage = (agentSpy.mock.calls[1]?.[0] as { params?: { message?: string } })?.params
+      ?.message;
+    expect(secondMessage).toContain(
+      "ALERT: This task appears to have been executed multiple times",
+    );
+    expect(secondMessage).toContain("run-multi-001");
+    expect(secondMessage).toContain("run-multi-002");
   });
 
   it("includes success status when outcome is ok", async () => {

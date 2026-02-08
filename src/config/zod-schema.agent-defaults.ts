@@ -141,6 +141,7 @@ export const AgentDefaultsSchema = z
       .object({
         maxConcurrent: z.number().int().positive().optional(),
         archiveAfterMinutes: z.number().int().positive().optional(),
+        announceMaxAgeMs: z.number().int().nonnegative().optional(),
         model: z
           .union([
             z.string(),
@@ -153,6 +154,7 @@ export const AgentDefaultsSchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        announceDeliveryTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
