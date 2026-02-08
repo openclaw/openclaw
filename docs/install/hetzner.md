@@ -77,6 +77,30 @@ ssh root@YOUR_VPS_IP
 This guide assumes the VPS is stateful.
 Do not treat it as disposable infrastructure.
 
+### Option: Create the server via hcloud CLI
+
+If you prefer the Hetzner Cloud CLI, create and SSH into the server like this:
+
+```bash
+# 1) Create or select a context (paste your API token when prompted)
+hcloud context create OpenClaw
+
+# 2) Ensure your SSH key is registered in Hetzner (use an existing key name or add one)
+hcloud ssh-key list
+# hcloud ssh-key create --name default --public-key "$(cat ~/.ssh/id_ed25519.pub)"
+
+# 3) Create the server (Ubuntu 24.04, CX22/CX23 are good baselines)
+hcloud server create \
+  --image ubuntu-24.04 \
+  --type cx22 \
+  --name openclaw \
+  --ssh-key default
+
+# 4) SSH into the server (or use the IPv4 shown in the create output)
+hcloud server ssh openclaw
+# …or: ssh root@YOUR_VPS_IP
+```
+
 ---
 
 ## 2) Install Docker (on the VPS)
@@ -138,7 +162,14 @@ OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
 
 GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.openclaw
+
+# Optional: only if using the Claude Web provider auth flows
+# CLAUDE_AI_SESSION_KEY=
+# CLAUDE_WEB_SESSION_KEY=
+# CLAUDE_WEB_COOKIE=
 ```
+
+CLAUDE\_\* variables are optional; only set them if you use the Claude Web provider authentication flows.
 
 Generate strong secrets:
 
@@ -157,42 +188,57 @@ Create or update `docker-compose.yml`.
 ```yaml
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE}
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
     build: .
-    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - HOME=/home/node
-      - NODE_ENV=production
-      - TERM=xterm-256color
-      - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
-      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
-      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
-      - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      HOME: /home/node
+      TERM: xterm-256color
+      NODE_ENV: production
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND}
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      XDG_CONFIG_HOME: ${XDG_CONFIG_HOME}
+      PATH: /home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
-      # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
-
-      # Optional: only if you run iOS/Android nodes against this VPS and need Canvas host.
-      # If you expose this publicly, read /gateway/security and firewall accordingly.
-      # - "18793:18793"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
     command:
       [
         "node",
         "dist/index.js",
         "gateway",
         "--bind",
-        "${OPENCLAW_GATEWAY_BIND}",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
-        "${OPENCLAW_GATEWAY_PORT}",
+        "${OPENCLAW_GATEWAY_PORT:-18789}",
       ]
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      BROWSER: echo
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
 ```
 
 ---
@@ -285,7 +331,31 @@ Expected output:
 
 ---
 
-## 9) Verify Gateway
+## 9) Configure Gateway
+
+Apply first-run fixes via the CLI container. Run one of the following:
+– `setup`: minimal, non-interactive; creates missing config
+– `onboard`: guided, interactive; walks through onboarding
+
+```bash
+# Option A (minimal, non-interactive): create missing config
+docker compose run --rm openclaw-cli -- setup
+
+# Option B (guided, interactive): onboarding wizard
+docker compose run --rm openclaw-cli -- onboard
+
+# Ensure local mode when running the gateway here
+docker compose run --rm openclaw-cli -- config set gateway.mode local
+# Avoid pairing problems with web UI over SSH
+docker compose run --rm openclaw-cli -- config set gateway.controlUi.allowInsecureAuth true
+
+# Restart the gateway to apply changes
+docker compose restart openclaw-gateway
+```
+
+## 10) Validate & Access
+
+Tail logs and confirm the gateway is listening:
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -297,10 +367,16 @@ Success:
 [gateway] listening on ws://0.0.0.0:18789
 ```
 
-From your laptop:
+From your laptop, create an SSH tunnel:
 
 ```bash
 ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
+```
+
+Or
+
+```bash
+hcloud server ssh openclaw -N -L 18789:127.0.0.1:18789
 ```
 
 Open:
@@ -308,6 +384,8 @@ Open:
 `http://127.0.0.1:18789/`
 
 Paste your gateway token.
+
+Tip: For the browser dashboard, open with `?token=...` once or paste the token in Settings. This setup should always be used over SSH or VPN.
 
 ---
 
