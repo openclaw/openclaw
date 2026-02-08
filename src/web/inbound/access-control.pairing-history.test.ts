@@ -55,11 +55,12 @@ describe("checkInboundAccessControl", () => {
     });
 
     expect(result.allowed).toBe(false);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    // We still record a pairing request for historical DMs, but we never auto-reply.
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("sends pairing replies for live DMs", async () => {
+  it("records pairing requests but does not auto-reply to unknown senders", async () => {
     const connectedAtMs = 1_000_000;
     const messageTimestampMs = connectedAtMs - 10_000;
 
@@ -80,6 +81,6 @@ describe("checkInboundAccessControl", () => {
 
     expect(result.allowed).toBe(false);
     expect(upsertPairingRequestMock).toHaveBeenCalled();
-    expect(sendMessageMock).toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });

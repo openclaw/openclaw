@@ -1,6 +1,5 @@
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -142,30 +141,28 @@ export async function checkInboundAccessControl(params: {
         (normalizedAllowFrom.length > 0 && normalizedAllowFrom.includes(candidate));
       if (!allowed) {
         if (dmPolicy === "pairing") {
+          // Security-first behavior: record the pairing request, but do NOT proactively
+          // send a pairing code to unknown WhatsApp senders.
+          //
+          // Rationale:
+          // - WhatsApp contacts often include real-world friends/family; replying with a pairing code
+          //   is embarrassing and looks like "mass messaging".
+          // - Pairing codes can be used for social-engineering (convincing the owner to approve).
+          //
+          // Owners can still approve requests via CLI after inspecting the pairing store.
+          await upsertChannelPairingRequest({
+            channel: "whatsapp",
+            id: candidate,
+            meta: { name: (params.pushName ?? "").trim() || undefined },
+          });
           if (suppressPairingReply) {
-            logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
+            logVerbose(
+              `Recorded pairing request for historical DM from ${candidate} (reply suppressed).`,
+            );
           } else {
-            const { code, created } = await upsertChannelPairingRequest({
-              channel: "whatsapp",
-              id: candidate,
-              meta: { name: (params.pushName ?? "").trim() || undefined },
-            });
-            if (created) {
-              logVerbose(
-                `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
-              );
-              try {
-                await params.sock.sendMessage(params.remoteJid, {
-                  text: buildPairingReply({
-                    channel: "whatsapp",
-                    idLine: `Your WhatsApp phone number: ${candidate}`,
-                    code,
-                  }),
-                });
-              } catch (err) {
-                logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
-              }
-            }
+            logVerbose(
+              `Recorded pairing request sender=${candidate} name=${params.pushName ?? "unknown"} (no auto-reply)`,
+            );
           }
         } else {
           logVerbose(`Blocked unauthorized sender ${candidate} (dmPolicy=${dmPolicy})`);
