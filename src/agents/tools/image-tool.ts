@@ -23,6 +23,29 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 
+const DEFAULT_IMAGE_MAX_TOKENS = 512;
+
+/**
+ * Resolve maxTokens for the image model from config or use default.
+ *
+ * Uses `provider/modelId` key format, matching how the config schema defines
+ * agents.defaults.models keys and how resolveExtraParams accesses them.
+ */
+function resolveImageMaxTokens(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): number {
+  // Key format matches config schema: "keys are full provider/model IDs"
+  const modelKey = `${params.provider}/${params.modelId}`;
+  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const configured = modelConfig?.params?.maxTokens;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return DEFAULT_IMAGE_MAX_TOKENS;
+}
+
 const DEFAULT_PROMPT = "Describe the image.";
 const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
 const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
@@ -276,9 +299,14 @@ async function runImagePrompt(params: {
       }
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
+      const maxTokens = resolveImageMaxTokens({
+        cfg: effectiveCfg,
+        provider: model.provider,
+        modelId: model.id,
+      });
       const message = await complete(model, context, {
         apiKey,
-        maxTokens: 512,
+        maxTokens,
       });
       const text = coerceImageAssistantText({
         message,
