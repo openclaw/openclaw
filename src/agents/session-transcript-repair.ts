@@ -5,6 +5,8 @@ type ToolCallLike = {
   name?: string;
 };
 
+import { normalizeToolName } from "./tool-policy.js";
+
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
 type ToolCallBlock = {
@@ -36,7 +38,7 @@ function extractToolCallsFromAssistant(
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
         id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
+        name: typeof rec.name === "string" ? normalizeToolName(rec.name) : undefined,
       });
     }
   }
@@ -116,6 +118,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
 
     const nextContent = [];
     let droppedInMessage = 0;
+    let messageChanged = false;
 
     for (const block of msg.content) {
       if (isToolCallBlock(block) && !hasToolCallInput(block)) {
@@ -124,10 +127,22 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         changed = true;
         continue;
       }
+      if (isToolCallBlock(block)) {
+        const name = (block as { name?: unknown }).name;
+        if (typeof name === "string") {
+          const sanitized = normalizeToolName(name);
+          if (sanitized !== name) {
+            nextContent.push({ ...block, name: sanitized } as typeof block);
+            changed = true;
+            messageChanged = true;
+            continue;
+          }
+        }
+      }
       nextContent.push(block);
     }
 
-    if (droppedInMessage > 0) {
+    if (droppedInMessage > 0 || messageChanged) {
       if (nextContent.length === 0) {
         droppedAssistantMessages += 1;
         changed = true;
