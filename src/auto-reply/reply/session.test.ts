@@ -106,6 +106,27 @@ describe("initSessionState thread forking", () => {
 });
 
 describe("initSessionState RawBody", () => {
+  it("canonicalizes main session aliases for explicit SessionKey", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-alias-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = {
+      session: { store: storePath, mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Hello",
+        SessionKey: "main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe("agent:ops:work");
+    expect(result.sessionCtx.SessionKey).toBe("agent:ops:work");
+  });
+
   it("triggerBodyNormalized correctly extracts commands when Body contains context but RawBody is clean", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rawbody-"));
     const storePath = path.join(root, "sessions.json");
