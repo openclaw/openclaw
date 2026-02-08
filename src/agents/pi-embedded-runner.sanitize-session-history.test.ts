@@ -182,6 +182,28 @@ describe("sanitizeSessionHistory", () => {
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
+  it("filters foreign tool-use messages before repair for anthropic", async () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        provider: "openai",
+        api: "openai-responses",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toEqual([{ role: "user", content: "hello" }]);
+  });
+
   it("does not downgrade openai reasoning when the model has not changed", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
       {
