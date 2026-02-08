@@ -372,9 +372,11 @@ export async function stopLaunchAgent({
 }): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  // Use "stop" instead of "bootout" to keep the service registered.
+  // This allows "gateway start" to work without reinstalling.
+  const res = await execLaunchctl(["stop", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl stop failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
