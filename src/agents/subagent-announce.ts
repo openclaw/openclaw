@@ -43,13 +43,22 @@ function normalizeTaskIdentity(task?: string, label?: string) {
   return raw || "(unknown-task)";
 }
 
-function registerTaskRun(taskKey: string, runId: string, now = Date.now()) {
-  const runs = RECENT_TASK_RUNS.get(taskKey) ?? new Map<string, number>();
-  for (const [rid, ts] of runs.entries()) {
-    if (now - ts > MULTI_RUN_WINDOW_MS) {
-      runs.delete(rid);
+function sweepRecentTaskRuns(now = Date.now()) {
+  for (const [taskKey, runs] of RECENT_TASK_RUNS.entries()) {
+    for (const [rid, ts] of runs.entries()) {
+      if (now - ts > MULTI_RUN_WINDOW_MS) {
+        runs.delete(rid);
+      }
+    }
+    if (runs.size === 0) {
+      RECENT_TASK_RUNS.delete(taskKey);
     }
   }
+}
+
+function registerTaskRun(taskKey: string, runId: string, now = Date.now()) {
+  sweepRecentTaskRuns(now);
+  const runs = RECENT_TASK_RUNS.get(taskKey) ?? new Map<string, number>();
   runs.set(runId, now);
   RECENT_TASK_RUNS.set(taskKey, runs);
   return Array.from(runs.keys());
@@ -553,22 +562,32 @@ export async function runSubagentAnnounceFlow(params: {
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
     const taskIdentity = normalizeTaskIdentity(params.task, params.label);
-    const taskRunKey = `${params.requesterSessionKey}::${taskIdentity}`;
+    const canonicalRequesterKey = resolveRequesterStoreKey(
+      loadConfig(),
+      params.requesterSessionKey,
+    );
+    const taskRunKey = `${canonicalRequesterKey}::${taskIdentity}`;
     const seenRunIds = registerTaskRun(taskRunKey, params.childRunId);
-    const hasMultipleActualRuns = seenRunIds.length > 1;
+    const shouldWarnMultipleRuns = announceType !== "cron job";
+    const hasMultipleActualRuns = shouldWarnMultipleRuns && seenRunIds.length > 1;
     const announceState = outcome.status;
-    const sameRunAnnounceKey = `${params.requesterSessionKey}|${taskIdentity}|${params.childRunId}|${announceState}`;
-    if (seenSameRunAnnounce(sameRunAnnounceKey)) {
+    const sameRunAnnounceKey = `${canonicalRequesterKey}|${taskIdentity}|${params.childRunId}|${announceState}`;
+    const isSameRunDuplicate = seenSameRunAnnounce(sameRunAnnounceKey);
+    if (isSameRunDuplicate) {
       defaultRuntime.log?.(
-        `[subagent_announce_metric] announce_deduped_same_run session=${params.requesterSessionKey} task=${taskIdentity} run_id=${params.childRunId}`,
+        `[subagent_announce_metric] announce_deduped_same_run session=${canonicalRequesterKey} task=${taskIdentity} run_id=${params.childRunId}`,
       );
-      return true;
+      didAnnounce = true;
     }
 
-    if (hasMultipleActualRuns) {
+    if (!isSameRunDuplicate && hasMultipleActualRuns) {
       defaultRuntime.log?.(
-        `[subagent_announce_metric] multi_execution_detected session=${params.requesterSessionKey} task=${taskIdentity} run_ids=${seenRunIds.join("|")}`,
+        `[subagent_announce_metric] multi_execution_detected session=${canonicalRequesterKey} task=${taskIdentity} run_ids=${seenRunIds.join("|")}`,
       );
+    }
+
+    if (isSameRunDuplicate) {
+      return true;
     }
 
     const triggerMessage = [
@@ -592,7 +611,7 @@ export async function runSubagentAnnounceFlow(params: {
 
     const announceMaxAgeMs = resolveSubagentAnnounceMaxAgeMs(loadConfig());
     const queued = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: params.requesterSessionKey,
+      requesterSessionKey: canonicalRequesterKey,
       triggerMessage,
       summaryLine: taskLabel,
       requesterOrigin,
@@ -613,14 +632,14 @@ export async function runSubagentAnnounceFlow(params: {
     // Send to main agent - it will respond in its own voice
     let directOrigin = requesterOrigin;
     if (!directOrigin) {
-      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+      const { entry } = loadRequesterSessionEntry(canonicalRequesterKey);
       directOrigin = deliveryContextFromSession(entry);
     }
     const announceDeliveryTimeoutMs = resolveSubagentAnnounceDeliveryTimeoutMs(loadConfig());
     await callGateway({
       method: "agent",
       params: {
-        sessionKey: params.requesterSessionKey,
+        sessionKey: canonicalRequesterKey,
         message: triggerMessage,
         deliver: true,
         channel: directOrigin?.channel,

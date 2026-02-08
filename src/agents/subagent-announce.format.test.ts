@@ -183,6 +183,80 @@ describe("subagent announce formatting", () => {
     expect(secondMessage).toContain("run-multi-002");
   });
 
+  it("does not mark normal cron repeats as duplicate execution", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-001",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "nightly sync",
+      announceType: "cron job",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-002",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "nightly sync",
+      announceType: "cron job",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    const secondMessage = (agentSpy.mock.calls[1]?.[0] as { params?: { message?: string } })?.params
+      ?.message;
+    expect(secondMessage).not.toContain(
+      "ALERT: This task appears to have been executed multiple times",
+    );
+  });
+
+  it("deduplicates same-run announce across requester key aliases", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-alias-001",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "alias dedupe task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-alias-001",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "alias dedupe task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("includes success status when outcome is ok", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
