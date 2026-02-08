@@ -8,6 +8,7 @@ import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
 import { loggingState } from "./state.js";
+import { formatLocalHHMMSS } from "./time.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -175,7 +176,7 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      return color.gray(formatLocalHHMMSS());
     }
     if (loggingState.consoleTimestampPrefix) {
       return color.gray(new Date().toISOString());
