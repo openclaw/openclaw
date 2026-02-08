@@ -4,6 +4,7 @@ import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { getDiagnosticsForEvent, clearRunDiagnostics } from "../agents/agent-run-diagnostics.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -407,11 +408,13 @@ export async function handleOpenAiHttpRequest(
           },
         ],
       });
+      const diagnostics = getDiagnosticsForEvent(runId);
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "error" },
+        data: { phase: "error", ...diagnostics },
       });
+      clearRunDiagnostics(runId);
     } finally {
       if (!closed) {
         closed = true;

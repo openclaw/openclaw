@@ -7,6 +7,10 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import {
+  getDiagnosticsForEvent,
+  clearRunDiagnostics,
+} from "../agents/agent-run-diagnostics.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
@@ -485,6 +489,7 @@ export async function agentCommand(
       }
     } catch (err) {
       if (!lifecycleEnded) {
+        const diagnostics = getDiagnosticsForEvent(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -493,8 +498,10 @@ export async function agentCommand(
             startedAt,
             endedAt: Date.now(),
             error: String(err),
+            ...diagnostics,
           },
         });
+        clearRunDiagnostics(runId);
       }
       throw err;
     }

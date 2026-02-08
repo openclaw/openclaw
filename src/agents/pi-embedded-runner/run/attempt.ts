@@ -650,6 +650,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         didSendViaMessagingTool,
         getLastToolError,
+        getDiagnostics,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle = {

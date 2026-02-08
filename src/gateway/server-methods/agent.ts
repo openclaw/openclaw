@@ -510,6 +510,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      lastTool: snapshot.lastTool,
+      completedSteps: snapshot.completedSteps,
+      partialProgress: snapshot.partialProgress,
     });
   },
 };

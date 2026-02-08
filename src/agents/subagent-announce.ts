@@ -343,6 +343,12 @@ export function buildSubagentSystemPrompt(params: {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  /** Last tool that was executing when the error occurred */
+  lastTool?: string;
+  /** Partial results or progress before failure */
+  partialProgress?: string;
+  /** Number of successful steps before failure */
+  completedSteps?: number;
 };
 
 export async function runSubagentAnnounceFlow(params: {
@@ -373,6 +379,9 @@ export async function runSubagentAnnounceFlow(params: {
         startedAt?: number;
         endedAt?: number;
         error?: string;
+        lastTool?: string;
+        completedSteps?: number;
+        partialProgress?: string;
       }>({
         method: "agent.wait",
         params: {
@@ -382,12 +391,17 @@ export async function runSubagentAnnounceFlow(params: {
         timeoutMs: waitMs + 2000,
       });
       const waitError = typeof wait?.error === "string" ? wait.error : undefined;
+      const lastTool = typeof wait?.lastTool === "string" ? wait.lastTool : undefined;
+      const completedSteps =
+        typeof wait?.completedSteps === "number" ? wait.completedSteps : undefined;
+      const partialProgress =
+        typeof wait?.partialProgress === "string" ? wait.partialProgress : undefined;
       if (wait?.status === "timeout") {
-        outcome = { status: "timeout" };
+        outcome = { status: "timeout", lastTool, completedSteps, partialProgress };
       } else if (wait?.status === "error") {
-        outcome = { status: "error", error: waitError };
+        outcome = { status: "error", error: waitError, lastTool, completedSteps, partialProgress };
       } else if (wait?.status === "ok") {
-        outcome = { status: "ok" };
+        outcome = { status: "ok", lastTool, completedSteps, partialProgress };
       }
       if (typeof wait?.startedAt === "number" && !params.startedAt) {
         params.startedAt = wait.startedAt;
@@ -422,15 +436,26 @@ export async function runSubagentAnnounceFlow(params: {
       endedAt: params.endedAt,
     });
 
-    // Build status label
-    const statusLabel =
-      outcome.status === "ok"
-        ? "completed successfully"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
+    // Build status label with rich error context
+    const statusLabel = (() => {
+      if (outcome.status === "ok") {
+        return "completed successfully";
+      }
+      if (outcome.status === "timeout") {
+        return "timed out";
+      }
+      if (outcome.status === "error") {
+        const parts = [`failed: ${outcome.error || "unknown error"}`];
+        if (outcome.lastTool) {
+          parts.push(`(last tool: ${outcome.lastTool})`);
+        }
+        if (outcome.completedSteps !== undefined) {
+          parts.push(`(completed ${outcome.completedSteps} steps before failure)`);
+        }
+        return parts.join(" ");
+      }
+      return "finished with unknown status";
+    })();
 
     // Build instructional message for main agent
     const taskLabel = params.label || params.task || "background task";

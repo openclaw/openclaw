@@ -26,6 +26,10 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  getDiagnosticsForEvent,
+  clearRunDiagnostics,
+} from "../../agents/agent-run-diagnostics.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -215,10 +219,12 @@ export async function runAgentTurnWithFallback(params: {
                     endedAt: Date.now(),
                   },
                 });
+                clearRunDiagnostics(runId);
                 lifecycleTerminalEmitted = true;
 
                 return result;
               } catch (err) {
+                const diagnostics = getDiagnosticsForEvent(runId);
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -227,14 +233,17 @@ export async function runAgentTurnWithFallback(params: {
                     startedAt,
                     endedAt: Date.now(),
                     error: String(err),
+                    ...diagnostics,
                   },
                 });
+                clearRunDiagnostics(runId);
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
+                  const diagnostics = getDiagnosticsForEvent(runId);
                   emitAgentEvent({
                     runId,
                     stream: "lifecycle",
@@ -243,8 +252,10 @@ export async function runAgentTurnWithFallback(params: {
                       startedAt,
                       endedAt: Date.now(),
                       error: "CLI run completed without lifecycle terminal event",
+                      ...diagnostics,
                     },
                   });
+                  clearRunDiagnostics(runId);
                 }
               }
             })();

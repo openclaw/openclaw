@@ -12,6 +12,11 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { normalizeToolName } from "./tool-policy.js";
+import {
+  trackToolStart,
+  trackToolSuccess,
+  trackToolError,
+} from "./agent-run-diagnostics.js";
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
@@ -64,6 +69,9 @@ export async function handleToolExecutionStart(
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, meta);
+  // Track last tool for error diagnostics (both local state and global tracker)
+  ctx.state.lastTool = toolName;
+  trackToolStart(ctx.params.runId, toolName);
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
@@ -171,6 +179,12 @@ export function handleToolExecutionEnd(
       meta,
       error: errorMessage,
     };
+    // Track error in global diagnostics
+    trackToolError(ctx.params.runId, errorMessage);
+  } else {
+    // Track successful completions for error diagnostics (both local and global)
+    ctx.state.completedSteps++;
+    trackToolSuccess(ctx.params.runId);
   }
 
   // Commit messaging tool text on success, discard on error.

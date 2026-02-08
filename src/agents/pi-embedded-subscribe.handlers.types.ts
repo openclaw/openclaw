@@ -26,6 +26,10 @@ export type EmbeddedPiSubscribeState = {
   toolMetaById: Map<string, string | undefined>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
+  /** Name of the last tool that started executing (for error diagnostics) */
+  lastTool?: string;
+  /** Number of tools that completed successfully (for error diagnostics) */
+  completedSteps: number;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;

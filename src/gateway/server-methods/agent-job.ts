@@ -11,6 +11,9 @@ type AgentRunSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  lastTool?: string;
+  completedSteps?: number;
+  partialProgress?: string;
   ts: number;
 };
 
@@ -52,6 +55,11 @@ function ensureAgentRunListener() {
       typeof evt.data?.startedAt === "number" ? evt.data.startedAt : agentRunStarts.get(evt.runId);
     const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
     const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
+    const lastTool = typeof evt.data?.lastTool === "string" ? evt.data.lastTool : undefined;
+    const completedSteps =
+      typeof evt.data?.completedSteps === "number" ? evt.data.completedSteps : undefined;
+    const partialProgress =
+      typeof evt.data?.partialProgress === "string" ? evt.data.partialProgress : undefined;
     agentRunStarts.delete(evt.runId);
     recordAgentRunSnapshot({
       runId: evt.runId,
@@ -59,6 +67,9 @@ function ensureAgentRunListener() {
       startedAt,
       endedAt,
       error,
+      lastTool,
+      completedSteps,
+      partialProgress,
       ts: Date.now(),
     });
   });
@@ -116,12 +127,20 @@ export async function waitForAgentJob(params: {
           : agentRunStarts.get(evt.runId);
       const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
+      const lastTool = typeof evt.data?.lastTool === "string" ? evt.data.lastTool : undefined;
+      const completedSteps =
+        typeof evt.data?.completedSteps === "number" ? evt.data.completedSteps : undefined;
+      const partialProgress =
+        typeof evt.data?.partialProgress === "string" ? evt.data.partialProgress : undefined;
       const snapshot: AgentRunSnapshot = {
         runId: evt.runId,
         status: phase === "error" ? "error" : "ok",
         startedAt,
         endedAt,
         error,
+        lastTool,
+        completedSteps,
+        partialProgress,
         ts: Date.now(),
       };
       recordAgentRunSnapshot(snapshot);

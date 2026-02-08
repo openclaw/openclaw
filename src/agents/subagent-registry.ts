@@ -212,7 +212,10 @@ function ensureListener() {
     entry.endedAt = endedAt;
     if (phase === "error") {
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      entry.outcome = { status: "error", error };
+      const lastTool = typeof evt.data?.lastTool === "string" ? evt.data.lastTool : undefined;
+      const completedSteps = typeof evt.data?.completedSteps === "number" ? evt.data.completedSteps : undefined;
+      const partialProgress = typeof evt.data?.partialProgress === "string" ? evt.data.partialProgress : undefined;
+      entry.outcome = { status: "error", error, lastTool, completedSteps, partialProgress };
     } else {
       entry.outcome = { status: "ok" };
     }
@@ -327,6 +330,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       startedAt?: number;
       endedAt?: number;
       error?: string;
+      lastTool?: string;
+      completedSteps?: number;
+      partialProgress?: string;
     }>({
       method: "agent.wait",
       params: {
@@ -356,8 +362,15 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       mutated = true;
     }
     const waitError = typeof wait.error === "string" ? wait.error : undefined;
+    const lastTool = typeof wait?.lastTool === "string" ? wait.lastTool : undefined;
+    const completedSteps =
+      typeof wait?.completedSteps === "number" ? wait.completedSteps : undefined;
+    const partialProgress =
+      typeof wait?.partialProgress === "string" ? wait.partialProgress : undefined;
     entry.outcome =
-      wait.status === "error" ? { status: "error", error: waitError } : { status: "ok" };
+      wait.status === "error"
+        ? { status: "error", error: waitError, lastTool, completedSteps, partialProgress }
+        : { status: "ok", lastTool, completedSteps, partialProgress };
     mutated = true;
     if (mutated) {
       persistSubagentRuns();
