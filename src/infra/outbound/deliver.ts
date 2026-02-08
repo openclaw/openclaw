@@ -21,6 +21,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -318,12 +319,36 @@ export async function deliverOutboundPayloads(params: {
     };
   };
   const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
+  const hookRunner = getGlobalHookRunner();
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+
+    // Plugin hook: allow plugins to modify or cancel outgoing messages.
+    if (hookRunner?.hasHooks("message_sending")) {
+      const hookResult = await hookRunner.runMessageSending(
+        {
+          to,
+          content: payloadSummary.text,
+          metadata: { channel, accountId, mediaUrls: payloadSummary.mediaUrls },
+        },
+        {
+          channelId: channel,
+          accountId: accountId ?? undefined,
+        },
+      );
+      if (hookResult?.cancel) {
+        continue;
+      }
+      if (hookResult?.content != null) {
+        payloadSummary.text = hookResult.content;
+        payload.text = hookResult.content;
+      }
+    }
+
     try {
       throwIfAborted(abortSignal);
       params.onPayload?.(payloadSummary);
