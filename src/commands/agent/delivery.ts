@@ -5,6 +5,7 @@ import type { AgentCommandOpts } from "./types.js";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -191,6 +192,32 @@ export async function deliverAgentCommandResult(params: {
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+    }
+  }
+
+  // For nested lane agents (e.g., CLI agents) targeting webchat, emit agent events
+  // so the gateway's chat event handler can broadcast to webchat clients.
+  // Without this, CLI agent responses are only logged but never reach webchat.
+  // Note: We explicitly check for "webchat" rather than using isInternalMessageChannel()
+  // to avoid emitting events for any future internal channels that may be added.
+  if (opts.lane === AGENT_LANE_NESTED && deliveryChannel === "webchat") {
+    const sessionKey = opts.sessionKey ?? opts.sessionId;
+    const runId = opts.runId;
+    if (runId && sessionKey) {
+      // Combine all text payloads into a single message
+      const combinedText = deliveryPayloads
+        .map((p) => p.text)
+        .filter(Boolean)
+        .join("\n");
+      if (combinedText) {
+        // Emit assistant stream event for the gateway to pick up
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          sessionKey,
+          data: { text: combinedText },
+        });
+      }
     }
   }
 

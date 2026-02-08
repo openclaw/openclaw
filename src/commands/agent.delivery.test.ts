@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
   getChannelPlugin: vi.fn(() => ({})),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15551234567" })),
+  emitAgentEvent: vi.fn(),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -29,10 +30,15 @@ vi.mock("../infra/outbound/targets.js", async () => {
   };
 });
 
+vi.mock("../infra/agent-events.js", () => ({
+  emitAgentEvent: mocks.emitAgentEvent,
+}));
+
 describe("deliverAgentCommandResult", () => {
   beforeEach(() => {
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveOutboundTarget.mockClear();
+    mocks.emitAgentEvent.mockClear();
   });
 
   it("prefers explicit accountId for outbound delivery", async () => {
@@ -296,5 +302,151 @@ describe("deliverAgentCommandResult", () => {
     expect(line).toContain("run=run-announce");
     expect(line).toContain("channel=webchat");
     expect(line).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("emits agent events for nested lane with webchat channel", async () => {
+    const cfg = {} as OpenClawConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = {
+      payloads: [{ text: "Hello from CLI agent" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested",
+        sessionKey: "agent:pmax:main",
+        runId: "cli-run-123",
+        channel: "webchat",
+      },
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    // Should emit agent event for webchat broadcast
+    expect(mocks.emitAgentEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.emitAgentEvent).toHaveBeenCalledWith({
+      runId: "cli-run-123",
+      stream: "assistant",
+      sessionKey: "agent:pmax:main",
+      data: { text: "Hello from CLI agent" },
+    });
+  });
+
+  it("does not emit agent events for nested lane with non-webchat channel", async () => {
+    const cfg = {} as OpenClawConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = {
+      payloads: [{ text: "Hello" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested",
+        sessionKey: "agent:main:main",
+        runId: "run-123",
+        channel: "telegram",
+      },
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    // Should NOT emit agent event for non-webchat channels
+    expect(mocks.emitAgentEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not emit agent events without runId or sessionKey", async () => {
+    const cfg = {} as OpenClawConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = {
+      payloads: [{ text: "Hello" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested",
+        channel: "webchat",
+        // No runId or sessionKey
+      },
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    // Should NOT emit agent event without required identifiers
+    expect(mocks.emitAgentEvent).not.toHaveBeenCalled();
+  });
+
+  it("combines multiple payload texts for webchat broadcast", async () => {
+    const cfg = {} as OpenClawConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const result = {
+      payloads: [{ text: "Line 1" }, { text: "Line 2" }, { text: "Line 3" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested",
+        sessionKey: "agent:pmax:main",
+        runId: "multi-payload-run",
+        channel: "webchat",
+      },
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(mocks.emitAgentEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.emitAgentEvent).toHaveBeenCalledWith({
+      runId: "multi-payload-run",
+      stream: "assistant",
+      sessionKey: "agent:pmax:main",
+      data: { text: "Line 1\nLine 2\nLine 3" },
+    });
   });
 });
