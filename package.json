@@ -134,6 +134,7 @@
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
+    "gpt-tokenizer": "3.4.0",
     "grammy": "^1.39.3",
     "hono": "4.11.8",
     "jiti": "^2.6.1",

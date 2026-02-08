@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { type FSWatcher } from "chokidar";
+import {
+  countTokens as countTokensCl100k,
+  decode as decodeTokensCl100k,
+  encode as encodeTokensCl100k,
+} from "gpt-tokenizer/encoding/cl100k_base";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -17,6 +22,7 @@ import type {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
@@ -101,8 +107,11 @@ const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
+const OPENAI_EMBEDDING_MAX_TOKENS = 8192;
+const OPENAI_EMBEDDING_OVERHEAD_PER_ITEM = 1;
 
 const log = createSubsystemLogger("memory");
+const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 
@@ -1656,35 +1665,185 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!text) {
       return 0;
     }
+    if (this.provider.id === "openai") {
+      return countTokensCl100k(text);
+    }
     return Math.ceil(text.length / EMBEDDING_APPROX_CHARS_PER_TOKEN);
+  }
+
+  private computeEmbeddingTokenStats(texts: string[]): {
+    items: number;
+    totalTokens: number;
+    minTokens: number;
+    maxTokens: number;
+    avgTokens: number;
+    totalTokensWithOverhead: number;
+  } {
+    const items = texts.length;
+    if (items === 0) {
+      return {
+        items,
+        totalTokens: 0,
+        minTokens: 0,
+        maxTokens: 0,
+        avgTokens: 0,
+        totalTokensWithOverhead: 0,
+      };
+    }
+    let totalTokens = 0;
+    let minTokens = Number.POSITIVE_INFINITY;
+    let maxTokens = 0;
+    for (const text of texts) {
+      const tokens = this.estimateEmbeddingTokens(text);
+      totalTokens += tokens;
+      if (tokens < minTokens) {
+        minTokens = tokens;
+      }
+      if (tokens > maxTokens) {
+        maxTokens = tokens;
+      }
+    }
+    const avgTokens = Math.round(totalTokens / items);
+    const perItemOverhead = this.provider.id === "openai" ? OPENAI_EMBEDDING_OVERHEAD_PER_ITEM : 0;
+    const totalTokensWithOverhead = totalTokens + items * perItemOverhead;
+    return {
+      items,
+      totalTokens,
+      minTokens: Number.isFinite(minTokens) ? minTokens : 0,
+      maxTokens,
+      avgTokens,
+      totalTokensWithOverhead,
+    };
   }
 
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
     let currentTokens = 0;
+    let currentMinTokens = Number.POSITIVE_INFINITY;
+    let currentMaxTokens = 0;
+    let batchIndex = 0;
+    const batchCap =
+      this.provider.id === "openai" ? OPENAI_EMBEDDING_MAX_TOKENS : EMBEDDING_BATCH_MAX_TOKENS;
+    const perItemOverhead = this.provider.id === "openai" ? OPENAI_EMBEDDING_OVERHEAD_PER_ITEM : 0;
+
+    const flush = () => {
+      if (current.length === 0) {
+        return;
+      }
+      if (debugEmbeddings) {
+        const avgTokens = Math.round(currentTokens / current.length);
+        log.debug("memory embeddings: batch plan", {
+          provider: this.provider.id,
+          model: this.provider.model,
+          batchIndex,
+          items: current.length,
+          totalTokens: currentTokens,
+          minTokens: Number.isFinite(currentMinTokens) ? currentMinTokens : 0,
+          maxTokens: currentMaxTokens,
+          avgTokens,
+          totalTokensWithOverhead: currentTokens + current.length * perItemOverhead,
+          cap: batchCap,
+        });
+      }
+      batches.push(current);
+      current = [];
+      currentTokens = 0;
+      currentMinTokens = Number.POSITIVE_INFINITY;
+      currentMaxTokens = 0;
+      batchIndex += 1;
+    };
 
     for (const chunk of chunks) {
       const estimate = this.estimateEmbeddingTokens(chunk.text);
-      const wouldExceed =
-        current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
-      if (wouldExceed) {
-        batches.push(current);
-        current = [];
-        currentTokens = 0;
+      if (estimate > batchCap) {
+        log.warn("memory embeddings: chunk exceeds batch token cap", {
+          provider: this.provider.id,
+          model: this.provider.model,
+          estimate,
+          cap: batchCap,
+          textChars: chunk.text.length,
+          hash: chunk.hash,
+        });
       }
-      if (current.length === 0 && estimate > EMBEDDING_BATCH_MAX_TOKENS) {
-        batches.push([chunk]);
+      if (this.provider.id === "openai" && estimate > OPENAI_EMBEDDING_MAX_TOKENS) {
+        log.warn("memory embeddings: chunk exceeds OpenAI token limit", {
+          model: this.provider.model,
+          estimate,
+          limit: OPENAI_EMBEDDING_MAX_TOKENS,
+          textChars: chunk.text.length,
+          hash: chunk.hash,
+        });
+      }
+      const wouldExceed =
+        current.length > 0 &&
+        currentTokens + estimate + (current.length + 1) * perItemOverhead > batchCap;
+      if (wouldExceed) {
+        flush();
+      }
+      if (current.length === 0 && estimate > batchCap) {
+        current = [chunk];
+        currentTokens = estimate;
+        currentMinTokens = estimate;
+        currentMaxTokens = estimate;
+        flush();
         continue;
       }
       current.push(chunk);
       currentTokens += estimate;
+      if (estimate < currentMinTokens) {
+        currentMinTokens = estimate;
+      }
+      if (estimate > currentMaxTokens) {
+        currentMaxTokens = estimate;
+      }
     }
 
     if (current.length > 0) {
-      batches.push(current);
+      flush();
     }
     return batches;
+  }
+
+  private splitChunksForEmbeddingLimit(chunks: MemoryChunk[]): MemoryChunk[] {
+    if (this.provider.id !== "openai") {
+      return chunks;
+    }
+    const maxTokens = OPENAI_EMBEDDING_MAX_TOKENS;
+    const out: MemoryChunk[] = [];
+    for (const chunk of chunks) {
+      const tokens = this.estimateEmbeddingTokens(chunk.text);
+      if (tokens <= maxTokens) {
+        out.push(chunk);
+        continue;
+      }
+      const encoded = encodeTokensCl100k(chunk.text);
+      if (encoded.length <= maxTokens) {
+        out.push(chunk);
+        continue;
+      }
+      log.warn("memory embeddings: chunk exceeds token limit; splitting", {
+        provider: this.provider.id,
+        model: this.provider.model,
+        tokens,
+        limit: maxTokens,
+        textChars: chunk.text.length,
+        hash: chunk.hash,
+      });
+      for (let offset = 0; offset < encoded.length; offset += maxTokens) {
+        const slice = encoded.slice(offset, offset + maxTokens);
+        const text = decodeTokensCl100k(slice);
+        if (!text.trim()) {
+          continue;
+        }
+        out.push({
+          ...chunk,
+          text,
+          hash: hashText(text),
+        });
+      }
+    }
+    return out;
   }
 
   private loadEmbeddingCache(hashes: string[]): Map<string, number[]> {
@@ -1981,6 +2140,46 @@ export class MemoryIndexManager implements MemorySearchManager {
       return embeddings;
     }
 
+    if (debugEmbeddings) {
+      const stats = this.computeEmbeddingTokenStats(missing.map((item) => item.chunk.text));
+      let maxChunkTokens = 0;
+      let maxChunkChars = 0;
+      let maxChunkHash = "";
+      let overLimit = 0;
+      for (const item of missing) {
+        const tokens = this.estimateEmbeddingTokens(item.chunk.text);
+        if (tokens > maxChunkTokens) {
+          maxChunkTokens = tokens;
+          maxChunkChars = item.chunk.text.length;
+          maxChunkHash = item.chunk.hash;
+        }
+        if (tokens > OPENAI_EMBEDDING_MAX_TOKENS) {
+          overLimit += 1;
+        }
+      }
+      log.debug("memory embeddings: openai batch stats", {
+        provider: this.provider.id,
+        model: this.provider.model,
+        ...stats,
+        limit: OPENAI_EMBEDDING_MAX_TOKENS,
+        overLimit,
+        maxChunkTokens,
+        maxChunkChars,
+        maxChunkHash,
+      });
+      if (overLimit > 0) {
+        log.warn("memory embeddings: openai batch includes chunks over limit", {
+          provider: this.provider.id,
+          model: this.provider.model,
+          limit: OPENAI_EMBEDDING_MAX_TOKENS,
+          overLimit,
+          maxChunkTokens,
+          maxChunkChars,
+          maxChunkHash,
+        });
+      }
+    }
+
     const requests: OpenAiBatchRequest[] = [];
     const mapping = new Map<string, { index: number; hash: string }>();
     for (const item of missing) {
@@ -2119,6 +2318,14 @@ export class MemoryIndexManager implements MemorySearchManager {
     while (true) {
       try {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
+        if (debugEmbeddings) {
+          const stats = this.computeEmbeddingTokenStats(texts);
+          log.debug("memory embeddings: batch stats", {
+            provider: this.provider.id,
+            model: this.provider.model,
+            ...stats,
+          });
+        }
         log.debug("memory embeddings: batch start", {
           provider: this.provider.id,
           items: texts.length,
@@ -2131,6 +2338,14 @@ export class MemoryIndexManager implements MemorySearchManager {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (debugEmbeddings && /maximum context length/i.test(message)) {
+          const stats = this.computeEmbeddingTokenStats(texts);
+          log.warn("memory embeddings: batch exceeded context window", {
+            provider: this.provider.id,
+            model: this.provider.model,
+            ...stats,
+          });
+        }
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
@@ -2307,8 +2522,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = chunkMarkdown(content, this.settings.chunking).filter(
-      (chunk) => chunk.text.trim().length > 0,
+    const chunks = this.splitChunksForEmbeddingLimit(
+      chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      ),
     );
     const embeddings = this.batch.enabled
       ? await this.embedChunksWithBatch(chunks, entry, options.source)
