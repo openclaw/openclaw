@@ -583,7 +583,19 @@ export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
 ): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution?.resolvedPath) {
+  if (!entries.length) {
+    return null;
+  }
+  // Check for universal "allow all" patterns first (before resolvedPath check).
+  // This ensures "*" or "**" works even when the executable can't be resolved.
+  for (const entry of entries) {
+    const pattern = entry.pattern?.trim();
+    if (pattern === "*" || pattern === "**") {
+      return entry;
+    }
+  }
+  // For path-based patterns, we need a resolved path to match against
+  if (!resolution?.resolvedPath) {
     return null;
   }
   const resolvedPath = resolution.resolvedPath;
@@ -593,7 +605,8 @@ export function matchAllowlist(
       continue;
     }
     const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
+    const hasWildcard = pattern.includes("*") || pattern.includes("?");
+    if (!hasPath && !hasWildcard) {
       continue;
     }
     if (matchesPattern(pattern, resolvedPath)) {

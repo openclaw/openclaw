@@ -76,6 +76,28 @@ describe("exec approvals allowlist matching", () => {
     const match = matchAllowlist(entries, resolution);
     expect(match).toBeNull();
   });
+
+  it("treats * as a universal allow-all pattern", () => {
+    const resolution = {
+      rawExecutable: "df",
+      resolvedPath: "/usr/bin/df",
+      executableName: "df",
+    };
+    const entries: ExecAllowlistEntry[] = [{ pattern: "*" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match?.pattern).toBe("*");
+  });
+
+  it("treats ** as a universal allow-all pattern", () => {
+    const resolution = {
+      rawExecutable: "df",
+      resolvedPath: "/usr/bin/df",
+      executableName: "df",
+    };
+    const entries: ExecAllowlistEntry[] = [{ pattern: "**" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match?.pattern).toBe("**");
+  });
 });
 
 describe("exec approvals command resolution", () => {
