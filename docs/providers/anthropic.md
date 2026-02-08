@@ -81,7 +81,15 @@ requests; keep it if you override provider headers (see [/gateway/configuration]
 
 ## Option B: Claude setup-token
 
-**Best for:** using your Claude subscription.
+> ⚠️ **Terms of Service Notice**
+>
+> Anthropic's [Consumer Terms of Service](https://www.anthropic.com/legal/consumer-terms) (Section 3) restricts accessing their services "through automated or non-human means" except via an Anthropic API Key. Using a setup-token with OpenClaw or other third-party tools may violate these terms and could result in account suspension.
+>
+> **For production or risk-averse use, we recommend Option A (API Key).**
+>
+> This documentation describes the technical capability; users are responsible for ensuring their usage complies with Anthropic's terms.
+
+**Best for:** using your Claude subscription (see notice above).
 
 ### Where to get a setup-token
 
