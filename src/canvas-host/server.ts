@@ -4,10 +4,10 @@ import chokidar from "chokidar";
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../runtime.js";
+import { STATE_DIR } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
@@ -235,7 +235,7 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(os.homedir(), ".openclaw", "canvas")];
+  const candidates = [path.join(STATE_DIR, "canvas")];
   const existing = candidates.find((dir) => {
     try {
       return fsSync.statSync(dir).isDirectory();
