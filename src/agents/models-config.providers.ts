@@ -80,6 +80,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Import Huawei MAAS models and constants
+import {
+  HUAWEI_MAAS_API_BASE_URL,
+  HUAWEI_MAAS_BASE_URL,
+  HUAWEI_MAAS_DEFAULT_COST,
+  HUAWEI_MAAS_DEFAULT_CONTEXT_WINDOW,
+  HUAWEI_MAAS_DEFAULT_MAX_TOKENS,
+  HUAWEI_MAAS_DEFAULT_MODELS,
+  HuaweiMaasResponse,
+  generateFriendlyModelName,
+} from "./huawei-maas-models.js";
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -145,6 +156,48 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function discoverHuaweiMaasModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+  // Skip Huawei MAAS discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const response = await fetch(`${HUAWEI_MAAS_API_BASE_URL}/v2/models`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const data = (await response.json()) as HuaweiMaasResponse;
+    if (!data.data || data.data.length === 0) {
+      return [];
+    }
+    return data.data.map((model) => {
+      const modelId = model.id;
+      const isReasoning =
+        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+
+      // 生成更友好的模型名称
+      const friendlyName = generateFriendlyModelName(modelId);
+
+      return {
+        id: modelId,
+        name: friendlyName,
+        reasoning: isReasoning,
+        input: ["text" as const],
+        cost: HUAWEI_MAAS_DEFAULT_COST,
+        contextWindow: HUAWEI_MAAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: HUAWEI_MAAS_DEFAULT_MAX_TOKENS,
+      };
+    });
+  } catch {
     return [];
   }
 }
@@ -414,6 +467,21 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+export async function buildHuaweiMaasProvider(apiKey: string = ""): Promise<ProviderConfig> {
+  let models: ModelDefinitionConfig[] = await discoverHuaweiMaasModels(apiKey);
+  // 如果没有获取到模型，使用默认模型
+  if (models.length === 0) {
+    models = HUAWEI_MAAS_DEFAULT_MODELS;
+  }
+
+  return {
+    baseUrl: HUAWEI_MAAS_BASE_URL,
+    api: "openai-completions",
+    apiKey: apiKey || undefined,
+    models,
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -449,9 +517,9 @@ export async function resolveImplicitProviders(params: {
     allowKeychainPrompt: false,
   });
 
+  const minimaxEnv = resolveEnvApiKey("minimax");
   const minimaxKey =
-    resolveEnvApiKeyVarName("minimax") ??
-    resolveApiKeyFromProfiles({ provider: "minimax", store: authStore });
+    minimaxEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "minimax", store: authStore });
   if (minimaxKey) {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
@@ -464,25 +532,33 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
+  const moonshotEnv = resolveEnvApiKey("moonshot");
   const moonshotKey =
-    resolveEnvApiKeyVarName("moonshot") ??
-    resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
+    moonshotEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
   }
 
+  const syntheticEnv = resolveEnvApiKey("synthetic");
   const syntheticKey =
-    resolveEnvApiKeyVarName("synthetic") ??
-    resolveApiKeyFromProfiles({ provider: "synthetic", store: authStore });
+    syntheticEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "synthetic", store: authStore });
   if (syntheticKey) {
     providers.synthetic = { ...buildSyntheticProvider(), apiKey: syntheticKey };
   }
 
+  const veniceEnv = resolveEnvApiKey("venice");
   const veniceKey =
-    resolveEnvApiKeyVarName("venice") ??
-    resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
+    veniceEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const huaweiMaasEnv = resolveEnvApiKey("huawei-maas");
+  const huaweiMaasKey =
+    huaweiMaasEnv?.apiKey ??
+    resolveApiKeyFromProfiles({ provider: "huawei-maas", store: authStore });
+  if (huaweiMaasKey) {
+    providers["huawei-maas"] = await buildHuaweiMaasProvider(huaweiMaasKey);
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
@@ -493,9 +569,9 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
+  const xiaomiEnv = resolveEnvApiKey("xiaomi");
   const xiaomiKey =
-    resolveEnvApiKeyVarName("xiaomi") ??
-    resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
+    xiaomiEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
   }
@@ -529,16 +605,16 @@ export async function resolveImplicitProviders(params: {
   }
 
   // Ollama provider - only add if explicitly configured
+  const ollamaEnv = resolveEnvApiKey("ollama");
   const ollamaKey =
-    resolveEnvApiKeyVarName("ollama") ??
-    resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
+    ollamaEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
   }
 
+  const qianfanEnv = resolveEnvApiKey("qianfan");
   const qianfanKey =
-    resolveEnvApiKeyVarName("qianfan") ??
-    resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
+    qianfanEnv?.apiKey ?? resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
   }

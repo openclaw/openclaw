@@ -8,8 +8,10 @@ import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import { shortenHomePath } from "../../../utils.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
+import { setHuaweiMaasApiKey } from "../../onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
+  applyHuaweiMaasConfig,
   applyCloudflareAiGatewayConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
@@ -541,6 +543,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpencodeZenConfig(nextConfig);
+  }
+
+  if (authChoice === "huawei-maas-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "huawei-maas",
+      cfg: baseConfig,
+      flagValue: opts.huaweiMaasApiKey,
+      flagName: "--huawei-maas-api-key",
+      envVar: "HUAWEI_MAAS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setHuaweiMaasApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "huawei-maas:default",
+      provider: "huawei-maas",
+      mode: "api_key",
+    });
+    return applyHuaweiMaasConfig(nextConfig);
   }
 
   if (

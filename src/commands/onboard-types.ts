@@ -36,6 +36,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "huawei-maas-api-key"
   | "qianfan-api-key"
   | "skip";
 export type GatewayAuthChoice = "token" | "password";
@@ -82,6 +83,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  huaweiMaasApiKey?: string;
   qianfanApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;

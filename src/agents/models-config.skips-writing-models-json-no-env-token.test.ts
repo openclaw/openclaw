@@ -168,7 +168,7 @@ describe("models-config", () => {
           >;
         };
         expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.chat/v1");
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        expect(parsed.providers.minimax?.apiKey).toBe("sk-minimax-test");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");
         expect(ids).toContain("MiniMax-VL-01");
@@ -205,7 +205,7 @@ describe("models-config", () => {
           >;
         };
         expect(parsed.providers.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-        expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
+        expect(parsed.providers.synthetic?.apiKey).toBe("sk-synthetic-test");
         const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
         expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
       } finally {

@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
+import { HUAWEI_MAAS_DEFAULT_MODELS } from "../agents/huawei-maas-models.js";
 import {
   buildQianfanProvider,
   buildXiaomiProvider,
@@ -23,6 +25,7 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
+  HUAWEI_MAAS_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -43,6 +46,10 @@ import {
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
+
+function buildHuaweiMaasModelDefinitions(): ModelDefinitionConfig[] {
+  return HUAWEI_MAAS_DEFAULT_MODELS;
+}
 
 export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
@@ -643,6 +650,62 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+export function applyHuaweiMaasProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[HUAWEI_MAAS_DEFAULT_MODEL_REF] = {
+    ...models[HUAWEI_MAAS_DEFAULT_MODEL_REF],
+    alias: models[HUAWEI_MAAS_DEFAULT_MODEL_REF]?.alias ?? "Huawei Cloud MAAS",
+  };
+
+  const defaultModels = buildHuaweiMaasModelDefinitions();
+  defaultModels.forEach((defaultModel) => {
+    const modelRef = `huawei-maas/${defaultModel.id}`;
+    if (!models[modelRef]) {
+      models[modelRef] = {};
+    }
+  });
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers["huawei-maas"];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const mergedModels = [...existingModels];
+  defaultModels.forEach((defaultModel) => {
+    if (!mergedModels.some((model) => model.id === defaultModel.id)) {
+      mergedModels.push(defaultModel);
+    }
+  });
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers["huawei-maas"] = {
+    ...existingProviderRest,
+    baseUrl: "https://api.modelarts-maas.com",
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXaiProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
@@ -659,6 +722,28 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
               }
             : undefined),
           primary: XAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyHuaweiMaasConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyHuaweiMaasProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: HUAWEI_MAAS_DEFAULT_MODEL_REF,
         },
       },
     },

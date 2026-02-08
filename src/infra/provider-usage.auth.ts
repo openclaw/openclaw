@@ -148,6 +148,41 @@ function resolveXiaomiApiKey(): string | undefined {
   return undefined;
 }
 
+export function resolveHuaweiMaasApiKey(): string | undefined {
+  const envDirect = process.env.HUAWEI_MAAS_API_KEY?.trim();
+  if (envDirect) {
+    return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey("huawei-maas");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
+  }
+
+  const cfg = loadConfig();
+  const key = getCustomProviderApiKey(cfg, "huawei-maas");
+  if (key) {
+    return key;
+  }
+
+  const store = ensureAuthProfileStore();
+  const apiProfile = listProfilesForProvider(store, "huawei-maas").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) {
+    return undefined;
+  }
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
+  }
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
+}
+
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
@@ -267,6 +302,13 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "xiaomi") {
       const apiKey = resolveXiaomiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "huawei-maas") {
+      const apiKey = resolveHuaweiMaasApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

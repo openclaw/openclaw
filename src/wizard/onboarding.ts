@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
@@ -390,6 +391,8 @@ export async function runOnboardingWizard(
     },
   });
   nextConfig = authResult.config;
+
+  await ensureOpenClawModelsJson(nextConfig);
 
   if (authChoiceFromPrompt) {
     const modelSelection = await promptDefaultModel({

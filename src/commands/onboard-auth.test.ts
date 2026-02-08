@@ -17,6 +17,9 @@ import {
   applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  applyHuaweiMaasConfig,
+  applyHuaweiMaasProviderConfig,
+  HUAWEI_MAAS_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -526,5 +529,81 @@ describe("applyOpenrouterConfig", () => {
       },
     });
     expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+  });
+});
+
+describe("applyHuaweiMaasProviderConfig", () => {
+  it("adds allowlist entry for the default model", () => {
+    const cfg = applyHuaweiMaasProviderConfig({});
+    const models = cfg.agents?.defaults?.models ?? {};
+    expect(Object.keys(models)).toContain(HUAWEI_MAAS_DEFAULT_MODEL_REF);
+  });
+
+  it("preserves existing alias for the default model", () => {
+    const cfg = applyHuaweiMaasProviderConfig({
+      agents: {
+        defaults: {
+          models: {
+            [HUAWEI_MAAS_DEFAULT_MODEL_REF]: { alias: "Huawei" },
+          },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.models?.[HUAWEI_MAAS_DEFAULT_MODEL_REF]?.alias).toBe("Huawei");
+  });
+});
+
+describe("applyHuaweiMaasConfig", () => {
+  it("adds Huawei MAAS provider with correct settings", () => {
+    const cfg = applyHuaweiMaasConfig({});
+    expect(cfg.models?.providers?.["huawei-maas"]).toMatchObject({
+      baseUrl: "https://api.modelarts-maas.com",
+      api: "openai-completions",
+    });
+  });
+
+  it("sets correct primary model", () => {
+    const cfg = applyHuaweiMaasConfig({});
+    expect(cfg.agents?.defaults?.model?.primary).toBe(HUAWEI_MAAS_DEFAULT_MODEL_REF);
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyHuaweiMaasConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+  });
+
+  it("merges existing Huawei MAAS provider models", () => {
+    const cfg = applyHuaweiMaasProviderConfig({
+      models: {
+        providers: {
+          "huawei-maas": {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "old-model",
+                name: "Old",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.["huawei-maas"]?.baseUrl).toBe("https://api.modelarts-maas.com");
+    expect(cfg.models?.providers?.["huawei-maas"]?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.["huawei-maas"]?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.["huawei-maas"]?.models.length).toBeGreaterThan(1);
   });
 });
