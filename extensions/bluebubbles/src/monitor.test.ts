@@ -546,7 +546,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(res.statusCode).toBe(401);
     });
 
-    it("allows localhost requests without authentication", async () => {
+    it("rejects localhost requests without valid token when password is configured", async () => {
       const account = createMockAccount({ password: "secret-token" });
       const config: OpenClawConfig = {};
       const core = createMockRuntime();
@@ -562,7 +562,42 @@ describe("BlueBubbles webhook monitor", () => {
           guid: "msg-1",
         },
       });
-      // Localhost address
+      // Localhost address - should no longer bypass auth
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "127.0.0.1",
+      };
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("allows localhost requests when no password is configured", async () => {
+      const account = createMockAccount({ password: "" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+        },
+      });
       (req as unknown as { socket: { remoteAddress: string } }).socket = {
         remoteAddress: "127.0.0.1",
       };
