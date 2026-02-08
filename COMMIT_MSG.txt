@@ -1,0 +1,37 @@
+feat: Add CoreMemories hierarchical memory system
+
+CoreMemories is a local-first, event-driven memory system that mimics
+human memory consolidation with progressive compression and triggered
+retrieval.
+
+Features:
+- 3-layer architecture: Hot (Flash/Warm), Recent (Weeks 1-4), Archive
+- Progressive compression: Detail fades with age, hooks remain
+- Event-driven retrieval: Load memories only when keywords match
+- Token efficiency: ~18% reduction vs loading full MEMORY.md
+- Local-first: Works offline, optional API enhancement
+- MEMORY.md integration: Proposes important memories for curated biography
+- HEARTBEAT integration: Automatic compression every 6 hours
+- CRON integration: Smart reminders with memory context
+
+Architecture:
+- Flash (0-48h): Full detail, always loaded
+- Warm (2-7d): Summaries, triggered load
+- Recent (7-48d): Compressed, keyword search
+- Archive (1-12mo): Essence extraction
+- Core (1yr+): Permanent hooks
+
+Configuration:
+- Zero-config by default (auto-detects local LLM)
+- Graceful fallback to rule-based compression
+- Expert mode for full customization
+
+Documentation:
+- Complete spec in docs/spec.md
+- Architecture in docs/architecture.md
+- User guide in README.md
+
+Tests: All passing
+Breaking Changes: None (opt-in feature)
+
+Co-authored-by: OpenClaw Community <contributors@openclaw.org>

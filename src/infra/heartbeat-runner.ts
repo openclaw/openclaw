@@ -96,12 +96,75 @@ const EXEC_EVENT_PROMPT =
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
 
-// Prompt used when a scheduled cron job has fired and injected a system event.
-// This overrides the standard heartbeat prompt so the model relays the scheduled
-// reminder instead of responding with "HEARTBEAT_OK".
 const CRON_EVENT_PROMPT =
-  "A scheduled reminder has been triggered. The reminder message is shown in the system messages above. " +
-  "Please relay this reminder to the user in a helpful and friendly way.";
+  "A scheduled job produced output. The result is shown in the system messages above. " +
+  "Please relay the output to the user in a helpful way. If it succeeded, share the relevant output. " +
+  "If it failed, explain what went wrong.";
+
+async function maybeRunCoreMemoriesMaintenance(params: {
+  cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  agentId: string;
+  workspaceDir: string;
+  sessionKey: string;
+  nowMs?: number;
+}): Promise<void> {
+  const enabled = params.heartbeat?.coreMemories?.enabled === true;
+  if (!enabled) {
+    return;
+  }
+
+  const everyRaw = params.heartbeat?.coreMemories?.every?.trim() || "6h";
+  let everyMs = 6 * 60 * 60 * 1000;
+  try {
+    everyMs = parseDurationMs(everyRaw, { defaultUnit: "m" });
+  } catch {
+    // ignore invalid duration; keep default
+  }
+
+  const statePath = path.join(
+    params.workspaceDir,
+    ".openclaw",
+    "memory",
+    "coremem-maintenance.json",
+  );
+
+  const nowMs = typeof params.nowMs === "number" ? params.nowMs : Date.now();
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { lastRunMs?: number };
+    const last = typeof parsed.lastRunMs === "number" ? parsed.lastRunMs : 0;
+    if (last > 0 && nowMs - last < everyMs) {
+      return;
+    }
+  } catch {
+    // ignore missing/invalid state
+  }
+
+  // Use the deterministic per-session memoryDir used by ingestion.
+  const safeSession = params.sessionKey
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "_")
+    .slice(0, 120);
+
+  const memoryDir = path.join(params.workspaceDir, ".openclaw", "memory", "sessions", safeSession);
+
+  try {
+    const mod = (await import("@openclaw/core-memories/integration")) as {
+      heartbeatMaintenance: (opts?: { memoryDir?: string }) => Promise<unknown>;
+    };
+    await mod.heartbeatMaintenance({ memoryDir });
+  } catch {
+    // Best-effort: never break heartbeats.
+  }
+
+  try {
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, JSON.stringify({ lastRunMs: nowMs }, null, 2), "utf-8");
+  } catch {
+    // ignore
+  }
+}
 
 function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
@@ -637,6 +700,15 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    await maybeRunCoreMemoriesMaintenance({
+      cfg,
+      heartbeat,
+      agentId,
+      workspaceDir,
+      sessionKey,
+      nowMs: startedAt,
+    });
+
     const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;

@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+
+    // Use bundler-style module resolution so TS sources can use extensionless relative imports.
+    // We rewrite the emitted JS imports to include ".js" during build for Node ESM compatibility.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+
+    "allowImportingTsExtensions": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -33,10 +33,16 @@ exit 0
 
 describe("docker-setup.sh", () => {
   it("handles unset optional env vars under strict mode", async () => {
+    // This suite requires bash + common unix utils; skip on native Windows.
+    if (process.platform === "win32") {
+      return;
+    }
+
     const assocCheck = spawnSync("bash", ["-c", "declare -A _t=()"], {
       encoding: "utf8",
     });
-    if (assocCheck.status !== 0) {
+    // Skip if bash isn't available (e.g., some Windows environments).
+    if (assocCheck.error || assocCheck.status !== 0) {
       return;
     }
 
@@ -58,7 +64,7 @@ describe("docker-setup.sh", () => {
 
     const env = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       DOCKER_STUB_LOG: logPath,
       OPENCLAW_GATEWAY_TOKEN: "test-token",
       OPENCLAW_CONFIG_DIR: join(rootDir, "config"),
@@ -83,10 +89,16 @@ describe("docker-setup.sh", () => {
   });
 
   it("plumbs OPENCLAW_DOCKER_APT_PACKAGES into .env and docker build args", async () => {
+    // This suite requires bash + common unix utils; skip on native Windows.
+    if (process.platform === "win32") {
+      return;
+    }
+
     const assocCheck = spawnSync("bash", ["-c", "declare -A _t=()"], {
       encoding: "utf8",
     });
-    if (assocCheck.status !== 0) {
+    // Skip if bash isn't available (e.g., some Windows environments).
+    if (assocCheck.error || assocCheck.status !== 0) {
       return;
     }
 
@@ -108,7 +120,7 @@ describe("docker-setup.sh", () => {
 
     const env = {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       DOCKER_STUB_LOG: logPath,
       OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
       OPENCLAW_GATEWAY_TOKEN: "test-token",

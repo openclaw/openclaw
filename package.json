@@ -120,6 +120,7 @@
     "@mariozechner/pi-coding-agent": "0.52.8",
     "@mariozechner/pi-tui": "0.52.8",
     "@mozilla/readability": "^0.6.0",
+    "@openclaw/core-memories": "workspace:*",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
