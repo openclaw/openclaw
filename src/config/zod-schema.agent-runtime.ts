@@ -465,8 +465,7 @@ export const MemoryRecallSchema = z
     maxInjectedChars: z.number().int().positive().optional(),
     minMessageChars: z.number().int().nonnegative().optional(),
   })
-  .strict()
-  .optional();
+  .strict();
 
 export const AgentModelSchema = z.union([
   z.string(),
@@ -487,7 +486,7 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
-    memoryRecall: MemoryRecallSchema,
+    memoryRecall: MemoryRecallSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,

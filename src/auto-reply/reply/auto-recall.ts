@@ -111,7 +111,7 @@ export function resolveMemoryRecallSettings(
   const defaults = cfg.agents?.defaults?.memoryRecall;
   const overrides = resolveAgentConfig(cfg, agentId)?.memoryRecall;
 
-  const enabled = (overrides?.enabled ?? defaults?.enabled ?? DEFAULT_SETTINGS.enabled) === true;
+  const enabled = overrides?.enabled ?? defaults?.enabled ?? DEFAULT_SETTINGS.enabled;
   if (!enabled) {
     return null;
   }
@@ -120,7 +120,7 @@ export function resolveMemoryRecallSettings(
     normalizeMode(overrides?.mode) ?? normalizeMode(defaults?.mode) ?? DEFAULT_SETTINGS.mode;
 
   const requireOwner =
-    (overrides?.requireOwner ?? defaults?.requireOwner ?? DEFAULT_SETTINGS.requireOwner) === true;
+    overrides?.requireOwner ?? defaults?.requireOwner ?? DEFAULT_SETTINGS.requireOwner;
 
   const chatTypes =
     normalizeChatTypes(overrides?.chatTypes) ??
@@ -234,38 +234,80 @@ export function formatMemoryRecallBlock(params: {
   let remaining = budget;
   const out: string[] = [];
 
-  const push = (text: string) => {
+  const pushIfFits = (text: string): boolean => {
     if (!text) {
-      return;
+      return true;
     }
     if (remaining <= 0) {
-      return;
+      return false;
     }
-    if (text.length <= remaining) {
-      out.push(text);
-      remaining -= text.length;
-      return;
+    if (text.length > remaining) {
+      return false;
     }
-    out.push(text.slice(0, Math.max(0, remaining)));
-    remaining = 0;
+    out.push(text);
+    remaining -= text.length;
+    return true;
   };
 
-  push(header);
-  push("\n\n");
+  const truncateToRemaining = (text: string): string => {
+    if (!text || remaining <= 0) {
+      return "";
+    }
+    if (text.length <= remaining) {
+      return text;
+    }
 
-  params.results.forEach((entry, index) => {
+    // Prefer whole lines where possible (avoids truncating mid-markdown / mid-citation line).
+    const sliced = text.slice(0, remaining);
+    const lastNl = sliced.lastIndexOf("\n");
+    const base = lastNl > 0 ? sliced.slice(0, lastNl) : sliced;
+    const trimmed = base.trimEnd();
+
+    const ellipsis = trimmed.length + 1 <= remaining ? "…" : "";
+    return `${trimmed}${ellipsis}`;
+  };
+
+  // Header can be safely truncated (no citations).
+  if (!pushIfFits(header)) {
+    return header.slice(0, budget).trim();
+  }
+  pushIfFits("\n\n");
+
+  let pushedAnyRecall = false;
+
+  for (let index = 0; index < params.results.length; index++) {
     if (remaining <= 0) {
-      return;
+      break;
     }
+    const entry = params.results[index];
     const label = `### Recall ${index + 1}`;
+
+    const chunkNoCitations = `${label}\n\n${entry.snippet.trim()}`;
     const footer = params.includeCitations ? `\n\nSource: ${formatCitation(entry)}` : "";
-    const chunk = `${label}\n\n${entry.snippet.trim()}${footer}`;
+    const chunk = `${chunkNoCitations}${footer}`;
+
     // Separator between chunks.
-    if (index > 0) {
-      push("\n\n");
+    if (index > 0 && !pushIfFits("\n\n")) {
+      break;
     }
-    push(chunk);
-  });
+
+    // Avoid slicing arbitrary chunks (can truncate citations / markdown). Prefer whole entries.
+    if (pushIfFits(chunk)) {
+      pushedAnyRecall = true;
+      continue;
+    }
+
+    // If even the first entry doesn't fit, include a truncated snippet without citations.
+    if (!pushedAnyRecall) {
+      const truncated = truncateToRemaining(chunkNoCitations);
+      if (truncated) {
+        out.push(truncated);
+        remaining -= truncated.length;
+      }
+    }
+
+    break;
+  }
 
   return out.join("").trim();
 }
