@@ -3,8 +3,10 @@ import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { GuardianConfig } from "../config/types.guardian.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { createGuardian, GuardianDeniedError, recordAuditEvent } from "../guardian.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -63,6 +65,7 @@ type ApplyPatchOptions = {
   cwd: string;
   sandboxRoot?: string;
   signal?: AbortSignal;
+  guardian?: GuardianConfig;
 };
 
 const applyPatchSchema = Type.Object({
@@ -72,7 +75,7 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandboxRoot?: string } = {},
+  options: { cwd?: string; sandboxRoot?: string; guardian?: GuardianConfig } = {},
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
@@ -100,6 +103,7 @@ export function createApplyPatchTool(
         cwd,
         sandboxRoot,
         signal,
+        guardian: options.guardian,
       });
 
       return {
@@ -119,6 +123,8 @@ export async function applyPatch(
     throw new Error("No files were modified.");
   }
 
+  const guardian = createGuardian(options.guardian);
+
   const summary: ApplyPatchSummary = {
     added: [],
     modified: [],
@@ -130,6 +136,28 @@ export async function applyPatch(
     deleted: new Set<string>(),
   };
 
+  const auditAndGuard = async (actionType: string, targetPath: string) => {
+    const check = guardian.enabled
+      ? await guardian.checkAction({
+          actionType,
+          targetPath,
+          caller: "apply_patch",
+        })
+      : { allowed: true, mode: "public" as const };
+
+    recordAuditEvent({
+      action_type: actionType,
+      target: targetPath,
+      caller: "apply_patch",
+      allowed: check.allowed,
+      reason: check.reason,
+    });
+
+    if (!check.allowed) {
+      throw new GuardianDeniedError(actionType, targetPath);
+    }
+  };
+
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
       const err = new Error("Aborted");
@@ -139,6 +167,7 @@ export async function applyPatch(
 
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
+      await auditAndGuard("write", target.resolved);
       await ensureDir(target.resolved);
       await fs.writeFile(target.resolved, hunk.contents, "utf8");
       recordSummary(summary, seen, "added", target.display);
@@ -147,16 +176,20 @@ export async function applyPatch(
 
     if (hunk.kind === "delete") {
       const target = await resolvePatchPath(hunk.path, options);
+      await auditAndGuard("delete", target.resolved);
       await fs.rm(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
     const target = await resolvePatchPath(hunk.path, options);
+    await auditAndGuard("write", target.resolved);
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks);
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
+      await auditAndGuard("write", moveTarget.resolved);
+      await auditAndGuard("delete", target.resolved);
       await ensureDir(moveTarget.resolved);
       await fs.writeFile(moveTarget.resolved, applied, "utf8");
       await fs.rm(target.resolved);

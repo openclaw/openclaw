@@ -12,6 +12,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4 } from "../gateway/net.js";
+import { recordAuditEvent } from "../guardian.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
@@ -217,6 +218,7 @@ export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;
   }
+  recordAuditEvent({ action_type: "open_url", target: url, caller: "openUrl" });
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
     return false;
@@ -251,6 +253,7 @@ export async function openUrlInBackground(url: string): Promise<boolean> {
   if (process.platform !== "darwin") {
     return false;
   }
+  recordAuditEvent({ action_type: "open_url", target: url, caller: "openUrlInBackground" });
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv || resolved.command !== "open") {
     return false;

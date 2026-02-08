@@ -49,6 +49,7 @@ const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   update: "Update",
   diagnostics: "Diagnostics",
+  guardian: "Guardian",
   logging: "Logging",
   gateway: "Gateway",
   nodeHost: "Node Host",
@@ -77,6 +78,7 @@ const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
   update: 25,
   diagnostics: 27,
+  guardian: 880,
   gateway: 30,
   nodeHost: 35,
   agents: 40,
@@ -123,6 +125,13 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
+  "guardian.enabled": "Guardian Enabled",
+  "guardian.keyFileName": "Guardian Key File Name",
+  "guardian.rules": "Guardian Rules",
+  "guardian.rules.*.mode": "Guardian Rule Mode",
+  "guardian.rules.*.path": "Guardian Rule Path",
+  "guardian.cacheTtlMs": "Guardian Cache TTL (ms)",
+  "guardian.failMode": "Guardian Fail Mode",
   "agents.list.*.identity.avatar": "Identity Avatar",
   "agents.list.*.skills": "Agent Skill Filter",
   "gateway.remote.url": "Remote Gateway URL",
@@ -452,6 +461,16 @@ const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "guardian.enabled":
+    "Enable Guardian path enforcement for read/write/delete/exec actions (default: false).",
+  "guardian.keyFileName":
+    "Key file required for needs_key rules (default: .openclaw.key).",
+  "guardian.rules": "Ordered path rules; first match wins.",
+  "guardian.rules.*.mode": 'Rule mode ("public", "needs_key", or "deny").',
+  "guardian.rules.*.path": "Absolute path or prefix to match for the rule.",
+  "guardian.cacheTtlMs": "Key file lookup cache TTL in milliseconds (default: 3000).",
+  "guardian.failMode":
+    'When Guardian encounters an internal error while enabled: "closed" denies, "open" allows.',
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
