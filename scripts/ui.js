@@ -128,10 +128,10 @@ if (action === "install") {
   run(runner.cmd, ["install", ...rest]);
 } else {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
-    const installEnv =
-      action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    // Install all dependencies including devDependencies.
+    // The build requires vite and other dev tools to be available.
+    // Previously used --prod and NODE_ENV=production which caused vite not found errors.
+    runSync(runner.cmd, ["install"], process.env);
   }
   run(runner.cmd, ["run", script, ...rest]);
 }
