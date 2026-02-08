@@ -1,5 +1,5 @@
 import type { AgentIdentityFile } from "../agents/identity-file.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { IdentityConfig, OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -137,6 +137,7 @@ export function applyAgentConfig(
     workspace?: string;
     agentDir?: string;
     model?: string;
+    identity?: IdentityConfig;
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
@@ -144,12 +145,14 @@ export function applyAgentConfig(
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
+  const nextIdentity = params.identity ? { ...base.identity, ...params.identity } : base.identity;
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(nextIdentity ? { identity: nextIdentity } : {}),
   };
   const nextList = [...list];
   if (index >= 0) {

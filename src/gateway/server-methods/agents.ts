@@ -219,6 +219,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const workspaceDir = resolveUserPath(String(params.workspace ?? "").trim());
+    const emoji = resolveOptionalStringParam(params.emoji);
+    const avatar = resolveOptionalStringParam(params.avatar);
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
@@ -226,6 +228,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
       agentId,
       name: rawName,
       workspace: workspaceDir,
+      ...(emoji || avatar
+        ? {
+            identity: {
+              ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
+              ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
+            },
+          }
+        : {}),
     });
     const agentDir = resolveAgentDir(nextConfig, agentId);
     nextConfig = applyAgentConfig(nextConfig, { agentId, agentDir });
@@ -237,20 +247,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
 
     await writeConfigFile(nextConfig);
-
-    // Always write Name to IDENTITY.md; optionally include emoji/avatar.
-    const safeName = sanitizeIdentityLine(rawName);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
-    const identityPath = path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    const lines = [
-      "",
-      `- Name: ${safeName}`,
-      ...(emoji ? [`- Emoji: ${sanitizeIdentityLine(emoji)}`] : []),
-      ...(avatar ? [`- Avatar: ${sanitizeIdentityLine(avatar)}`] : []),
-      "",
-    ];
-    await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
 
     respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
   },
@@ -295,6 +291,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
         : {}),
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model ? { model } : {}),
+      ...(avatar
+        ? {
+            identity: {
+              avatar: sanitizeIdentityLine(avatar),
+            },
+          }
+        : {}),
     });
 
     await writeConfigFile(nextConfig);
@@ -302,13 +305,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
     if (workspaceDir) {
       const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
       await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
-    }
-
-    if (avatar) {
-      const workspace = workspaceDir ?? resolveAgentWorkspaceDir(nextConfig, agentId);
-      await fs.mkdir(workspace, { recursive: true });
-      const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
-      await fs.appendFile(identityPath, `\n- Avatar: ${sanitizeIdentityLine(avatar)}\n`, "utf-8");
     }
 
     respond(true, { ok: true, agentId }, undefined);

@@ -1,15 +1,22 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { applyAgentConfig } from "../commands/agents.config.js";
+import { writeConfigFile } from "../config/config.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
+import { sendInvalidRequest, sendUnauthorized } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 
 const ROOT_PREFIX = "/";
 
@@ -66,6 +73,17 @@ type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
 
+const MAX_AVATAR_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+const AVATAR_EXT_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/svg+xml": ".svg",
+};
+
 function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
@@ -83,6 +101,149 @@ function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
+async function readBinaryBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ ok: true; value: Buffer } | { ok: false; error: string }> {
+  return await new Promise((resolve) => {
+    let done = false;
+    let total = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      if (done) {
+        return;
+      }
+      total += chunk.length;
+      if (total > maxBytes) {
+        done = true;
+        resolve({ ok: false, error: "payload too large" });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve({ ok: true, value: Buffer.concat(chunks) });
+    });
+    req.on("error", (err) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve({ ok: false, error: String(err) });
+    });
+  });
+}
+
+export async function handleControlUiAvatarUploadRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: {
+    basePath?: string;
+    config: OpenClawConfig;
+    auth: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+  },
+): Promise<boolean> {
+  const urlRaw = req.url;
+  if (!urlRaw) {
+    return false;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(urlRaw, "http://localhost");
+  } catch {
+    return false;
+  }
+  const basePath = normalizeControlUiBasePath(opts.basePath);
+  const pathname = url.pathname;
+  const pathWithBase = basePath
+    ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
+    : `${CONTROL_UI_AVATAR_PREFIX}/`;
+  if (!pathname.startsWith(pathWithBase)) {
+    return false;
+  }
+
+  if (req.method !== "POST") {
+    return false;
+  }
+
+  applyControlUiSecurityHeaders(res);
+
+  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
+  const agentId = agentIdParts[0] ?? "";
+  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+    sendInvalidRequest(res, "invalid agent id");
+    return true;
+  }
+
+  const allowed = new Set(listAgentIds(opts.config));
+  if (!allowed.has(agentId)) {
+    sendInvalidRequest(res, `unknown agent id: ${agentId}`);
+    return true;
+  }
+
+  const token = getBearerToken(req);
+  const authResult = await authorizeGatewayConnect({
+    auth: opts.auth,
+    connectAuth: token ? { token, password: token } : null,
+    req,
+    trustedProxies: opts.trustedProxies,
+  });
+  if (!authResult.ok) {
+    sendUnauthorized(res);
+    return true;
+  }
+
+  const rawType =
+    typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "";
+  const contentType = rawType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const ext = AVATAR_EXT_BY_CONTENT_TYPE[contentType];
+  if (!ext) {
+    sendInvalidRequest(
+      res,
+      `unsupported content-type: ${contentType || "(missing)"} (expected an image/* type)`,
+    );
+    return true;
+  }
+
+  const body = await readBinaryBody(req, MAX_AVATAR_UPLOAD_BYTES);
+  if (!body.ok) {
+    if (body.error === "payload too large") {
+      sendJson(res, 413, { ok: false, error: body.error });
+      return true;
+    }
+    sendInvalidRequest(res, body.error);
+    return true;
+  }
+  if (body.value.length === 0) {
+    sendInvalidRequest(res, "empty body");
+    return true;
+  }
+
+  const workspaceDir = resolveAgentWorkspaceDir(opts.config, agentId);
+  const avatarsDir = path.join(workspaceDir, "avatars");
+  const relPath = `avatars/avatar${ext}`;
+  const avatarPath = path.join(workspaceDir, relPath);
+
+  await fsp.mkdir(avatarsDir, { recursive: true });
+  await fsp.writeFile(avatarPath, body.value);
+
+  const nextConfig = applyAgentConfig(opts.config, {
+    agentId,
+    identity: { avatar: relPath },
+  });
+  await writeConfigFile(nextConfig);
+
+  sendJson(res, 200, { ok: true, agentId, avatar: relPath });
+  return true;
+}
+
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -96,7 +257,12 @@ export function handleControlUiAvatarRequest(
     return false;
   }
 
-  const url = new URL(urlRaw, "http://localhost");
+  let url: URL;
+  try {
+    url = new URL(urlRaw, "http://localhost");
+  } catch {
+    return false;
+  }
   const basePath = normalizeControlUiBasePath(opts.basePath);
   const pathname = url.pathname;
   const pathWithBase = basePath
