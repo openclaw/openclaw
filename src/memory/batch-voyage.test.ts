@@ -114,6 +114,10 @@ describe("runVoyageEmbeddingBatches", () => {
     const createBody = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(createBody.input_file_id).toBe("file-123");
     expect(createBody.completion_window).toBe("12h");
+    expect(createBody.request_params).toEqual({
+      model: "voyage-4-large",
+      input_type: "document",
+    });
 
     // Verify Content Fetch
     expect(fetchMock.mock.calls[3][0]).toContain("/files/file-out-999/content");
