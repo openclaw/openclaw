@@ -113,4 +113,4 @@ Notes
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
 - Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
 - Confirm before sending mail or creating events.
-- `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
+- **Thread vs Message search gotcha:** `gog gmail search` returns threads, and the displayed "from" is the **thread starter**, not the most recent sender. If you search `from:someone@email.com`, you'll only find threads *started by* that person — not threads where they replied. Use `gog gmail messages search` when looking for replies or when you need message-level granularity. Then use `gog gmail thread get <threadId>` to fetch the full conversation.
