@@ -269,21 +269,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
     let stdout: string;
+    let stderr: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       stdout = result.stdout;
+      stderr = result.stderr;
     } catch (err) {
       log.warn(`qmd query failed: ${String(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
-    let parsed: QmdQueryResult[] = [];
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd query returned invalid JSON: ${message}`);
-      throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
-    }
+    const parsed = this.parseQmdQueryJson(stdout, stderr);
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
@@ -979,6 +974,42 @@ export class QmdMemoryManager implements MemorySearchManager {
       pending.catch(() => undefined),
       new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
     ]);
+  }
+
+  private parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResult[] {
+    const trimmedStdout = stdout.trim();
+    const trimmedStderr = stderr.trim();
+    const stdoutIsMarker = Boolean(trimmedStdout) && this.isQmdNoResultsOutput(trimmedStdout);
+    const stderrIsMarker = Boolean(trimmedStderr) && this.isQmdNoResultsOutput(trimmedStderr);
+    if (stdoutIsMarker || (!trimmedStdout && stderrIsMarker)) {
+      return [];
+    }
+    if (!trimmedStdout) {
+      const context = trimmedStderr ? ` (stderr: ${this.summarizeQmdStderr(trimmedStderr)})` : "";
+      const message = `stdout empty${context}`;
+      log.warn(`qmd query returned invalid JSON: ${message}`);
+      throw new Error(`qmd query returned invalid JSON: ${message}`);
+    }
+    try {
+      const parsed = JSON.parse(trimmedStdout) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error("qmd query JSON response was not an array");
+      }
+      return parsed as QmdQueryResult[];
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`qmd query returned invalid JSON: ${message}`);
+      throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
+    }
+  }
+
+  private isQmdNoResultsOutput(raw: string): boolean {
+    const normalized = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    return normalized === "no results found" || normalized === "no results found.";
+  }
+
+  private summarizeQmdStderr(raw: string): string {
+    return raw.length <= 120 ? raw : `${raw.slice(0, 117)}...`;
   }
 
   private buildCollectionFilterArgs(): string[] {
