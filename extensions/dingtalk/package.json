@@ -1,0 +1,44 @@
+{
+  "name": "@openclaw/dingtalk",
+  "version": "2026.2.5",
+  "description": "OpenClaw DingTalk channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "axios": "^1.6.0",
+    "dingtalk-stream": "^2.1.4",
+    "form-data": "^4.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dingtalk",
+      "label": "DingTalk",
+      "selectionLabel": "DingTalk Open Platform",
+      "detailLabel": "DingTalk Bot",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
+      "blurb": "DingTalk bot via Stream mode with AI Card streaming.",
+      "aliases": [
+        "dd",
+        "ding",
+        "dingtalk-connector"
+      ],
+      "order": 70,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/dingtalk",
+      "localPath": "extensions/dingtalk",
+      "defaultChoice": "npm"
+    }
+  }
+}

@@ -193,7 +193,7 @@
     "minimumReleaseAge": 2880,
     "overrides": {
       "fast-xml-parser": "5.3.4",
-      "form-data": "2.5.4",
+      "form-data": "2.5.5",
       "@hono/node-server>hono": "4.11.8",
       "hono": "4.11.8",
       "qs": "6.14.1",
