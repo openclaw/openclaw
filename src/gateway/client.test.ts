@@ -57,7 +57,7 @@ describe("GatewayClient", () => {
             uptimeMs: 1,
           },
           policy: {
-            maxPayload: 512 * 1024,
+            maxPayload: 6 * 1024 * 1024,
             maxBufferedBytes: 1024 * 1024,
             tickIntervalMs: 5,
           },
