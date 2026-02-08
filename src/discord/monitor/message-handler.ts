@@ -35,6 +35,7 @@ export function createDiscordMessageHandler(params: {
   groupDmEnabled: boolean;
   groupDmChannels?: Array<string | number>;
   allowFrom?: Array<string | number>;
+  commandAllowFrom?: Array<string | number>;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordMessageHandler {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";

@@ -35,6 +35,8 @@ export type IMessageAccountConfig = {
   allowFrom?: Array<string | number>;
   /** Optional allowlist for group senders or chat_id targets. */
   groupAllowFrom?: Array<string | number>;
+  /** Optional allowlist for command authorization (falls back to allowFrom). */
+  commandAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom; mention-gating applies

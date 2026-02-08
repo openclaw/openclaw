@@ -549,6 +549,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     groupDmEnabled,
     groupDmChannels,
     allowFrom,
+    commandAllowFrom: discordCfg.commandAllowFrom,
     guildEntries,
   });
 

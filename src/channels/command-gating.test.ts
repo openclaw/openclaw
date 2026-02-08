@@ -94,4 +94,43 @@ describe("resolveControlCommandGate", () => {
     });
     expect(result.shouldBlock).toBe(false);
   });
+
+  it("uses commandOverride when provided (true)", () => {
+    const result = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: false }],
+      commandOverride: true,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+    expect(result.commandAuthorized).toBe(true);
+    expect(result.shouldBlock).toBe(false);
+  });
+
+  it("uses commandOverride when provided (false)", () => {
+    const result = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: true, allowed: false },
+        { configured: true, allowed: true },
+      ],
+      commandOverride: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+    expect(result.commandAuthorized).toBe(false);
+    expect(result.shouldBlock).toBe(true);
+  });
+
+  it("falls through to authorizers when commandOverride is undefined", () => {
+    const result = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: true }],
+      commandOverride: undefined,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    });
+    expect(result.commandAuthorized).toBe(true);
+    expect(result.shouldBlock).toBe(false);
+  });
 });

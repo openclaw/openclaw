@@ -73,6 +73,8 @@ export type TelegramAccountConfig = {
   allowFrom?: Array<string | number>;
   /** Optional allowlist for Telegram group senders (user ids or usernames). */
   groupAllowFrom?: Array<string | number>;
+  /** Optional allowlist for command authorization (falls back to allowFrom). */
+  commandAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies

@@ -479,12 +479,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
     const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
     const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    const commandOverride = isGroup
+      ? isSignalSenderAllowed(
+          sender,
+          deps.commandAllowFrom?.length ? deps.commandAllowFrom : effectiveDmAllow,
+        )
+      : undefined;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: effectiveDmAllow.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
       ],
+      commandOverride,
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
     });

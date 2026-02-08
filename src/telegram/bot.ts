@@ -233,6 +233,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
+  const commandAllowFrom = telegramCfg.commandAllowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ??
     telegramCfg.groupAllowFrom ??
@@ -349,6 +350,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     dmPolicy,
     allowFrom,
     groupAllowFrom,
+    commandAllowFrom,
     ackReactionScope,
     logger,
     resolveGroupActivation,

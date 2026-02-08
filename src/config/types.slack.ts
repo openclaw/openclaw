@@ -103,6 +103,8 @@ export type SlackAccountConfig = {
   allowBots?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
+  /** Optional allowlist for command authorization (falls back to allowFrom). */
+  commandAllowFrom?: Array<string | number>;
   /**
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies

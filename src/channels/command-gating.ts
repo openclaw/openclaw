@@ -33,13 +33,17 @@ export function resolveControlCommandGate(params: {
   authorizers: CommandAuthorizer[];
   allowTextCommands: boolean;
   hasControlCommand: boolean;
+  commandOverride?: boolean;
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): { commandAuthorized: boolean; shouldBlock: boolean } {
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
-    authorizers: params.authorizers,
-    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-  });
+  const commandAuthorized =
+    params.commandOverride != null
+      ? params.commandOverride
+      : resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups: params.useAccessGroups,
+          authorizers: params.authorizers,
+          modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
+        });
   const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
 }

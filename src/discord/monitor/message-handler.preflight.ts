@@ -428,12 +428,19 @@ export async function preflightDiscordMessage(
           })
         : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+    const commandAllowList = params.commandAllowFrom?.length
+      ? normalizeDiscordAllowList(params.commandAllowFrom, ["discord:", "user:"])
+      : null;
+    const commandOverride = commandAllowList
+      ? allowListMatches(commandAllowList, { id: sender.id, name: sender.name, tag: sender.tag })
+      : ownerOk;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: ownerAllowList != null, allowed: ownerOk },
         { configured: Array.isArray(channelUsers) && channelUsers.length > 0, allowed: usersOk },
       ],
+      commandOverride,
       modeWhenAccessGroupsOff: "configured",
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,

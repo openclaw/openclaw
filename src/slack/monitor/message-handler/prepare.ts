@@ -267,12 +267,24 @@ export async function prepareSlackMessage(params: {
           userName: senderName,
         })
       : false;
+  const commandAllowFromLower = ctx.commandAllowFrom?.map((v) => String(v).toLowerCase()) ?? [];
+  const commandOverride =
+    isRoom && commandAllowFromLower.length
+      ? resolveSlackAllowListMatch({
+          allowList: commandAllowFromLower,
+          id: senderId,
+          name: senderName,
+        }).allowed
+      : isRoom
+        ? ownerAuthorized
+        : undefined;
   const commandGate = resolveControlCommandGate({
     useAccessGroups: ctx.useAccessGroups,
     authorizers: [
       { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
       { configured: channelUsersAllowlistConfigured, allowed: channelCommandAuthorized },
     ],
+    commandOverride,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });

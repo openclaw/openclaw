@@ -179,6 +179,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       imessageCfg.groupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
+  const commandAllowFrom = normalizeAllowList(imessageCfg.commandAllowFrom);
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = imessageCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
@@ -456,12 +457,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           })
         : false;
     const hasControlCommandInMessage = hasControlCommand(messageText, cfg);
+    const commandOverride = isGroup
+      ? isAllowedIMessageSender({
+          allowFrom: commandAllowFrom.length ? commandAllowFrom : effectiveDmAllowFrom,
+          sender,
+          chatId: chatId ?? undefined,
+          chatGuid,
+          chatIdentifier,
+        })
+      : undefined;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
       ],
+      commandOverride,
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
     });
