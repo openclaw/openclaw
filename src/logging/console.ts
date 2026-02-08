@@ -114,6 +114,24 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+/**
+ * Maximum characters to write to file log per console call.
+ * Prevents massive log entries from shell completion scripts etc.
+ */
+const MAX_FILE_LOG_CHARS = 2000;
+
+/**
+ * Truncate a message to the max file log size, appending a note if truncated.
+ */
+function truncateForFileLog(message: string): string {
+  if (message.length <= MAX_FILE_LOG_CHARS) {
+    return message;
+  }
+  const truncated = message.slice(0, MAX_FILE_LOG_CHARS);
+  const remaining = message.length - MAX_FILE_LOG_CHARS;
+  return `${truncated}\n... [truncated ${remaining} chars for file log]`;
+}
+
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -211,19 +229,21 @@ export function enableConsoleCapture(): void {
         : "";
       try {
         const resolvedLogger = getLoggerLazy();
+        // Strip ANSI codes and truncate large payloads for file log
+        const fileLogMessage = truncateForFileLog(trimmed);
         // Map console levels to file logger
         if (level === "trace") {
-          resolvedLogger.trace(formatted);
+          resolvedLogger.trace(fileLogMessage);
         } else if (level === "debug") {
-          resolvedLogger.debug(formatted);
+          resolvedLogger.debug(fileLogMessage);
         } else if (level === "info") {
-          resolvedLogger.info(formatted);
+          resolvedLogger.info(fileLogMessage);
         } else if (level === "warn") {
-          resolvedLogger.warn(formatted);
+          resolvedLogger.warn(fileLogMessage);
         } else if (level === "error" || level === "fatal") {
-          resolvedLogger.error(formatted);
+          resolvedLogger.error(fileLogMessage);
         } else {
-          resolvedLogger.info(formatted);
+          resolvedLogger.info(fileLogMessage);
         }
       } catch {
         // never block console output on logging failures

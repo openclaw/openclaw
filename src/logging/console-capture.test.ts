@@ -121,6 +121,42 @@ describe("enableConsoleCapture", () => {
     console.log(payload);
     expect(log).toHaveBeenCalledWith(payload);
   });
+
+  it("truncates large payloads for file log but preserves full stdout output", async () => {
+    const logFile = tempLogPath();
+    setLoggerOverride({ level: "info", file: logFile });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+
+    // Create a large payload (like a shell completion script)
+    const largePayload = "x".repeat(5000);
+    console.log(largePayload);
+
+    // Full payload should still be written to stdout
+    expect(log).toHaveBeenCalledWith(largePayload);
+
+    // Give the file logger time to flush (use retries for flaky CI)
+    const fs = await import("node:fs/promises");
+    let content = "";
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      try {
+        content = await fs.readFile(logFile, "utf-8");
+        if (content.includes("[truncated")) break;
+      } catch {
+        // File may not exist yet
+      }
+    }
+
+    // Verify truncation by checking:
+    // 1. The truncation marker is present
+    expect(content).toContain("[truncated");
+    // 2. The full 5000-char payload is NOT in the file (proves it was actually truncated)
+    expect(content).not.toContain(largePayload);
+    // 3. The file is smaller than the original payload
+    expect(content.length).toBeLessThan(largePayload.length);
+  });
 });
 
 function tempLogPath() {
