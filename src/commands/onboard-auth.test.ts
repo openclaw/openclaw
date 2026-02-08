@@ -22,6 +22,7 @@ import {
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
+  setXaiApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 
@@ -526,5 +527,160 @@ describe("applyOpenrouterConfig", () => {
       },
     });
     expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+  });
+});
+
+describe("setXaiApiKey", () => {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let tempStateDir: string | null = null;
+
+  afterEach(async () => {
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = null;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (previousAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+    }
+    if (previousPiAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
+  });
+
+  it("writes to OPENCLAW_AGENT_DIR when set", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-xai-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    await setXaiApiKey("xai-test-key");
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
+    };
+    expect(parsed.profiles?.["xai:default"]).toMatchObject({
+      type: "api_key",
+      provider: "xai",
+      key: "xai-test-key",
+    });
+  });
+});
+
+describe("applyXaiProviderConfig", () => {
+  it("adds xai provider with correct settings", () => {
+    const cfg = applyXaiProviderConfig({});
+    expect(cfg.models?.providers?.xai).toMatchObject({
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-completions",
+    });
+    expect(cfg.models?.providers?.xai?.models).toHaveLength(5);
+  });
+
+  it("adds model aliases", () => {
+    const cfg = applyXaiProviderConfig({});
+    expect(cfg.agents?.defaults?.models?.["xai/grok-4-1-fast-reasoning"]?.alias).toBe("Grok-4-1");
+    expect(cfg.agents?.defaults?.models?.["xai/grok-4-1-fast-non-reasoning"]?.alias).toBe(
+      "Grok-4-1-NR",
+    );
+    expect(cfg.agents?.defaults?.models?.["xai/grok-code-fast-1"]?.alias).toBe("Grok-Code");
+    expect(cfg.agents?.defaults?.models?.["xai/grok-3"]?.alias).toBe("Grok-3");
+    expect(cfg.agents?.defaults?.models?.["xai/grok-3-mini"]?.alias).toBe("Grok-3-Mini");
+  });
+
+  it("merges with existing models", () => {
+    const cfg = applyXaiProviderConfig({
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "old-model",
+                name: "Old",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
+    const ids = cfg.models?.providers?.xai?.models.map((m) => m.id);
+    expect(ids).toContain("old-model");
+    expect(ids).toContain("grok-4-1-fast-reasoning");
+  });
+
+  it("preserves existing apiKey", () => {
+    const cfg = applyXaiProviderConfig({
+      models: {
+        providers: {
+          xai: {
+            apiKey: "existing-key",
+            baseUrl: "",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.xai?.apiKey).toBe("existing-key");
+  });
+});
+
+describe("applyXaiConfig", () => {
+  it("sets primary model to xai/grok-4-1-fast-reasoning", () => {
+    const cfg = applyXaiConfig({});
+    expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4-1-fast-reasoning");
+  });
+
+  it("preserves existing fallbacks", () => {
+    const cfg = applyXaiConfig({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4.5", fallbacks: ["openai/gpt-4o"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4-1-fast-reasoning");
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["openai/gpt-4o"]);
+  });
+
+  it("doesn't overwrite other providers", () => {
+    const cfg = applyXaiConfig({
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.anthropic).toMatchObject({
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+    });
   });
 });

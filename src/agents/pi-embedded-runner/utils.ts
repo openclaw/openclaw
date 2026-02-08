@@ -1,9 +1,19 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelCompatConfig } from "../../config/types.models.js";
 import type { ExecToolDefaults } from "../bash-tools.js";
 
-export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
+export function mapThinkingLevel(
+  level: ThinkLevel | undefined,
+  modelCompat?: ModelCompatConfig,
+): ThinkingLevel | undefined {
+  // If model doesn't support reasoning_effort parameter, return undefined
+  // so the SDK doesn't pass it to the API
+  if (modelCompat?.supportsReasoningEffort === false) {
+    return undefined;
+  }
+
   // pi-agent-core supports "xhigh"; OpenClaw enables it for specific models.
   if (!level) {
     return "off";

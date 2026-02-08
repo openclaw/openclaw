@@ -17,6 +17,7 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { buildXaiModelDefinition, XAI_BASE_URL, XAI_MODEL_CATALOG } from "./xai-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -405,6 +406,14 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildXaiProvider(): ProviderConfig {
+  return {
+    baseUrl: XAI_BASE_URL,
+    api: "openai-completions",
+    models: XAI_MODEL_CATALOG.map(buildXaiModelDefinition),
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -526,6 +535,14 @@ export async function resolveImplicitProviders(params: {
       models: [buildCloudflareAiGatewayModelDefinition()],
     };
     break;
+  }
+
+  // XAI provider - direct API access
+  const xaiKey =
+    resolveEnvApiKeyVarName("xai") ??
+    resolveApiKeyFromProfiles({ provider: "xai", store: authStore });
+  if (xaiKey) {
+    providers.xai = { ...buildXaiProvider(), apiKey: xaiKey };
   }
 
   // Ollama provider - only add if explicitly configured

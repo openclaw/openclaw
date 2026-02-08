@@ -2,7 +2,6 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
-export { XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
@@ -117,6 +116,7 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
+export const XAI_DEFAULT_MODEL_REF = "xai/grok-4-1-fast-reasoning";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
@@ -139,6 +139,18 @@ export async function setXiaomiApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "xiaomi",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setXaiApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "xai:default",
+    credential: {
+      type: "api_key",
+      provider: "xai",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
@@ -211,18 +223,6 @@ export function setQianfanApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "qianfan",
-      key,
-    },
-    agentDir: resolveAuthAgentDir(agentDir),
-  });
-}
-
-export function setXaiApiKey(key: string, agentDir?: string) {
-  upsertAuthProfile({
-    profileId: "xai:default",
-    credential: {
-      type: "api_key",
-      provider: "xai",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

@@ -26,6 +26,7 @@ export type AuthChoice =
   | "google-gemini-cli"
   | "zai-api-key"
   | "xiaomi-api-key"
+  | "xai-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -35,7 +36,6 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
-  | "xai-api-key"
   | "qianfan-api-key"
   | "skip";
 export type GatewayAuthChoice = "token" | "password";

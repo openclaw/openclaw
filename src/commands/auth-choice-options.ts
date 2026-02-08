@@ -18,13 +18,13 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "xai"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
   | "venice"
   | "qwen"
-  | "qianfan"
-  | "xai";
+  | "qianfan";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -124,6 +124,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xiaomi-api-key"],
   },
   {
+    value: "xai",
+    label: "xAI",
+    hint: "Grok models",
+    choices: ["xai-api-key"],
+  },
+  {
     value: "synthetic",
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
@@ -213,6 +219,7 @@ export function buildAuthChoiceOptions(params: {
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
   });
+  options.push({ value: "xai-api-key", label: "xAI API key" });
   options.push({
     value: "minimax-portal",
     label: "MiniMax OAuth",

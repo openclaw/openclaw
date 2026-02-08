@@ -42,6 +42,10 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.2.3
 
+### Fixed
+
+- Fixed reasoning models that don't support the `reasoning_effort` parameter (like XAI's `grok-4-1-fast-reasoning`) by respecting the `supportsReasoningEffort` compat flag in model configurations
+
 ### Changes
 
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
