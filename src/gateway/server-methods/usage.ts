@@ -60,7 +60,11 @@ const parseDateToMs = (raw: unknown): number | undefined => {
   }
   const [, year, month, day] = match;
   // Use UTC to ensure consistent behavior across timezones
-  const ms = Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day));
+  const ms = Date.UTC(
+    Number.parseInt(year, 10),
+    Number.parseInt(month, 10) - 1,
+    Number.parseInt(day, 10),
+  );
   if (Number.isNaN(ms)) {
     return undefined;
   }
