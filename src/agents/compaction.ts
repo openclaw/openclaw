@@ -9,9 +9,20 @@ export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
-const MERGE_SUMMARIES_INSTRUCTIONS =
-  "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
-  " TODOs, open questions, and any constraints.";
+const MERGE_SUMMARIES_INSTRUCTIONS = [
+  "Merge these partial summaries into a single cohesive summary.",
+  "",
+  "MUST PRESERVE:",
+  "- Active tasks and their current status (in-progress, blocked, pending)",
+  "- Batch operation progress (e.g., '5/17 items completed')",
+  "- The last thing the user requested and what was being done about it",
+  "- Decisions made and their rationale",
+  "- TODOs, open questions, and constraints",
+  "- Any commitments or follow-ups promised",
+  "",
+  "PRIORITIZE recent context over older history. The agent needs to know",
+  "what it was doing, not just what was discussed.",
+].join("\n");
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
