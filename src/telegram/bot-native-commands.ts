@@ -576,58 +576,74 @@ export const registerTelegramNativeCommands = ({
             accountId: route.accountId,
           });
 
-          await dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg,
-            dispatcherOptions: {
-              ...prefixOptions,
-              deliver: async (payload, _info) => {
-                const result = await deliverReplies({
-                  replies: [payload],
-                  chatId: String(chatId),
-                  token: opts.token,
-                  runtime,
-                  bot,
-                  replyToMode,
-                  textLimit,
-                  thread: threadSpec,
-                  tableMode,
-                  chunkMode,
-                  linkPreview: telegramCfg.linkPreview,
-                });
-                if (result.delivered) {
-                  deliveryState.delivered = true;
-                }
+          try {
+            await dispatchReplyWithBufferedBlockDispatcher({
+              ctx: ctxPayload,
+              cfg,
+              dispatcherOptions: {
+                ...prefixOptions,
+                deliver: async (payload, _info) => {
+                  const result = await deliverReplies({
+                    replies: [payload],
+                    chatId: String(chatId),
+                    token: opts.token,
+                    runtime,
+                    bot,
+                    replyToMode,
+                    textLimit,
+                    thread: threadSpec,
+                    tableMode,
+                    chunkMode,
+                    linkPreview: telegramCfg.linkPreview,
+                  });
+                  if (result.delivered) {
+                    deliveryState.delivered = true;
+                  }
+                },
+                onSkip: (_payload, info) => {
+                  if (info.reason !== "silent") {
+                    deliveryState.skippedNonSilent += 1;
+                  }
+                },
+                onError: (err, info) => {
+                  runtime.error?.(
+                    danger(`telegram slash ${info.kind} reply failed: ${String(err)}`),
+                  );
+                },
               },
-              onSkip: (_payload, info) => {
-                if (info.reason !== "silent") {
-                  deliveryState.skippedNonSilent += 1;
-                }
+              replyOptions: {
+                skillFilter,
+                disableBlockStreaming,
+                onModelSelected,
               },
-              onError: (err, info) => {
-                runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
-              },
-            },
-            replyOptions: {
-              skillFilter,
-              disableBlockStreaming,
-              onModelSelected,
-            },
-          });
-          if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
-            await deliverReplies({
-              replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-              chatId: String(chatId),
-              token: opts.token,
-              runtime,
-              bot,
-              replyToMode,
-              textLimit,
-              thread: threadSpec,
-              tableMode,
-              chunkMode,
-              linkPreview: telegramCfg.linkPreview,
             });
+            if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+              await deliverReplies({
+                replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+                chatId: String(chatId),
+                token: opts.token,
+                runtime,
+                bot,
+                replyToMode,
+                textLimit,
+                thread: threadSpec,
+                tableMode,
+                chunkMode,
+                linkPreview: telegramCfg.linkPreview,
+              });
+            }
+          } catch (err) {
+            runtime.error?.(danger(`telegram slash command failed: ${String(err)}`));
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  chatId,
+                  "Session state is busy right now. Please retry /status in a moment.",
+                  threadParams,
+                ),
+            }).catch(() => {});
           }
         });
       }
