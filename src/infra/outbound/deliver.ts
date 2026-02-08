@@ -21,6 +21,8 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -318,6 +320,30 @@ export async function deliverOutboundPayloads(params: {
     };
   };
   const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
+
+  // Run message_sending hook — lets plugins transform outgoing content.
+  // Runs pre-chunk so transformations (e.g. token decoding) apply to the
+  // full text before it is split into channel-sized messages.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_sending")) {
+    for (const payload of normalizedPayloads) {
+      if (payload.text) {
+        const hookResult = await hookRunner.runMessageSending(
+          { to, content: payload.text, metadata: { channel, accountId } },
+          { channelId: channel, accountId },
+        );
+        if (hookResult?.cancel) {
+          logVerbose(
+            "deliver: message_sending hook returned cancel, which is not supported in delivery — ignoring",
+          );
+        }
+        if (hookResult?.content !== undefined) {
+          payload.text = hookResult.content;
+        }
+      }
+    }
+  }
+
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
@@ -359,8 +385,14 @@ export async function deliverOutboundPayloads(params: {
     }
   }
   if (params.mirror && results.length > 0) {
+    // Use post-hook text so the transcript reflects what was actually delivered.
+    // normalizedPayloads may have been modified by message_sending hooks above.
+    const deliveredText = normalizedPayloads
+      .map((p) => p.text)
+      .filter(Boolean)
+      .join("\n\n");
     const mirrorText = resolveMirroredTranscriptText({
-      text: params.mirror.text,
+      text: deliveredText || params.mirror.text,
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {

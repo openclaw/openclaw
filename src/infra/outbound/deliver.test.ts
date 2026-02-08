@@ -15,6 +15,13 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
+const hookMocks = vi.hoisted(() => ({
+  runner: null as {
+    hasHooks: ReturnType<typeof vi.fn>;
+    runMessageSending: ReturnType<typeof vi.fn>;
+  } | null,
+}));
+
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
@@ -25,16 +32,100 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookMocks.runner,
+}));
+
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
+    hookMocks.runner = null;
   });
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    hookMocks.runner = null;
   });
+
+  it("calls message_sending hook and allows content modification", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    hookMocks.runner = {
+      hasHooks: vi.fn((name: string) => name === "message_sending"),
+      runMessageSending: vi.fn(async (event: { content: string }) => ({
+        content: event.content.replace(/§b64:([A-Za-z0-9+/=]+)§/g, "[DECODED]"),
+      })),
+    };
+
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "Hello §b64:V29ybGQ=§" }],
+      deps: { sendTelegram },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Hello §b64:V29ybGQ=§" }),
+      expect.objectContaining({ channelId: "telegram" }),
+    );
+    expect(sendTelegram).toHaveBeenCalledWith("123", "Hello [DECODED]", expect.anything());
+  });
+
+  it("does not call message_sending hook when no handlers registered", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    hookMocks.runner = {
+      hasHooks: vi.fn(() => false),
+      runMessageSending: vi.fn(),
+    };
+
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "hello" }],
+      deps: { sendTelegram },
+    });
+
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendTelegram).toHaveBeenCalledWith("123", "hello", expect.anything());
+  });
+
+  it("logs and ignores cancel from message_sending hook", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    hookMocks.runner = {
+      hasHooks: vi.fn((name: string) => name === "message_sending"),
+      runMessageSending: vi.fn(async () => ({
+        cancel: true,
+        content: "modified text",
+      })),
+    };
+
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "tok-1" } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "hello" }],
+      deps: { sendTelegram },
+    });
+
+    // Message should still be delivered (cancel is ignored), with modified content
+    expect(sendTelegram).toHaveBeenCalledWith("123", "modified text", expect.anything());
+  });
+
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: OpenClawConfig = {
