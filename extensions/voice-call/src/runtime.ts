@@ -4,6 +4,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import { CallManager } from "./manager.js";
+import { AsteriskAriProvider } from "./providers/asterisk-ari.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
@@ -40,11 +41,11 @@ function isLoopbackBind(bind: string | undefined): boolean {
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
-function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
+function resolveProvider(config: VoiceCallConfig, manager: CallManager): VoiceCallProvider {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackBind(config.serve?.bind) &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
+    (config.tunnel?.allowNgrokFreeTierLoopbackBypass || config.tunnel?.allowNgrokFreeTier || false);
 
   switch (config.provider) {
     case "telnyx":
@@ -55,6 +56,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           publicKey: config.telnyx?.publicKey,
         },
         {
+          // Preserve upstream behavior: allow unsigned webhooks only when inbound is effectively off.
+          // (Inbound allowlist/pairing requires telnyx.publicKey; see validateProviderConfig.)
           allowUnsignedWebhooks:
             config.inboundPolicy === "open" || config.inboundPolicy === "disabled",
         },
@@ -88,6 +91,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
       );
     case "mock":
       return new MockProvider();
+    case "asterisk-ari":
+      return new AsteriskAriProvider({ config, manager });
     default:
       throw new Error(`Unsupported voice-call provider: ${String(config.provider)}`);
   }
@@ -118,8 +123,8 @@ export async function createVoiceCallRuntime(params: {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
-  const provider = resolveProvider(config);
   const manager = new CallManager(config);
+  const provider = resolveProvider(config, manager);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
   const localUrl = await webhookServer.start();

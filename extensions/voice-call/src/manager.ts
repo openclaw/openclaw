@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   type CallId,
   type CallRecord,
@@ -126,10 +125,15 @@ export class CallManager {
 
     const callId = crypto.randomUUID();
     const from =
-      this.config.fromNumber || (this.provider?.name === "mock" ? "+15550000000" : undefined);
+      this.config.fromNumber ||
+      (this.provider?.name === "mock" || this.provider?.name === "asterisk-ari"
+        ? "+15550000000"
+        : undefined);
     if (!from) {
       return { callId: "", success: false, error: "fromNumber not configured" };
     }
+
+    const fromName = typeof opts.fromName === "string" ? opts.fromName.trim() : "";
 
     // Create call record with mode in metadata
     const callRecord: CallRecord = {
@@ -164,6 +168,7 @@ export class CallManager {
       const result = await this.provider.initiateCall({
         callId,
         from,
+        ...(fromName ? { fromName } : {}),
         to,
         webhookUrl: this.webhookUrl,
         inlineTwiml,
@@ -475,12 +480,14 @@ export class CallManager {
 
       case "allowlist":
       case "pairing": {
-        const normalized = normalizePhoneNumber(from);
-        if (!normalized) {
+        if (!from) {
           console.log("[voice-call] Inbound call rejected: missing caller ID");
           return false;
         }
-        const allowed = isAllowlistedCaller(normalized, allowFrom);
+
+        const normalized = from.replace(/\D/g, "");
+        const allowed = (allowFrom || []).some((num) => num.replace(/\D/g, "") === normalized);
+
         const status = allowed ? "accepted" : "rejected";
         console.log(
           `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -553,7 +560,22 @@ export class CallManager {
     if (!call && event.direction === "inbound" && event.providerCallId) {
       // Check if we should accept this inbound call
       if (!this.shouldAcceptInbound(event.from)) {
-        void this.rejectInboundCall(event);
+        // Reject inbound call at provider level to avoid leaving callers ringing/connected.
+        if (this.provider && event.providerCallId) {
+          void this.provider
+            .hangupCall({
+              callId: event.callId,
+              providerCallId: event.providerCallId,
+              reason: "rejected",
+            })
+            .catch((err) => {
+              console.warn(
+                `[voice-call] Failed to reject inbound call ${event.providerCallId}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            });
+        }
         return;
       }
 
@@ -653,25 +675,6 @@ export class CallManager {
     }
 
     this.persistCallRecord(call);
-  }
-
-  private async rejectInboundCall(event: NormalizedEvent): Promise<void> {
-    if (!this.provider || !event.providerCallId) {
-      return;
-    }
-    const callId = event.callId || event.providerCallId;
-    try {
-      await this.provider.hangupCall({
-        callId,
-        providerCallId: event.providerCallId,
-        reason: "hangup-bot",
-      });
-    } catch (err) {
-      console.warn(
-        `[voice-call] Failed to reject inbound call ${event.providerCallId}:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
