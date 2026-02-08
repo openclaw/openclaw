@@ -9,16 +9,16 @@
     "openclaw": "openclaw.mjs"
   },
   "files": [
-    "assets/",
+    "assets/**",
     "CHANGELOG.md",
-    "dist/",
-    "docs/",
-    "extensions/",
+    "dist/**",
+    "docs/**",
+    "extensions/**",
     "LICENSE",
     "openclaw.mjs",
     "README-header.png",
     "README.md",
-    "skills/"
+    "skills/**"
   ],
   "type": "module",
   "main": "dist/index.js",
