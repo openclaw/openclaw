@@ -4,6 +4,7 @@ import type {
   ReplyPayload,
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
+import * as fs from "node:fs/promises";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -18,6 +19,39 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import WebSocket from "ws";
+
+/** ImageContent type for passing images to the LLM context. */
+type ImageContent = {
+  type: "image";
+  data: string; // base64 encoded image data
+  mimeType: string; // e.g., "image/jpeg", "image/png"
+};
+
+/**
+ * Check if a URL points to a private/local network address.
+ * Used to conditionally allow SSRF for self-hosted Mattermost instances.
+ */
+function isPrivateNetworkUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    // Localhost variants
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return true;
+    }
+    // Private IPv4 ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    const ipv4Match = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (ipv4Match) {
+      const [, a, b] = ipv4Match.map(Number);
+      if (a === 10) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -236,6 +270,46 @@ function buildMattermostMediaPayload(mediaList: MattermostMediaInfo[]): {
   };
 }
 
+/**
+ * Converts image media files to ImageContent array for passing to the LLM.
+ * Only processes media with kind "image" and valid mime types.
+ * Skips images that exceed MAX_IMAGE_BYTES to avoid memory issues with base64 expansion.
+ */
+const MAX_IMAGE_BYTES_FOR_LLM = 5 * 1024 * 1024; // 5MB limit before base64 encoding
+
+async function buildMattermostImageContents(
+  mediaList: MattermostMediaInfo[],
+  logger?: { debug?: (msg: string) => void },
+): Promise<ImageContent[]> {
+  const images: ImageContent[] = [];
+  const imageMediaList = mediaList.filter(
+    (media) => media.kind === "image" && media.contentType?.startsWith("image/"),
+  );
+
+  for (const media of imageMediaList) {
+    try {
+      const stats = await fs.stat(media.path);
+      if (stats.size > MAX_IMAGE_BYTES_FOR_LLM) {
+        logger?.debug?.(
+          `mattermost: skipping oversized image ${media.path} (${stats.size} bytes > ${MAX_IMAGE_BYTES_FOR_LLM})`,
+        );
+        continue;
+      }
+      const buffer = await fs.readFile(media.path);
+      const base64 = buffer.toString("base64");
+      images.push({
+        type: "image",
+        data: base64,
+        mimeType: media.contentType ?? "image/jpeg",
+      });
+    } catch (err) {
+      logger?.debug?.(`mattermost: failed to read image file ${media.path}: ${String(err)}`);
+    }
+  }
+
+  return images;
+}
+
 function buildMattermostWsUrl(baseUrl: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -309,11 +383,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
+        // Only allow private network SSRF for self-hosted instances (localhost/private IPs)
+        const allowPrivate = isPrivateNetworkUrl(client.apiBaseUrl);
         const fetched = await core.channel.media.fetchRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
           fetchImpl: fetchWithAuth,
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          ...(allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
@@ -622,6 +699,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       }
     }
     const mediaList = await resolveMattermostMedia(post.file_ids);
+    const imageContents = await buildMattermostImageContents(mediaList, logger);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
     const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
@@ -827,6 +905,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       dispatcher,
       replyOptions: {
         ...replyOptions,
+        images: imageContents.length > 0 ? imageContents : undefined,
         disableBlockStreaming:
           typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
         onModelSelected,
