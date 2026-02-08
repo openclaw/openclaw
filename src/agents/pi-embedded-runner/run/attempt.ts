@@ -58,6 +58,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { wrapStreamFnWithTraceContext } from "../../trace-context-propagator.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isAbortError } from "../abort.js";
@@ -516,6 +517,9 @@ export async function runEmbeddedAttempt(
 
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
+
+      // Wrap streamFn to inject W3C Trace Context headers for distributed tracing
+      activeSession.agent.streamFn = wrapStreamFnWithTraceContext(activeSession.agent.streamFn);
 
       applyExtraParamsToAgent(
         activeSession.agent,

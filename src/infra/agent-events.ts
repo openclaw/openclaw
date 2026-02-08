@@ -17,10 +17,29 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
 };
 
+// Use global singleton registry to avoid dual-package hazard
+// When tsdown bundles multiple entry points, agent-events code gets duplicated
+// Using globalThis ensures both bundled core and jiti-loaded plugins share the same registry
+declare global {
+  var __openclawAgentSeqByRun: Map<string, number> | undefined;
+  var __openclawAgentListeners: Set<(evt: AgentEventPayload) => void> | undefined;
+  var __openclawAgentRunContext: Map<string, AgentRunContext> | undefined;
+}
+
+if (!globalThis.__openclawAgentSeqByRun) {
+  globalThis.__openclawAgentSeqByRun = new Map<string, number>();
+}
+if (!globalThis.__openclawAgentListeners) {
+  globalThis.__openclawAgentListeners = new Set<(evt: AgentEventPayload) => void>();
+}
+if (!globalThis.__openclawAgentRunContext) {
+  globalThis.__openclawAgentRunContext = new Map<string, AgentRunContext>();
+}
+
 // Keep per-run counters so streams stay strictly monotonic per runId.
-const seqByRun = new Map<string, number>();
-const listeners = new Set<(evt: AgentEventPayload) => void>();
-const runContextById = new Map<string, AgentRunContext>();
+const seqByRun = globalThis.__openclawAgentSeqByRun;
+const listeners = globalThis.__openclawAgentListeners;
+const runContextById = globalThis.__openclawAgentRunContext;
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {

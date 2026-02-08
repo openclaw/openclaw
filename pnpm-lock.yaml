@@ -66,6 +66,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.89
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -296,6 +299,9 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
 
   extensions/discord:
     devDependencies:

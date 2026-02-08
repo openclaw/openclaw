@@ -1,5 +1,6 @@
 import { createJiti } from "jiti";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
@@ -293,7 +294,50 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = jiti(candidate.source) as OpenClawPluginModule;
+      // K8s-native: Prefer pre-built dist/index.js over TypeScript source (for CommonJS)
+      // For ESM plugins (type="module"), we use jiti on source since dynamic import()
+      // would require async, and jiti can load ESM TypeScript while sharing module cache.
+      // For CJS plugins, native require() avoids dual-package hazard.
+      let moduleSource = candidate.source;
+      const candidateDir = path.dirname(candidate.source);
+      const distIndexJs = path.join(candidateDir, "dist", "index.js");
+      const packageJsonPath = path.join(candidateDir, "package.json");
+
+      if (fs.existsSync(distIndexJs)) {
+        // Check if the plugin uses ESM or CommonJS
+        let isESM = false;
+        if (fs.existsSync(packageJsonPath)) {
+          try {
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+            isESM = packageJson.type === "module";
+          } catch {
+            // If we can't read package.json, assume CJS
+          }
+        }
+
+        if (isESM) {
+          // ESM dist cannot be loaded with require(), use jiti on source instead
+          // jiti can handle ESM TypeScript source and shares module cache with gateway
+          console.log(
+            `[plugins] ${record.id}: dist is ESM (type="module"), using TypeScript source via jiti`,
+          );
+          mod = jiti(moduleSource) as OpenClawPluginModule;
+        } else {
+          // CommonJS dist can be loaded with native require()
+          console.log(
+            `[plugins] ${record.id}: using pre-built ${distIndexJs} via native require()`,
+          );
+          logger.debug?.(`[plugins] ${record.id}: using pre-built ${distIndexJs}`);
+          // Use native require() for pre-built JS to avoid jiti creating separate module instances
+          const nodeRequire = createRequire(import.meta.url);
+          mod = nodeRequire(distIndexJs) as OpenClawPluginModule;
+        }
+      } else {
+        console.log(
+          `[plugins] ${record.id}: dist/index.js not found, using TypeScript source via jiti`,
+        );
+        mod = jiti(moduleSource) as OpenClawPluginModule;
+      }
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";

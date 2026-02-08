@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "isolatedModules": true
+  },
+  "include": ["index.ts", "src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

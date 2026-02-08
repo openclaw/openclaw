@@ -3,6 +3,11 @@
   "version": "2026.2.6-3",
   "description": "OpenClaw diagnostics OpenTelemetry exporter",
   "type": "module",
+  "main": "index.ts",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.211.0",
@@ -17,7 +22,8 @@
     "@opentelemetry/semantic-conventions": "^1.39.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "openclaw": "workspace:*",
+    "typescript": "^5.7.2"
   },
   "openclaw": {
     "extensions": [

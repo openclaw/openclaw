@@ -14,6 +14,10 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   channel?: string;
   provider?: string;
   model?: string;
+  /** User's input prompt/message text. */
+  prompt?: string;
+  /** Assistant's response/completion text. */
+  completion?: string;
   usage: {
     input?: number;
     output?: number;
@@ -146,8 +150,22 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
-let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+// Use global singleton registry to avoid dual-package hazard
+// When tsdown bundles multiple entry points, diagnostic-events code gets duplicated
+// Using globalThis ensures both bundled core and jiti-loaded plugins share the same registry
+declare global {
+  var __openclawDiagnosticListeners: Set<(evt: DiagnosticEventPayload) => void> | undefined;
+  var __openclawDiagnosticSeq: number | undefined;
+}
+
+if (!globalThis.__openclawDiagnosticListeners) {
+  globalThis.__openclawDiagnosticListeners = new Set<(evt: DiagnosticEventPayload) => void>();
+}
+if (globalThis.__openclawDiagnosticSeq === undefined) {
+  globalThis.__openclawDiagnosticSeq = 0;
+}
+
+const listeners = globalThis.__openclawDiagnosticListeners;
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
@@ -156,7 +174,7 @@ export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   const enriched = {
     ...event,
-    seq: (seq += 1),
+    seq: (globalThis.__openclawDiagnosticSeq! += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
   for (const listener of listeners) {
@@ -174,6 +192,6 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  seq = 0;
+  globalThis.__openclawDiagnosticSeq = 0;
   listeners.clear();
 }

@@ -21,10 +21,23 @@ COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts ./scripts
 
+# Copy extension package.json files for dependency resolution
+# NOTE: If lockfile is out of sync, run 'pnpm install' locally and commit updated pnpm-lock.yaml
+COPY extensions/ ./extensions/
+
 RUN pnpm install --frozen-lockfile
 
 COPY . .
 RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+
+# Build all extensions (K8s-native: pre-compile plugins)
+# This ensures plugins use the same compiled modules as the gateway (avoids dual-package hazard)
+RUN for ext in extensions/*/; do \
+      if [ -f "$ext/package.json" ] && grep -q '"build"' "$ext/package.json"; then \
+        echo "Building extension: $ext"; \
+        (cd "$ext" && pnpm build) || true; \
+      fi; \
+    done
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
@@ -37,6 +50,13 @@ RUN chown -R node:node /app
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
+
+# Create .openclaw directory with proper permissions (arbitrary UID)
+# Runs containers with random UIDs in the root group (GID 0)
+RUN mkdir -p /home/node/.openclaw/workspace && \
+    chown -R node:0 /home/node/.openclaw && \
+    chmod -R g=u /home/node/.openclaw
+
 USER node
 
 # Start gateway server with default config.

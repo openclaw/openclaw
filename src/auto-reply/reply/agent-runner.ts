@@ -440,6 +440,14 @@ export async function runReplyAgent(params: {
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
+
+      // Extract prompt and completion for MLflow Input/Output columns
+      const prompt = typeof followupRun.prompt === "string" ? followupRun.prompt : "";
+      const completion = replyPayloads
+        .map((p) => (typeof p.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join("\n");
+
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
@@ -447,6 +455,8 @@ export async function runReplyAgent(params: {
         channel: replyToChannel,
         provider: providerUsed,
         model: modelUsed,
+        prompt,
+        completion,
         usage: {
           input,
           output,
