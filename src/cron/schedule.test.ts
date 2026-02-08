@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeNextRunAtMs } from "./schedule.js";
 
 describe("cron schedule", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("computes next run for cron expression with timezone", () => {
     // Saturday, Dec 13 2025 00:00:00Z
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(nowMs));
     const next = computeNextRunAtMs(
       { kind: "cron", expr: "0 9 * * 3", tz: "America/Los_Angeles" },
       nowMs,

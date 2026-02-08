@@ -5,13 +5,20 @@ import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  resolveGatewayMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -183,6 +190,43 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
 }
 
+type BroadcastMessage = Record<string, unknown> & { command?: boolean };
+
+function extractMessageText(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  const getStringValue = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  };
+  const textFromField = getStringValue(entry.text) ?? getStringValue(entry.content);
+  if (textFromField) {
+    return textFromField;
+  }
+  if (Array.isArray(entry.content)) {
+    for (const part of entry.content) {
+      if (!part || typeof part !== "object") {
+        continue;
+      }
+      const candidate = getStringValue((part as Record<string, unknown>).text);
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function isHeartbeatAckMessage(message: unknown, ackCandidates: Set<string>): boolean {
+  const text = extractMessageText(message);
+  return text !== null && ackCandidates.has(text);
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -201,6 +245,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       limit?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -211,13 +256,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+
+    const deliveryContext = deliveryContextFromSession(entry);
+    const rawChannel = deliveryContext?.channel ?? entry?.channel ?? entry?.lastChannel;
+    const resolvedChannel = resolveGatewayMessageChannel(rawChannel) ?? INTERNAL_MESSAGE_CHANNEL;
+    const sessionAccountId = deliveryContext?.accountId ?? entry?.lastAccountId;
+
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
       if (configured) {
         thinkingLevel = configured;
       } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
         const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({
@@ -229,10 +279,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
+    const visibility = resolveHeartbeatVisibility({
+      cfg,
+      channel: resolvedChannel,
+      accountId: sessionAccountId,
+    });
+    const { responsePrefix } = resolveEffectiveMessagesConfig(cfg, sessionAgentId, {
+      channel: resolvedChannel,
+      accountId: sessionAccountId,
+    });
+    const heartbeatOkText = responsePrefix
+      ? `${responsePrefix} ${HEARTBEAT_TOKEN}`
+      : HEARTBEAT_TOKEN;
+    const trimmedHeartbeatOkText = heartbeatOkText.trim();
+    const ackCandidates = new Set<string>();
+    ackCandidates.add(HEARTBEAT_TOKEN);
+    if (trimmedHeartbeatOkText) {
+      ackCandidates.add(trimmedHeartbeatOkText);
+    }
+    const resultMessages = visibility.showOk
+      ? capped
+      : capped.filter((message) => !isHeartbeatAckMessage(message, ackCandidates));
+
     respond(true, {
       sessionKey,
       sessionId,
-      messages: capped,
+      messages: resultMessages,
       thinkingLevel,
       verboseLevel,
     });
@@ -523,14 +596,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
+        .then(async () => {
+          await dispatcher.waitForIdle();
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
-            let message: Record<string, unknown> | undefined;
+            let message: BroadcastMessage | undefined;
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
                 p.sessionKey,
@@ -558,6 +632,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                   usage: { input: 0, output: 0, totalTokens: 0 },
                 };
               }
+            } else {
+              // Command had no output text (unlikely for /context list but possible)
+              message = {
+                role: "assistant",
+                content: [{ type: "text", text: "" }],
+                timestamp: Date.now(),
+                stopReason: "injected",
+              };
+            }
+            if (message) {
+              message.command = true;
             }
             broadcastChatFinal({
               context,

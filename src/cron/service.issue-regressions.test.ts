@@ -1,3 +1,4 @@
+import { Cron } from "croner";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -341,6 +342,65 @@ describe("Cron issue regressions", () => {
     expect(secondDone?.state.lastDurationMs).toBe(20);
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
 
+    await store.cleanup();
+  });
+
+  it("does not jump cron nextRunAtMs to the next day on restart", async () => {
+    const store = await makeStorePath();
+    const nowMs = Date.parse("2026-02-06T08:05:00.000Z");
+    const expectedNextRunAtMs = Date.parse("2026-02-06T09:00:00.000Z");
+    vi.setSystemTime(new Date(nowMs));
+
+    const nextRunSpy = vi.spyOn(Cron.prototype, "nextRun").mockImplementation(() => {
+      return new Date(expectedNextRunAtMs);
+    });
+
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "restart-no-day-jump",
+              name: "restart-no-day-jump",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-06T08:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-06T08:00:00.000Z"),
+              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "restart check" },
+              state: { nextRunAtMs: expectedNextRunAtMs },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const job = jobs.find((entry) => entry.id === "restart-no-day-jump");
+
+    expect(job?.state.nextRunAtMs).toBe(expectedNextRunAtMs);
+    expect(nextRunSpy).toHaveBeenCalled();
+    expect(nextRunSpy.mock.calls.every((call) => call.length === 1)).toBe(true);
+    expect(nextRunSpy.mock.calls.every((call) => call[0] instanceof Date)).toBe(true);
+
+    cron.stop();
+    nextRunSpy.mockRestore();
     await store.cleanup();
   });
 });

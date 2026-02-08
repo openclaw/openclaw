@@ -421,7 +421,6 @@ export async function updateLastRoute(params: {
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
-    const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -448,17 +447,21 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const next: SessionEntry = {
+      ...existing,
+      ...metaPatch,
+      ...basePatch,
+      sessionId: existing?.sessionId ?? crypto.randomUUID(),
+      // Route metadata writes must not refresh session freshness timestamps.
+      // If the session is being created for the first time, use current time.
+      updatedAt: existing?.updatedAt ?? Date.now(),
+    };
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
     return next;

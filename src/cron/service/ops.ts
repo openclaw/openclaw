@@ -8,6 +8,7 @@ import {
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
+  refreshCronNextRuns,
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
@@ -31,6 +32,7 @@ export async function start(state: CronServiceState) {
       }
     }
     await runMissedJobs(state);
+    refreshCronNextRuns(state);
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);

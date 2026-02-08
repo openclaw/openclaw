@@ -547,7 +547,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
 // module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
-const DEFAULT_CONFIG_CACHE_MS = 200;
+const DEFAULT_CONFIG_CACHE_MS = 5000;
 let configCache: {
   configPath: string;
   expiresAt: number;

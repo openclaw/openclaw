@@ -134,6 +134,29 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
   return changed;
 }
 
+export function refreshCronNextRuns(state: CronServiceState): boolean {
+  if (!state.store) {
+    return false;
+  }
+  const now = state.deps.nowMs();
+  let changed = false;
+  for (const job of state.store.jobs) {
+    if (!job.enabled || job.schedule.kind !== "cron") {
+      continue;
+    }
+    if (!job.state) {
+      job.state = {};
+      changed = true;
+    }
+    const next = computeJobNextRunAtMs(job, now);
+    if (job.state.nextRunAtMs !== next) {
+      job.state.nextRunAtMs = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
   const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
