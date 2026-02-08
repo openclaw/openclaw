@@ -168,7 +168,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       sessionFile: params.sessionEntry?.sessionFile,
       config: params.cfg,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      days: 30,
+      config: params.cfg,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -195,7 +198,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
     return {
       shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+      reply: {
+        text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`,
+      },
     };
   }
 
@@ -256,8 +261,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  const avoidSigusr1 = process.platform === "win32";
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
-  if (hasSigusr1Listener) {
+  if (hasSigusr1Listener && !avoidSigusr1) {
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -344,7 +350,10 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {

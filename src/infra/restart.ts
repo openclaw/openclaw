@@ -1,12 +1,16 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveGatewayStateDir } from "../daemon/paths.js";
 
 export type RestartAttempt = {
   ok: boolean;
-  method: "launchctl" | "systemd" | "supervisor";
+  method: "launchctl" | "systemd" | "supervisor" | "schtasks";
   detail?: string;
   tried?: string[];
 };
@@ -109,6 +113,43 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
   const tried: string[] = [];
   if (process.platform !== "darwin") {
+    if (process.platform === "win32") {
+      const taskName = resolveGatewayWindowsTaskName(process.env.OPENCLAW_PROFILE);
+      const pid = process.pid;
+
+      // Chain commands: wait -> stop task -> kill node -> kill wrapper cmd -> start task
+      // We use '&' to ensure execution continues even if one step fails (e.g. at kill)
+      const commands = [
+        "timeout /t 2 /nobreak >nul",
+        `schtasks /End /TN "${taskName}"`,
+        `taskkill /F /PID ${pid}`,
+        `taskkill /F /IM cmd.exe /FI "WINDOWTITLE eq ${taskName}*"`,
+        `schtasks /Run /TN "${taskName}"`,
+      ];
+      const commandLine = commands.join(" & ");
+
+      try {
+        const child = spawn("cmd.exe", ["/C", commandLine], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.unref();
+
+        return {
+          ok: true,
+          method: "schtasks",
+          tried: ["cmd.exe restart chain"],
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          method: "schtasks",
+          detail: err instanceof Error ? err.message : String(err),
+          tried: ["cmd.exe restart chain"],
+        };
+      }
+    }
     if (process.platform === "linux") {
       const unit = normalizeSystemdUnit(
         process.env.OPENCLAW_SYSTEMD_UNIT,
