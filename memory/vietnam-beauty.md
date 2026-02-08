@@ -575,13 +575,45 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ---
 
+### 2026-02-08 — Google UCP (Universal Commerce Protocol) 통합
+- [x] **A012 — Google UCP 서베이 및 분석** 
+  - UCP 기술 분석 (Discovery, Capabilities, Payment, Transport)
+  - MAIBEAUTY 적용 분석 (기존 인프라 매핑, 경쟁 우위, 리스크)
+  - 베트남 시장 특수 고려 (MoMo/VNPay, 얼리 어답터 전략)
+- [x] **D022 — UCP 통합 설계**
+  - Phase 1~3 아키텍처 설계
+  - UCP 스키마 매핑 (Product → UCP Product)
+  - 엔드포인트 설계 + 테스트 계획
+- [x] **UCP Phase 1 구현 + 배포** (`dfec940`)
+  - `/.well-known/ucp` Discovery 매니페스트 — ✅ 200
+  - `/ucp/v1/products` 상품 목록 — ✅ 200 (7개 상품)
+  - `/ucp/v1/products/{id}` 상품 상세 — ✅ 200
+  - `/ucp/v1/products/search` 키워드 검색 — ✅ Ready
+  - Railway 배포 검증 완료
+- [x] **I031 — UCP Phase 1 구현 기록** (`e58291c`)
+- [x] **STATUS 업데이트** (`1982d09`)
+
+### UCP 엔드포인트 (2026-02-08 추가)
+| 엔드포인트 | 설명 | 인증 |
+|-----------|------|------|
+| `GET /.well-known/ucp` | UCP Discovery 매니페스트 | 없음 (공개) |
+| `GET /ucp/v1/products` | 상품 목록 (필터/페이지네이션) | 없음 (공개) |
+| `GET /ucp/v1/products/{id}` | 상품 상세 | 없음 (공개) |
+| `POST /ucp/v1/products/search` | 자연어 검색 | 없음 (공개) |
+
+### UCP 다음 단계
+- [ ] **Phase 2**: Checkout + Payment Handler + 재고 동기화 (1주)
+- [ ] **Phase 3**: Merchant Center + Business Agent + Direct Offers (1~2주)
+
+---
+
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `de06981 feat(ucp): Phase 2 — checkout, payment, orders, events (02-08)`
 - `1982d09 docs(STATUS): add UCP Phase 1 to development overview — architecture, integrations, doc index, next steps (02-08)`
 - `e58291c docs(I031): UCP Phase 1 implementation record — task-by-task details, schema mapping, deployment verification (02-08)`
 - `dfec940 feat(ucp): Phase 1 — UCP Discovery + Product Catalog integration (02-08)`
 - `e89b750 docs: T021 Worker E2E test — DERMAEL mask full pipeline verification (02-07)`
-- `eece16c docs: T020 Phase A+B deploy verification (6/6 PASS) + STATUS update (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
