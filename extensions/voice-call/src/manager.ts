@@ -279,6 +279,19 @@ export class CallManager {
           await this.endCall(call.callId);
         }
       }, delaySec * 1000);
+    } else if (call.direction === "inbound" && call.providerCallId) {
+      // For inbound conversation calls, start listening after the greeting
+      console.log(`[voice-call] Inbound conversation: starting transcription for ${call.callId}`);
+      try {
+        await this.provider?.startListening({
+          callId: call.callId,
+          providerCallId: call.providerCallId,
+        });
+        call.state = "listening";
+        this.persistCallRecord(call);
+      } catch (err) {
+        console.warn(`[voice-call] Failed to start listening: ${err}`);
+      }
     }
   }
 
@@ -494,7 +507,7 @@ export class CallManager {
   }
 
   /**
-   * Create a call record for an inbound call.
+   * Create a call record for an inbound call and answer it.
    */
   private createInboundCall(providerCallId: string, from: string, to: string): CallRecord {
     const callId = crypto.randomUUID();
@@ -520,6 +533,25 @@ export class CallManager {
     this.persistCallRecord(callRecord);
 
     console.log(`[voice-call] Created inbound call record: ${callId} from ${from}`);
+
+    // Answer the call if the provider supports it (e.g., Telnyx requires explicit answer)
+    if (this.provider?.answerCall) {
+      this.provider
+        .answerCall({
+          callId,
+          providerCallId,
+          webhookUrl: this.webhookUrl ?? undefined,
+        })
+        .then((answered) => {
+          if (answered) {
+            console.log(`[voice-call] Answered inbound call: ${callId}`);
+          }
+        })
+        .catch((err) => {
+          console.error(`[voice-call] Failed to answer inbound call ${callId}:`, err);
+        });
+    }
+
     return callRecord;
   }
 

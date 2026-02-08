@@ -1,4 +1,5 @@
 import type {
+  AnswerCallInput,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -43,6 +44,13 @@ export interface VoiceCallProvider {
    * @returns Provider call ID and status
    */
   initiateCall(input: InitiateCallInput): Promise<InitiateCallResult>;
+
+  /**
+   * Answer an inbound call.
+   * Not all providers require this (e.g., Twilio answers via TwiML response).
+   * Returns true if the provider answered the call, false if not supported.
+   */
+  answerCall?(input: AnswerCallInput): Promise<boolean>;
 
   /**
    * Hang up an active call.

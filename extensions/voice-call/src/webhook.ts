@@ -278,6 +278,16 @@ export class VoiceCallWebhookServer {
     for (const event of result.events) {
       try {
         this.manager.processEvent(event);
+
+        // Auto-respond to inbound speech events (for providers without media streaming)
+        if (event.type === "call.speech" && event.isFinal && event.transcript) {
+          const call = this.manager.getCall(event.callId);
+          if (call?.direction === "inbound") {
+            this.handleInboundResponse(event.callId, event.transcript).catch((err) => {
+              console.warn(`[voice-call] Auto-response error:`, err);
+            });
+          }
+        }
       } catch (err) {
         console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }
