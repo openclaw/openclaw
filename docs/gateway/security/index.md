@@ -227,6 +227,25 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot _inside_ a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
+  - **Dual behavior of `groups` config (when `groupPolicy: "allowlist"`):**
+    - **With specific group JID entries:** the `groups` keys act as a **group JID allowlist** — only those groups are allowed, but **anyone** in an approved group can chat. `groupAllowFrom` then only controls **slash command authorization** (e.g., `/activation`, `/config`), not regular message access.
+    - **Without group entries (or only `"*"`):** falls back to the legacy behavior where `groupAllowFrom` gates all message access (sender-based filtering).
+    - Example — approved groups, open chat, owner-only commands:
+      ```json
+      {
+        "channels": {
+          "whatsapp": {
+            "groupPolicy": "allowlist",
+            "groupAllowFrom": ["+16164259884"],
+            "groups": {
+              "group1@g.us": { "requireMention": false },
+              "group2@g.us": { "requireMention": true }
+            }
+          }
+        }
+      }
+      ```
+      Only `group1@g.us` and `group2@g.us` are allowed. Anyone in those groups can chat. Only `+16164259884` can use slash commands.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)

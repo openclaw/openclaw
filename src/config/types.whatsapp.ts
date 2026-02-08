@@ -52,7 +52,10 @@ export type WhatsAppConfig = {
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   * - "allowlist": when `groups` config is present, only allow messages from
+   *   listed group JIDs (anyone in those groups can chat); when `groups` is not
+   *   configured, falls back to sender-based filtering via groupAllowFrom/allowFrom.
+   *   Slash-command authorization is always controlled separately by groupAllowFrom.
    */
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */

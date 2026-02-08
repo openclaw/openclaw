@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { resolveChannelGroupPolicy } from "../../config/group-policy.js";
 import { logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -77,7 +78,10 @@ export async function checkInboundAccessControl(params: {
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
   // - "disabled": block all group messages entirely
-  // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+  // - "allowlist": when a `groups` config maps group JIDs, only those groups are
+  //   accepted (any participant can chat); otherwise falls back to sender-based
+  //   filtering via groupAllowFrom/allowFrom. Command authorization still uses
+  //   groupAllowFrom regardless.
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "open";
   if (params.group && groupPolicy === "disabled") {
@@ -90,28 +94,55 @@ export async function checkInboundAccessControl(params: {
     };
   }
   if (params.group && groupPolicy === "allowlist") {
-    if (!groupAllowFrom || groupAllowFrom.length === 0) {
-      logVerbose("Blocked group message (groupPolicy: allowlist, no groupAllowFrom)");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
-    }
-    const senderAllowed =
-      groupHasWildcard ||
-      (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
-    if (!senderAllowed) {
-      logVerbose(
-        `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
-      );
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
+    // When a `groups` config is present (group JID allowlist), use it to gate
+    // group access instead of filtering by sender.  This lets any participant in
+    // an approved group chat while keeping unapproved groups blocked.
+    // `groupAllowFrom` is still used downstream for command authorization.
+    const groupJidPolicy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: params.remoteJid,
+      accountId: params.accountId,
+    });
+    if (groupJidPolicy.allowlistEnabled) {
+      if (!groupJidPolicy.allowed) {
+        logVerbose(
+          `Blocked group message from ${params.remoteJid} (groupPolicy: allowlist, group not in groups allowlist)`,
+        );
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      // Group is in the allowlist — allow the message through regardless of sender.
+      // Command authorization is handled separately by resolveWhatsAppCommandAuthorized.
+    } else {
+      // No `groups` config — fall back to legacy sender-based filtering.
+      if (!groupAllowFrom || groupAllowFrom.length === 0) {
+        logVerbose("Blocked group message (groupPolicy: allowlist, no groupAllowFrom)");
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
+      const senderAllowed =
+        groupHasWildcard ||
+        (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
+      if (!senderAllowed) {
+        logVerbose(
+          `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
+        );
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat,
+          resolvedAccountId: account.accountId,
+        };
+      }
     }
   }
 

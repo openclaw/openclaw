@@ -128,7 +128,13 @@ export function resolveChannelGroupPolicy(params: {
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
-  const allowlistEnabled = Boolean(groups && Object.keys(groups).length > 0);
+  // Only enable allowlist when groupPolicy is explicitly "allowlist".
+  // This allows explicit group configs (e.g., requireMention) to coexist
+  // with groupPolicy: "open" without creating an implicit allowlist.
+  const chCfg = cfg.channels?.[channel];
+  const groupPolicy = (chCfg as Record<string, unknown> | undefined)?.groupPolicy ?? "open";
+  const allowlistEnabled =
+    groupPolicy === "allowlist" && Boolean(groups && Object.keys(groups).length > 0);
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId && groups ? groups[normalizedId] : undefined;
   const defaultConfig = groups?.["*"];

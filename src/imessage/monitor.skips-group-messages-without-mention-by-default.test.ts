@@ -207,6 +207,7 @@ describe("monitorIMessageProvider", () => {
         ...config.channels,
         imessage: {
           ...config.channels?.imessage,
+          groupPolicy: "allowlist",
           groups: { "99": { requireMention: false } },
         },
       },
@@ -245,6 +246,7 @@ describe("monitorIMessageProvider", () => {
           ...config.channels?.imessage,
           dmPolicy: "open",
           allowFrom: ["*"],
+          groupPolicy: "allowlist",
           groups: { "2": { requireMention: false } },
         },
       },

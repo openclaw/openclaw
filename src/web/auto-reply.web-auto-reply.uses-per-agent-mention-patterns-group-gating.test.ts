@@ -246,6 +246,7 @@ describe("web auto-reply", () => {
       channels: {
         whatsapp: {
           allowFrom: ["*"],
+          groupPolicy: "allowlist",
           groups: { "999@g.us": { requireMention: false } },
         },
       },

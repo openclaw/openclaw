@@ -223,6 +223,10 @@ The wizard uses it to set your **allowlist/owner** so your own DMs are permitted
 
 - Groups map to `agent:<agentId>:whatsapp:group:<jid>` sessions.
 - Group policy: `channels.whatsapp.groupPolicy = open|disabled|allowlist` (default `allowlist`).
+
+  > ⚠️ **`groupAllowFrom` is a sender filter, not a group filter.** It controls which phone numbers can run slash commands (like `/activation`, `/config`) in groups. To control which groups are allowed, use the `groups` config with group JIDs as keys.
+
+- When `groupPolicy: "allowlist"` and `channels.whatsapp.groups` has specific group JID entries, those JIDs act as a **group allowlist** — only listed groups are allowed, but anyone in an approved group can chat. `groupAllowFrom` then only gates **slash command authorization** (e.g., `/activation`, `/config`). When no `groups` entries exist, `groupAllowFrom` gates all message access (legacy behavior).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
@@ -360,7 +364,7 @@ WhatsApp sends audio as **voice notes** (PTT bubble).
 - `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
 - `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
 - `channels.whatsapp.accounts.<accountId>.ackReaction` (per-account ack reaction override).
-- `channels.whatsapp.groupAllowFrom` (group sender allowlist).
+- `channels.whatsapp.groupAllowFrom` (group **sender** allowlist — filters who can run slash commands in groups, not which groups are allowed. Use `channels.whatsapp.groups` to allowlist specific groups by JID).
 - `channels.whatsapp.groupPolicy` (group policy).
 - `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
 - `channels.whatsapp.dmHistoryLimit` (DM history limit in user turns). Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`.

@@ -31,8 +31,12 @@ Quick flow (what happens to a group message):
 
 ```
 groupPolicy? disabled -> drop
-groupPolicy? allowlist -> group allowed? no -> drop
+groupPolicy? allowlist ->
+  groups config has entries? ->
+    yes -> group JID in groups? no -> drop
+    no  -> sender in groupAllowFrom? no -> drop
 requireMention? yes -> mentioned? no -> store for context only
+is slash command? -> sender in groupAllowFrom? no -> reject command
 otherwise -> reply
 ```
 
@@ -126,6 +130,8 @@ Related:
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
 ## Group policy
+
+> ⚠️ **Common mistake:** `groupAllowFrom` expects **phone numbers** (e.g., `"+15551234567"`), not group JIDs. To allowlist specific groups, use the `groups` config with group JIDs as keys (e.g., `"my-group@g.us": {}`). Putting a group JID in `groupAllowFrom` will silently fail to match anything.
 
 Control how group/room messages are handled per channel:
 
@@ -341,6 +347,29 @@ Common intents (copy/paste):
   },
 }
 ```
+
+5. Approved groups + anyone chats + only owner runs slash commands
+
+When `groupPolicy: "allowlist"` and `groups` has specific group JID entries (not just `"*"`), the group JIDs act as a **group allowlist**: only those groups are allowed, but **anyone** in an approved group can chat. `groupAllowFrom` then only controls who can run **slash commands** (like `/activation`, `/config`, etc.) — it no longer gates regular messages.
+
+When no `groups` entries exist (or only `"*"` is present), it falls back to the old behavior where `groupAllowFrom` gates all message access.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+16164259884"],
+      groups: {
+        "group1@g.us": { requireMention: false },
+        "group2@g.us": { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+In this example: only `group1@g.us` and `group2@g.us` are allowed. Anyone in those groups can chat with the bot (subject to mention gating). Only `+16164259884` can use slash commands like `/activation`.
 
 ## Activation (owner-only)
 
