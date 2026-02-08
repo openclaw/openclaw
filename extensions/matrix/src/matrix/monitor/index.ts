@@ -147,7 +147,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         continue;
       }
       const cleaned = normalizeRoomEntry(trimmed);
-      if ((cleaned.startsWith("!") || cleaned.startsWith("#")) && cleaned.includes(":")) {
+      if (cleaned.startsWith("!") || (cleaned.startsWith("#") && cleaned.includes(":"))) {
         if (!nextRooms[cleaned]) {
           nextRooms[cleaned] = roomConfig;
         }
