@@ -9,7 +9,7 @@ function createRun(params: {
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
-  originatingThreadId?: number;
+  originatingThreadId?: number | string;
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -282,5 +282,124 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("collects when channel+destination+string threadId match (Slack thread_ts)", async () => {
+    const key = `test-collect-slack-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770474140.187459",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770474140.187459",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.originatingChannel).toBe("slack");
+    expect(calls[0]?.originatingThreadId).toBe("1770474140.187459");
+  });
+
+  it("does not collect when string threadIds differ (different Slack threads)", async () => {
+    const key = `test-collect-diff-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770474140.187459",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "1770474999.999999",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls[0]?.prompt).toBe("one");
+    expect(calls[1]?.prompt).toBe("two");
+  });
+
+  it("treats empty string threadId same as absent (no thread key)", async () => {
+    const key = `test-collect-empty-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+        originatingThreadId: "",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 });
