@@ -137,12 +137,15 @@ export function redactConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSn
   const redactedConfig = redactConfigObject(snapshot.config);
   const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config) : null;
   const redactedParsed = snapshot.parsed ? redactConfigObject(snapshot.parsed) : snapshot.parsed;
+  // Also redact the resolved config (contains values after ${ENV} substitution)
+  const redactedResolved = redactConfigObject(snapshot.resolved);
 
   return {
     ...snapshot,
     config: redactedConfig,
     raw: redactedRaw,
     parsed: redactedParsed,
+    resolved: redactedResolved,
   };
 }
 

@@ -12,6 +12,7 @@ function makeSnapshot(config: Record<string, unknown>, raw?: string): ConfigFile
     exists: true,
     raw: raw ?? JSON.stringify(config),
     parsed: config,
+    resolved: config as ConfigFileSnapshot["resolved"],
     valid: true,
     config: config as ConfigFileSnapshot["config"],
     hash: "abc123",
@@ -188,12 +189,23 @@ describe("redactConfigSnapshot", () => {
     expect(parsed.channels.discord.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("redacts resolved object as well", () => {
+    const config = {
+      gateway: { auth: { token: "supersecrettoken123456" } },
+    };
+    const snapshot = makeSnapshot(config);
+    const result = redactConfigSnapshot(snapshot);
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+    expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
+  });
+
   it("handles null raw gracefully", () => {
     const snapshot: ConfigFileSnapshot = {
       path: "/test",
       exists: false,
       raw: null,
       parsed: null,
+      resolved: {} as ConfigFileSnapshot["resolved"],
       valid: false,
       config: {} as ConfigFileSnapshot["config"],
       issues: [],
