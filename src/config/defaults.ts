@@ -293,17 +293,32 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
+  const hasSandbox = defaults?.sandbox !== undefined;
   const hasMax =
     typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  if (hasSandbox && hasMax && hasSubMax) {
     return cfg;
   }
 
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
+  if (!hasSandbox) {
+    // Secure-ish baseline: sandbox non-main sessions by default, with no host workspace access
+    // and no outbound network from the sandbox container. This is only applied when the user
+    // has not set any explicit sandbox config.
+    nextDefaults.sandbox = {
+      mode: "non-main",
+      scope: "session",
+      workspaceAccess: "none",
+      docker: {
+        network: "none",
+      },
+    };
+    mutated = true;
+  }
   if (!hasMax) {
     nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
     mutated = true;

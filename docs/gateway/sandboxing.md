@@ -177,9 +177,13 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   agents: {
     defaults: {
       sandbox: {
-        mode: "non-main",
+        // Recommended secure default for new installs:
+        mode: "non-main", // sandbox non-main sessions
         scope: "session",
-        workspaceAccess: "none",
+        workspaceAccess: "none", // no host workspace access by default
+        docker: {
+          network: "none", // no outbound network from sandboxed tool runs
+        },
       },
     },
   },

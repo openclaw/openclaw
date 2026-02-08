@@ -172,7 +172,17 @@ Split your config into multiple files using the `$include` directive. This is us
 ```json5
 // ~/.openclaw/agents.json5
 {
-  defaults: { sandbox: { mode: "all", scope: "session" } },
+  defaults: {
+    sandbox: {
+      // Recommended secure default for new installs:
+      mode: "non-main", // sandbox non-main sessions (groups/channels) based on session.mainKey="main"
+      scope: "session",
+      workspaceAccess: "none", // no host workspace access by default
+      docker: {
+        network: "none", // no outbound network from sandboxed tool runs
+      },
+    },
+  },
   list: [{ id: "main", workspace: "~/.openclaw/workspace" }],
 }
 ```
