@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/tool-response-limiter",
+  "version": "2026.2.6",
+  "description": "OpenClaw plugin to limit tool response sizes before persistence",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./tool-response-limiter.ts"
+    ]
+  }
+}
