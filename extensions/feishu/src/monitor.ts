@@ -60,21 +60,21 @@ async function monitorSingleAccount(params: {
   const chatHistories = new Map<string, HistoryEntry[]>();
   const eventDispatcher = createEventDispatcher(account);
 
+  // Note: We intentionally don't await handleFeishuMessage to let the SDK send ack immediately.
+  // This prevents Feishu from redelivering the message due to timeout during long AI generation.
   eventDispatcher.register({
-    "im.message.receive_v1": async (data) => {
-      try {
-        const event = data as unknown as FeishuMessageEvent;
-        await handleFeishuMessage({
-          cfg,
-          event,
-          botOpenId: botOpenIds.get(accountId),
-          runtime,
-          chatHistories,
-          accountId,
-        });
-      } catch (err) {
+    "im.message.receive_v1": (data) => {
+      const event = data as unknown as FeishuMessageEvent;
+      handleFeishuMessage({
+        cfg,
+        event,
+        botOpenId: botOpenIds.get(accountId),
+        runtime,
+        chatHistories,
+        accountId,
+      }).catch((err) => {
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
-      }
+      });
     },
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
