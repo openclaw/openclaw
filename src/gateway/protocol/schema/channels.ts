@@ -93,6 +93,7 @@ export const WebLoginStartParamsSchema = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     verbose: Type.Optional(Type.Boolean()),
     accountId: Type.Optional(Type.String()),
+    phoneNumber: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

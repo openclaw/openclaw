@@ -252,6 +252,7 @@ export function renderApp(state: AppViewState) {
                 whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                 whatsappConnected: state.whatsappLoginConnected,
                 whatsappBusy: state.whatsappBusy,
+                whatsappPairingCode: state.whatsappPairingCode,
                 configSchema: state.configSchema,
                 configSchemaLoading: state.configSchemaLoading,
                 configForm: state.configForm,
@@ -262,6 +263,8 @@ export function renderApp(state: AppViewState) {
                 nostrProfileAccountId: state.nostrProfileAccountId,
                 onRefresh: (probe) => loadChannels(state, probe),
                 onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
+                onWhatsAppPairingCodeStart: (phoneNumber) =>
+                  state.handleWhatsAppPairingCodeStart(phoneNumber),
                 onWhatsAppWait: () => state.handleWhatsAppWait(),
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
                 onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),

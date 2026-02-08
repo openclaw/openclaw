@@ -4,6 +4,7 @@ import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
+  startWhatsAppPairingCode,
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig } from "./controllers/config.ts";
@@ -11,6 +12,11 @@ import { createNostrProfileFormState } from "./views/channels.nostr-profile-form
 
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
+  await loadChannels(host, true);
+}
+
+export async function handleWhatsAppPairingCodeStart(host: OpenClawApp, phoneNumber: string) {
+  await startWhatsAppPairingCode(host, phoneNumber);
   await loadChannels(host, true);
 }
 

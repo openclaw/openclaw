@@ -25,6 +25,7 @@ type ActiveLogin = {
   id: string;
   sock: WaSocket;
   startedAt: number;
+  mode: "qr" | "pairing-code";
   qr?: string;
   qrDataUrl?: string;
   connected: boolean;
@@ -183,6 +184,7 @@ export async function startWebLoginWithQr(
     id: randomUUID(),
     sock,
     startedAt: Date.now(),
+    mode: "qr",
     connected: false,
     waitPromise: Promise.resolve(),
     restartAttempted: false,
@@ -213,6 +215,100 @@ export async function startWebLoginWithQr(
   };
 }
 
+export async function startWebLoginWithPairingCode(opts: {
+  phoneNumber: string;
+  verbose?: boolean;
+  timeoutMs?: number;
+  force?: boolean;
+  accountId?: string;
+  runtime?: RuntimeEnv;
+}): Promise<{ pairingCode?: string; message: string }> {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const hasWeb = await webAuthExists(account.authDir);
+  if (hasWeb && !opts.force) {
+    const selfId = readWebSelfId(account.authDir);
+    const who = selfId.e164 ?? selfId.jid ?? "unknown";
+    return {
+      message: `WhatsApp is already linked (${who}). Use force to relink.`,
+    };
+  }
+
+  await resetActiveLogin(account.accountId);
+
+  let resolveQr: ((qr: string) => void) | null = null;
+  let rejectQr: ((err: Error) => void) | null = null;
+  const qrPromise = new Promise<string>((resolve, reject) => {
+    resolveQr = resolve;
+    rejectQr = reject;
+  });
+
+  const qrTimer = setTimeout(
+    () => {
+      rejectQr?.(new Error("Timed out waiting for WhatsApp to be ready for pairing"));
+    },
+    Math.max(opts.timeoutMs ?? 30_000, 5000),
+  );
+
+  let sock: WaSocket;
+  try {
+    sock = await createWaSocket(false, Boolean(opts.verbose), {
+      authDir: account.authDir,
+      onQr: (qr: string) => {
+        clearTimeout(qrTimer);
+        resolveQr?.(qr);
+      },
+    });
+  } catch (err) {
+    clearTimeout(qrTimer);
+    await resetActiveLogin(account.accountId);
+    return {
+      message: `Failed to start WhatsApp login: ${String(err)}`,
+    };
+  }
+
+  const login: ActiveLogin = {
+    accountId: account.accountId,
+    authDir: account.authDir,
+    isLegacyAuthDir: account.isLegacyAuthDir,
+    id: randomUUID(),
+    sock,
+    startedAt: Date.now(),
+    mode: "pairing-code",
+    connected: false,
+    waitPromise: Promise.resolve(),
+    restartAttempted: false,
+    verbose: Boolean(opts.verbose),
+  };
+  activeLogins.set(account.accountId, login);
+  attachLoginWaiter(account.accountId, login);
+
+  try {
+    await qrPromise;
+  } catch (err) {
+    clearTimeout(qrTimer);
+    await resetActiveLogin(account.accountId);
+    return {
+      message: `Failed to initialize pairing: ${String(err)}`,
+    };
+  }
+
+  try {
+    const pairingCode = await sock.requestPairingCode(opts.phoneNumber);
+    runtime.log(info(`WhatsApp pairing code: ${pairingCode}`));
+    return {
+      pairingCode,
+      message: `Enter this code in WhatsApp → Linked Devices → Link with phone number: ${pairingCode}`,
+    };
+  } catch (err) {
+    await resetActiveLogin(account.accountId);
+    return {
+      message: `Failed to request pairing code: ${String(err)}`,
+    };
+  }
+}
+
 export async function waitForWebLogin(
   opts: { timeoutMs?: number; runtime?: RuntimeEnv; accountId?: string } = {},
 ): Promise<{ connected: boolean; message: string }> {
@@ -228,22 +324,29 @@ export async function waitForWebLogin(
   }
 
   const login = activeLogin;
+  const isPairingCode = login.mode === "pairing-code";
   if (!isLoginFresh(login)) {
     await resetActiveLogin(account.accountId);
     return {
       connected: false,
-      message: "The login QR expired. Ask me to generate a new one.",
+      message: isPairingCode
+        ? "The pairing code expired. Request a new one."
+        : "The login QR expired. Ask me to generate a new one.",
     };
   }
   const timeoutMs = Math.max(opts.timeoutMs ?? 120_000, 1000);
   const deadline = Date.now() + timeoutMs;
+
+  const waitingMessage = isPairingCode
+    ? "Still waiting for the pairing code to be entered. Enter it in WhatsApp → Linked Devices."
+    : "Still waiting for the QR scan. Let me know when you've scanned it.";
 
   while (true) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: waitingMessage,
       };
     }
     const timeout = new Promise<"timeout">((resolve) =>
@@ -254,7 +357,7 @@ export async function waitForWebLogin(
     if (result === "timeout") {
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: waitingMessage,
       };
     }
 
@@ -265,8 +368,9 @@ export async function waitForWebLogin(
           isLegacyAuthDir: login.isLegacyAuthDir,
           runtime,
         });
-        const message =
-          "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
+        const message = isPairingCode
+          ? "WhatsApp reported the session is logged out. Cleared cached web session; please request a new pairing code."
+          : "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
         await resetActiveLogin(account.accountId, message);
         runtime.log(danger(message));
         return { connected: false, message };

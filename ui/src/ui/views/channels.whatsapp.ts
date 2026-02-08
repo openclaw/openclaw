@@ -78,6 +78,15 @@ export function renderWhatsAppCard(params: {
           : nothing
       }
 
+      ${
+        props.whatsappPairingCode
+          ? html`<div class="callout" style="margin-top: 12px; text-align: center;">
+            <div style="font-size: 0.85em; margin-bottom: 6px;">Enter this code in WhatsApp &rarr; Linked Devices &rarr; Link with phone number</div>
+            <div style="font-size: 2em; font-weight: bold; letter-spacing: 0.15em; font-family: monospace;">${props.whatsappPairingCode}</div>
+          </div>`
+          : nothing
+      }
+
       <div class="row" style="margin-top: 14px; flex-wrap: wrap;">
         <button
           class="btn primary"
@@ -85,6 +94,18 @@ export function renderWhatsAppCard(params: {
           @click=${() => props.onWhatsAppStart(false)}
         >
           ${props.whatsappBusy ? "Working…" : "Show QR"}
+        </button>
+        <button
+          class="btn"
+          ?disabled=${props.whatsappBusy}
+          @click=${() => {
+            const phone = prompt("Enter phone number (E.164 format, e.g. 491234567890):");
+            if (phone?.trim()) {
+              props.onWhatsAppPairingCodeStart(phone.trim());
+            }
+          }}
+        >
+          Pair with Code
         </button>
         <button
           class="btn"

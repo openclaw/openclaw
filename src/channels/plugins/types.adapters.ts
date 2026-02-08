@@ -173,6 +173,11 @@ export type ChannelLoginWithQrWaitResult = {
   message: string;
 };
 
+export type ChannelLoginWithPairingCodeStartResult = {
+  pairingCode?: string;
+  message: string;
+};
+
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -204,6 +209,13 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     accountId?: string;
     timeoutMs?: number;
   }) => Promise<ChannelLoginWithQrWaitResult>;
+  loginWithPairingCodeStart?: (params: {
+    accountId?: string;
+    phoneNumber: string;
+    force?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+  }) => Promise<ChannelLoginWithPairingCodeStartResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };
 

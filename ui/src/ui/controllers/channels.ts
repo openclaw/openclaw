@@ -31,6 +31,7 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
     return;
   }
   state.whatsappBusy = true;
+  state.whatsappPairingCode = null;
   try {
     const res = await state.client.request<{ message?: string; qrDataUrl?: string }>(
       "web.login.start",
@@ -45,6 +46,39 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   } catch (err) {
     state.whatsappLoginMessage = String(err);
     state.whatsappLoginQrDataUrl = null;
+    state.whatsappLoginConnected = null;
+  } finally {
+    state.whatsappBusy = false;
+  }
+}
+
+export async function startWhatsAppPairingCode(
+  state: ChannelsState,
+  phoneNumber: string,
+  force?: boolean,
+) {
+  if (!state.client || !state.connected || state.whatsappBusy) {
+    return;
+  }
+  state.whatsappBusy = true;
+  state.whatsappPairingCode = null;
+  try {
+    const res = await state.client.request<{ message?: string; pairingCode?: string }>(
+      "web.login.start",
+      {
+        phoneNumber,
+        force: force ?? false,
+        timeoutMs: 30000,
+      },
+    );
+    state.whatsappLoginMessage = res.message ?? null;
+    state.whatsappLoginQrDataUrl = null;
+    state.whatsappPairingCode = res.pairingCode ?? null;
+    state.whatsappLoginConnected = null;
+  } catch (err) {
+    state.whatsappLoginMessage = String(err);
+    state.whatsappLoginQrDataUrl = null;
+    state.whatsappPairingCode = null;
     state.whatsappLoginConnected = null;
   } finally {
     state.whatsappBusy = false;
@@ -67,6 +101,7 @@ export async function waitWhatsAppLogin(state: ChannelsState) {
     state.whatsappLoginConnected = res.connected ?? null;
     if (res.connected) {
       state.whatsappLoginQrDataUrl = null;
+      state.whatsappPairingCode = null;
     }
   } catch (err) {
     state.whatsappLoginMessage = String(err);
@@ -85,6 +120,7 @@ export async function logoutWhatsApp(state: ChannelsState) {
     await state.client.request("channels.logout", { channel: "whatsapp" });
     state.whatsappLoginMessage = "Logged out.";
     state.whatsappLoginQrDataUrl = null;
+    state.whatsappPairingCode = null;
     state.whatsappLoginConnected = null;
   } catch (err) {
     state.whatsappLoginMessage = String(err);

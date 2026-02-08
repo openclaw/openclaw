@@ -1531,23 +1531,27 @@ public struct WebLoginStartParams: Codable, Sendable {
     public let timeoutms: Int?
     public let verbose: Bool?
     public let accountid: String?
+    public let phonenumber: String?
 
     public init(
         force: Bool?,
         timeoutms: Int?,
         verbose: Bool?,
-        accountid: String?
+        accountid: String?,
+        phonenumber: String?
     ) {
         self.force = force
         self.timeoutms = timeoutms
         self.verbose = verbose
         self.accountid = accountid
+        self.phonenumber = phonenumber
     }
     private enum CodingKeys: String, CodingKey {
         case force
         case timeoutms = "timeoutMs"
         case verbose
         case accountid = "accountId"
+        case phonenumber = "phoneNumber"
     }
 }
 

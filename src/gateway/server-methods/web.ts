@@ -44,27 +44,56 @@ export const webHandlers: GatewayRequestHandlers = {
         return;
       }
       await context.stopChannel(provider.id, accountId);
-      if (!provider.gateway?.loginWithQrStart) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `web login is not supported by provider ${provider.id}`,
-          ),
-        );
-        return;
+      const phoneNumber =
+        typeof (params as { phoneNumber?: unknown }).phoneNumber === "string"
+          ? (params as { phoneNumber?: string }).phoneNumber
+          : undefined;
+      if (phoneNumber) {
+        if (!provider.gateway?.loginWithPairingCodeStart) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `pairing code login is not supported by provider ${provider.id}`,
+            ),
+          );
+          return;
+        }
+        const result = await provider.gateway.loginWithPairingCodeStart({
+          phoneNumber,
+          force: Boolean((params as { force?: boolean }).force),
+          timeoutMs:
+            typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
+              ? (params as { timeoutMs?: number }).timeoutMs
+              : undefined,
+          verbose: Boolean((params as { verbose?: boolean }).verbose),
+          accountId,
+        });
+        respond(true, result, undefined);
+      } else {
+        if (!provider.gateway?.loginWithQrStart) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `web login is not supported by provider ${provider.id}`,
+            ),
+          );
+          return;
+        }
+        const result = await provider.gateway.loginWithQrStart({
+          force: Boolean((params as { force?: boolean }).force),
+          timeoutMs:
+            typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
+              ? (params as { timeoutMs?: number }).timeoutMs
+              : undefined,
+          verbose: Boolean((params as { verbose?: boolean }).verbose),
+          accountId,
+        });
+        respond(true, result, undefined);
       }
-      const result = await provider.gateway.loginWithQrStart({
-        force: Boolean((params as { force?: boolean }).force),
-        timeoutMs:
-          typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (params as { timeoutMs?: number }).timeoutMs
-            : undefined,
-        verbose: Boolean((params as { verbose?: boolean }).verbose),
-        accountId,
-      });
-      respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
