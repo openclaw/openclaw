@@ -11,6 +11,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyStepfunConfig,
+  applyStepfunProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyXaiConfig,
@@ -18,6 +20,7 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
+  STEPFUN_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -299,6 +302,68 @@ describe("applyMinimaxApiProviderConfig", () => {
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
     expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+  });
+});
+
+describe("applyStepfunConfig", () => {
+  it("adds StepFun provider with correct settings", () => {
+    const cfg = applyStepfunConfig({});
+    expect(cfg.models?.providers?.stepfun).toMatchObject({
+      baseUrl: "https://api.stepfun.ai/v1",
+      api: "openai-completions",
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe(STEPFUN_DEFAULT_MODEL_REF);
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyStepfunConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+  });
+});
+
+describe("applyStepfunProviderConfig", () => {
+  it("adds model alias", () => {
+    const cfg = applyStepfunProviderConfig({});
+    expect(cfg.agents?.defaults?.models?.[STEPFUN_DEFAULT_MODEL_REF]?.alias).toBe("Step 3.5");
+  });
+
+  it("merges StepFun models and keeps existing provider overrides", () => {
+    const cfg = applyStepfunProviderConfig({
+      models: {
+        providers: {
+          stepfun: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(cfg.models?.providers?.stepfun?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.stepfun?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.stepfun?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "step-3.5-flash",
+    ]);
   });
 });
 

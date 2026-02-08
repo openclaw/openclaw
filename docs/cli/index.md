@@ -303,7 +303,7 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
-- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip>`
+- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|stepfun-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|xiaomi-api-key|xai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
@@ -312,12 +312,20 @@ Options:
 - `--openai-api-key <key>`
 - `--openrouter-api-key <key>`
 - `--ai-gateway-api-key <key>`
+- `--cloudflare-ai-gateway-account-id <id>`
+- `--cloudflare-ai-gateway-gateway-id <id>`
+- `--cloudflare-ai-gateway-api-key <key>`
 - `--moonshot-api-key <key>`
 - `--kimi-code-api-key <key>`
+- `--stepfun-api-key <key>`
 - `--gemini-api-key <key>`
 - `--zai-api-key <key>`
+- `--xiaomi-api-key <key>`
 - `--minimax-api-key <key>`
+- `--synthetic-api-key <key>`
+- `--venice-api-key <key>`
 - `--opencode-zen-api-key <key>`
+- `--xai-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto|custom>`
 - `--gateway-auth <token|password>`

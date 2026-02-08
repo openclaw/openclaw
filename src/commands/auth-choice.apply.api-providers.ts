@@ -23,6 +23,8 @@ import {
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyMoonshotProviderConfigCn,
+  applyStepfunConfig,
+  applyStepfunProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -41,6 +43,7 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  STEPFUN_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -50,6 +53,7 @@ import {
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
+  setStepfunApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -96,6 +100,8 @@ export async function applyAuthChoiceApiProviders(
       params.opts.tokenProvider === "kimi-coding"
     ) {
       authChoice = "kimi-code-api-key";
+    } else if (params.opts.tokenProvider === "stepfun") {
+      authChoice = "stepfun-api-key";
     } else if (params.opts.tokenProvider === "google") {
       authChoice = "gemini-api-key";
     } else if (params.opts.tokenProvider === "zai") {
@@ -488,6 +494,54 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyKimiCodeConfig,
         applyProviderConfig: applyKimiCodeProviderConfig,
         noteDefault: KIMI_CODING_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "stepfun-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "stepfun") {
+      await setStepfunApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("stepfun");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing STEPFUN_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setStepfunApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter StepFun API key",
+        validate: validateApiKeyInput,
+      });
+      await setStepfunApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "stepfun:default",
+      provider: "stepfun",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: STEPFUN_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyStepfunConfig,
+        applyProviderConfig: applyStepfunProviderConfig,
+        noteDefault: STEPFUN_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

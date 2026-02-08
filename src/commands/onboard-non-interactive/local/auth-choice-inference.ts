@@ -16,6 +16,7 @@ type AuthChoiceFlagOptions = Pick<
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
   | "kimiCodeApiKey"
+  | "stepfunApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
   | "zaiApiKey"
@@ -38,6 +39,7 @@ const AUTH_CHOICE_FLAG_MAP = [
   },
   { flag: "moonshotApiKey", authChoice: "moonshot-api-key", label: "--moonshot-api-key" },
   { flag: "kimiCodeApiKey", authChoice: "kimi-code-api-key", label: "--kimi-code-api-key" },
+  { flag: "stepfunApiKey", authChoice: "stepfun-api-key", label: "--stepfun-api-key" },
   { flag: "syntheticApiKey", authChoice: "synthetic-api-key", label: "--synthetic-api-key" },
   { flag: "veniceApiKey", authChoice: "venice-api-key", label: "--venice-api-key" },
   { flag: "zaiApiKey", authChoice: "zai-api-key", label: "--zai-api-key" },
