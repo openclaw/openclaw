@@ -14,11 +14,7 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   const normalized = provider.trim().toLowerCase();
 
   // Check for exact matches or known prefixes/substrings for reasoning providers
-  if (
-    normalized === "ollama" ||
-    normalized === "google-gemini-cli" ||
-    normalized === "google-generative-ai"
-  ) {
+  if (normalized === "google-gemini-cli" || normalized === "google-generative-ai") {
     return true;
   }
 
