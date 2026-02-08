@@ -183,6 +183,24 @@ export type ExecToolConfig = {
   cleanupMs?: number;
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit?: boolean;
+  /** RubberBand static command pattern detection configuration. */
+  rubberband?: {
+    /** Enable RubberBand command analysis (default: true). */
+    enabled?: boolean;
+    /** Detection mode: block (hard stop), alert (require approval), log (silent), off, shadow (log only). */
+    mode?: "block" | "alert" | "log" | "off" | "shadow";
+    /** Risk score thresholds for alert and block dispositions. */
+    thresholds?: {
+      /** Alert threshold (default: 40). */
+      alert?: number;
+      /** Block threshold (default: 60). */
+      block?: number;
+    };
+    /** Allowed network destinations that don't trigger exfiltration warnings. */
+    allowedDestinations?: string[];
+    /** Notify user channel when commands are blocked/alerted. */
+    notifyChannel?: boolean;
+  };
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

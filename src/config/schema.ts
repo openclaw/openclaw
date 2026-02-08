@@ -181,6 +181,12 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.node": "Exec Node Binding",
   "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.exec.safeBins": "Exec Safe Bins",
+  "tools.exec.rubberband.enabled": "RubberBand Enabled",
+  "tools.exec.rubberband.mode": "RubberBand Mode",
+  "tools.exec.rubberband.thresholds.alert": "RubberBand Alert Threshold",
+  "tools.exec.rubberband.thresholds.block": "RubberBand Block Threshold",
+  "tools.exec.rubberband.allowedDestinations": "RubberBand Allowed Destinations",
+  "tools.exec.rubberband.notifyChannel": "RubberBand Notify User Channel",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
@@ -461,6 +467,16 @@ const FIELD_HELP: Record<string, string> = {
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "tools.exec.rubberband.enabled":
+    "Enable RubberBand static command pattern detection (default: true).",
+  "tools.exec.rubberband.mode":
+    "Detection mode: block (hard stop), alert (require approval), log (silent), off, shadow (log only, no block).",
+  "tools.exec.rubberband.thresholds.alert":
+    "Risk score threshold for ALERT disposition (default: 40). Triggers approval flow.",
+  "tools.exec.rubberband.thresholds.block":
+    "Risk score threshold for BLOCK disposition (default: 60). Hard blocks command.",
+  "tools.exec.rubberband.allowedDestinations":
+    "Allowed network destinations that don't trigger exfiltration warnings (e.g. api.github.com).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
