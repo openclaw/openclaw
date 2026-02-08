@@ -51,6 +51,8 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   capabilities: ChannelCapabilities;
   defaults?: {
     queue?: {
+      /** Default queue mode when config is unset. */
+      mode?: string;
       debounceMs?: number;
     };
   };

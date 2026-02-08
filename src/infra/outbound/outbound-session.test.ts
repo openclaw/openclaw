@@ -113,4 +113,38 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.sessionKey).toBe("agent:main:slack:group:g123");
     expect(route?.from).toBe("slack:group:G123");
   });
+
+  it("builds Zulip topic session keys", async () => {
+    const cfg = {
+      channels: {
+        zulip: {
+          defaultTopic: "general chat",
+        },
+      },
+    } as OpenClawConfig;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg,
+      channel: "zulip",
+      agentId: "main",
+      target: "stream:marcel-ai",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:zulip:channel:marcel-ai:topic:general%20chat");
+    expect(route?.from).toBe("zulip:stream:marcel-ai");
+    expect(route?.to).toBe("stream:marcel-ai#general chat");
+    expect(route?.threadId).toBe("general chat");
+  });
+
+  it("uses Zulip topic names as thread ids", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "zulip",
+      agentId: "main",
+      target: "stream:marcel-ai#deploy-notes",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:zulip:channel:marcel-ai:topic:deploy-notes");
+    expect(route?.threadId).toBe("deploy-notes");
+  });
 });
