@@ -6,7 +6,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 
 const log = createSubsystemLogger("discord/smart-ack");
 
-// Default to Sonnet for triage: fast enough (~3-5s) with strong context understanding.
+// Default to Sonnet via CLI for fast, reliable classification
 const DEFAULT_ACK_MODEL = "sonnet";
 const DEFAULT_ACK_TIMEOUT_MS = 15000;
 

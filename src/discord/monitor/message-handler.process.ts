@@ -131,6 +131,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  // Start typing immediately so the user sees feedback within seconds.
+  // Audio messages already have an early typing loop above; avoid double-firing.
+  if (!hasAudio) {
+    void sendTyping({ rest: client.rest, channelId: message.channelId }).catch((err) => {
+      logVerbose(`discord: early typing failed: ${String(err)}`);
+    });
+  }
+
   // Start job classification in parallel for DMs (uses Haiku for fast topic routing).
   // Runs before smart-ack and dispatch so the result is available when needed.
   const jobsConfig = discordConfig?.jobs;
