@@ -542,3 +542,73 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("gpt-4.1-mini");
   });
 });
+
+describe("runWithModelFallback allowlist interaction", () => {
+  it("includes fallback models even when models allowlist is configured (#5763)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacks: ["openai/gpt-4o", "ollama/llama-3"],
+          },
+          // models allowlist that does NOT include the fallback models
+          models: {
+            "anthropic/claude-sonnet-4": {},
+            "anthropic/claude-opus-4": {},
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // The fallback model should have been attempted despite not being in the allowlist
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4o");
+  });
+
+  it("attempts all fallbacks when primary fails and allowlist would have filtered them", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacks: ["openai/gpt-4o", "ollama/llama-3"],
+          },
+          models: {
+            "anthropic/claude-sonnet-4": {},
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockRejectedValueOnce(Object.assign(new Error("auth failed"), { status: 401 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls[2]?.[0]).toBe("ollama");
+    expect(run.mock.calls[2]?.[1]).toBe("llama-3");
+  });
+});
