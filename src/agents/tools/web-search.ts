@@ -24,7 +24,7 @@ const MAX_SEARCH_COUNT = 10;
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
-const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const DEFAULT_PERPLEXITY_MODEL = "sonar-pro";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
@@ -242,7 +242,7 @@ function resolvePerplexityBaseUrl(
 function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
   const fromConfig =
     perplexity && "model" in perplexity && typeof perplexity.model === "string"
-      ? perplexity.model.trim()
+      ? perplexity.model.trim().replace(/^perplexity\\//, "")
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
 }
