@@ -322,6 +322,11 @@ export async function handleDiscordGuildAction(
       const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
         integer: true,
       });
+      const archived = params.archived as boolean | undefined;
+      const locked = params.locked as boolean | undefined;
+      const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
+        integer: true,
+      });
       const channel = accountId
         ? await editChannelDiscord(
             {
@@ -332,6 +337,9 @@ export async function handleDiscordGuildAction(
               parentId,
               nsfw,
               rateLimitPerUser: rateLimitPerUser ?? undefined,
+              archived,
+              locked,
+              autoArchiveDuration: autoArchiveDuration ?? undefined,
             },
             { accountId },
           )
@@ -343,6 +351,9 @@ export async function handleDiscordGuildAction(
             parentId,
             nsfw,
             rateLimitPerUser: rateLimitPerUser ?? undefined,
+            archived,
+            locked,
+            autoArchiveDuration: autoArchiveDuration ?? undefined,
           });
       return jsonResult({ ok: true, channel });
     }
