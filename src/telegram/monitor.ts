@@ -25,6 +25,8 @@ export type MonitorTelegramOpts = {
   webhookPath?: string;
   webhookPort?: number;
   webhookSecret?: string;
+  /** Webhook handler timeout in milliseconds. Omit to use grammY default (10s). */
+  webhookTimeoutMs?: number;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
 };
@@ -158,6 +160,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         path: opts.webhookPath,
         port: opts.webhookPort,
         secret: opts.webhookSecret,
+        webhookTimeoutMs: opts.webhookTimeoutMs ?? account.config.webhookTimeoutMs,
         runtime: opts.runtime as RuntimeEnv,
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,

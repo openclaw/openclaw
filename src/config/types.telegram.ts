@@ -109,6 +109,8 @@ export type TelegramAccountConfig = {
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
+  /** Webhook handler timeout in milliseconds. Omit to use grammY default (10s). */
+  webhookTimeoutMs?: number;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /**
