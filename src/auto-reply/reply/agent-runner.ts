@@ -211,7 +211,7 @@ export async function runReplyAgent(params: {
     const isGroupChat = sessionCtx.ChatType === "group" || sessionCtx.ChatType === "channel";
     if (enqueued && isGroupChat && shouldFollowup) {
       return {
-        text: "⏳ 收到，当前有任务在处理中；这条我已先排队，处理完会继续回复。",
+        text: "⏳ Got it — another task is in progress. I queued this message and will follow up shortly.",
       };
     }
     return undefined;
