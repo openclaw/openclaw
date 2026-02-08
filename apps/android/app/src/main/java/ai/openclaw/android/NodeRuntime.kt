@@ -143,6 +143,7 @@ class NodeRuntime(context: Context) {
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
+  private val permissionEpoch = MutableStateFlow(0L)
 
   private var lastAutoA2uiUrl: String? = null
   private var operatorConnected = false
@@ -309,10 +310,11 @@ class NodeRuntime(context: Context) {
         isForeground,
         externalAudioCaptureActive,
         wakeWords,
-      ) { mode, foreground, externalAudio, words ->
-        Quad(mode, foreground, externalAudio, words)
+        permissionEpoch,
+      ) { mode, foreground, externalAudio, words, epoch ->
+        Quint(mode, foreground, externalAudio, words, epoch)
       }.distinctUntilChanged()
-        .collect { (mode, foreground, externalAudio, words) ->
+        .collect { (mode, foreground, externalAudio, words, _) ->
           voiceWake.setTriggerWords(words)
 
           val shouldListen =
@@ -390,6 +392,11 @@ class NodeRuntime(context: Context) {
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+  }
+
+  /** Bump permission epoch so voice-wake re-checks runtime permissions. */
+  fun recheckPermissions() {
+    permissionEpoch.value = System.nanoTime()
   }
 
   fun setDisplayName(value: String) {

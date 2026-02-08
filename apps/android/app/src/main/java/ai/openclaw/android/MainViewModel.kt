@@ -68,6 +68,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setForeground(value)
   }
 
+  fun recheckPermissions() {
+    runtime.recheckPermissions()
+  }
+
   fun setDisplayName(value: String) {
     runtime.setDisplayName(value)
   }
