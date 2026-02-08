@@ -176,9 +176,18 @@ export class IMessageRpcClient {
     let parsed: IMessageRpcResponse<unknown>;
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
+    } catch {
+      // The imsg CLI sometimes outputs plain-text error messages to stdout
+      // instead of properly formatted JSON-RPC responses. Handle these gracefully.
+
+      // Truncate the line in error messages to avoid overwhelming logs
+      const maxLength = 200;
+      const truncated =
+        line.length > maxLength
+          ? `${line.slice(0, maxLength)}... (${line.length - maxLength} more chars)`
+          : line;
+
+      this.runtime?.error?.(`imsg rpc: received non-JSON output: ${truncated}`);
       return;
     }
 
