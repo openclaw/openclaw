@@ -28,6 +28,7 @@ import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-c
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
+const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 
 type QmdQueryResult = {
   docid?: string;
@@ -83,6 +84,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
+  private queuedForcedUpdate: Promise<void> | null = null;
+  private queuedForcedRuns = 0;
   private closed = false;
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
@@ -145,7 +148,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {
-      await this.runUpdate("boot", true);
+      const bootRun = this.runUpdate("boot", true);
+      if (this.qmd.update.waitForBootSync) {
+        await bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      } else {
+        void bootRun.catch((err) => {
+          log.warn(`qmd boot update failed: ${String(err)}`);
+        });
+      }
     }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
@@ -172,7 +184,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = new Set<string>();
     try {
-      const result = await this.runQmd(["collection", "list", "--json"]);
+      const result = await this.runQmd(["collection", "list", "--json"], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
       const parsed = JSON.parse(result.stdout) as unknown;
       if (Array.isArray(parsed)) {
         for (const entry of parsed) {
@@ -195,15 +209,20 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       try {
-        await this.runQmd([
-          "collection",
-          "add",
-          collection.path,
-          "--name",
-          collection.name,
-          "--mask",
-          collection.pattern,
-        ]);
+        await this.runQmd(
+          [
+            "collection",
+            "add",
+            collection.path,
+            "--name",
+            collection.name,
+            "--mask",
+            collection.pattern,
+          ],
+          {
+            timeoutMs: this.qmd.update.commandTimeoutMs,
+          },
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Idempotency: qmd exits non-zero if the collection name already exists.
@@ -229,7 +248,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!trimmed) {
       return [];
     }
-    await this.pendingUpdate?.catch(() => undefined);
+    await this.waitForPendingUpdateBeforeSearch();
     const limit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
@@ -368,16 +387,34 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
     }
+    this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
+    await this.queuedForcedUpdate?.catch(() => undefined);
     if (this.db) {
       this.db.close();
       this.db = null;
     }
   }
 
-  private async runUpdate(reason: string, force?: boolean): Promise<void> {
-    if (this.pendingUpdate && !force) {
+  private async runUpdate(
+    reason: string,
+    force?: boolean,
+    opts?: { fromForcedQueue?: boolean },
+  ): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    if (this.pendingUpdate) {
+      if (force) {
+        return this.enqueueForcedUpdate(reason);
+      }
       return this.pendingUpdate;
+    }
+    if (this.queuedForcedUpdate && !opts?.fromForcedQueue) {
+      if (force) {
+        return this.enqueueForcedUpdate(reason);
+      }
+      return this.queuedForcedUpdate;
     }
     if (this.shouldSkipUpdate(force)) {
       return;
@@ -386,7 +423,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.sessionExporter) {
         await this.exportSessions();
       }
-      await this.runQmd(["update"], { timeoutMs: 120_000 });
+      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
       const embedIntervalMs = this.qmd.update.embedIntervalMs;
       const shouldEmbed =
         Boolean(force) ||
@@ -394,7 +431,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
       if (shouldEmbed) {
         try {
-          await this.runQmd(["embed"], { timeoutMs: 120_000 });
+          await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
           this.lastEmbedAt = Date.now();
         } catch (err) {
           log.warn(`qmd embed failed (${reason}): ${String(err)}`);
@@ -407,6 +444,24 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.pendingUpdate = null;
     });
     await this.pendingUpdate;
+  }
+
+  private enqueueForcedUpdate(reason: string): Promise<void> {
+    this.queuedForcedRuns += 1;
+    if (!this.queuedForcedUpdate) {
+      this.queuedForcedUpdate = this.drainForcedUpdates(reason).finally(() => {
+        this.queuedForcedUpdate = null;
+      });
+    }
+    return this.queuedForcedUpdate;
+  }
+
+  private async drainForcedUpdates(reason: string): Promise<void> {
+    await this.pendingUpdate?.catch(() => undefined);
+    while (!this.closed && this.queuedForcedRuns > 0) {
+      this.queuedForcedRuns -= 1;
+      await this.runUpdate(`${reason}:queued`, true, { fromForcedQueue: true });
+    }
   }
 
   private async runQmd(
@@ -457,6 +512,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    // Keep QMD recall responsive when the updater holds a write lock.
+    this.db.exec("PRAGMA busy_timeout = 1");
     return this.db;
   }
 
@@ -530,9 +587,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    const row = db
-      .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
-      .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    let row: { collection: string; path: string } | undefined;
+    try {
+      row = db
+        .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
+        .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+    } catch (err) {
+      if (this.isSqliteBusyError(err)) {
+        log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
+        throw this.createQmdBusyError(err);
+      }
+      throw err;
+    }
     if (!row) {
       return null;
     }
@@ -806,5 +872,27 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return Date.now() - this.lastUpdateAt < debounceMs;
+  }
+
+  private isSqliteBusyError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
+  }
+
+  private createQmdBusyError(err: unknown): Error {
+    const message = err instanceof Error ? err.message : String(err);
+    return new Error(`qmd index busy while reading results: ${message}`);
+  }
+
+  private async waitForPendingUpdateBeforeSearch(): Promise<void> {
+    const pending = this.pendingUpdate;
+    if (!pending) {
+      return;
+    }
+    await Promise.race([
+      pending.catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
+    ]);
   }
 }
