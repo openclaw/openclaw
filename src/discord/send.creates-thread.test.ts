@@ -1,5 +1,5 @@
 import { RateLimitError } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRoleDiscord,
@@ -60,11 +60,60 @@ describe("sendMessageDiscord", () => {
   });
 
   it("creates a thread", async () => {
-    const { rest, postMock } = makeRest();
+    const { rest, getMock, postMock } = makeRest();
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord("chan1", { name: "thread", messageId: "m1" }, { rest, token: "t" });
+    expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1", "m1"),
+      expect.objectContaining({ body: { name: "thread" } }),
+    );
+  });
+
+  it("creates forum threads with an initial message", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "thread",
+          message: { content: "thread" },
+        },
+      }),
+    );
+  });
+
+  it("creates media threads with provided content", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildMedia });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", content: "initial forum post" },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "thread",
+          message: { content: "initial forum post" },
+        },
+      }),
+    );
+  });
+
+  it("falls back when channel lookup is unavailable", async () => {
+    const { rest, getMock, postMock } = makeRest();
+    getMock.mockRejectedValue(new Error("lookup failed"));
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, { rest, token: "t" });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
       expect.objectContaining({ body: { name: "thread" } }),
     );
   });

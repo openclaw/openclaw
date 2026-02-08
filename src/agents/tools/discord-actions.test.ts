@@ -234,6 +234,25 @@ describe("handleDiscordMessagingAction", () => {
       new Date(expectedMs).toISOString(),
     );
   });
+
+  it("forwards optional thread content", async () => {
+    createThreadDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "Forum thread",
+        content: "Initial forum post body",
+      },
+      enableAllActions,
+    );
+    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
+      name: "Forum thread",
+      messageId: undefined,
+      autoArchiveMinutes: undefined,
+      content: "Initial forum post body",
+    });
+  });
 });
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
