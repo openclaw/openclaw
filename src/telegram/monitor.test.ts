@@ -22,7 +22,7 @@ const api = {
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
 };
-const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
+const { initSpy, runSpy, loadConfig, createTelegramBotSpy } = vi.hoisted(() => ({
   initSpy: vi.fn(async () => undefined),
   runSpy: vi.fn(() => ({
     task: () => Promise.resolve(),
@@ -32,6 +32,7 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
     agents: { defaults: { maxConcurrent: 2 } },
     channels: { telegram: {} },
   })),
+  createTelegramBotSpy: vi.fn(),
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
@@ -48,7 +49,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts) => {
+    createTelegramBotSpy(opts);
     handlers.message = async (ctx: MockCtx) => {
       const chatId = ctx.message.chat.id;
       const isGroup = ctx.message.chat.type !== "private";
@@ -99,6 +101,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     runSpy.mockClear();
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
+    createTelegramBotSpy.mockClear();
   });
 
   it("processes a DM and sends reply", async () => {
@@ -140,6 +143,46 @@ describe("monitorTelegramProvider (grammY)", () => {
           retryInterval: "exponential",
         }),
       }),
+    );
+  });
+
+  it("resolves accountId from token override when accountId is missing", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { maxConcurrent: 2 } },
+      channels: {
+        telegram: {
+          accounts: {
+            nigel: { botToken: "tok-nigel" },
+            brainworms: { botToken: "tok-brainworms" },
+          },
+        },
+      },
+    });
+
+    await monitorTelegramProvider({ token: "tok-brainworms" });
+
+    expect(createTelegramBotSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "brainworms" }),
+    );
+  });
+
+  it("matches default token sources when accounts are configured", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { maxConcurrent: 2 } },
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: {
+            brainworms: { botToken: "tok-brainworms" },
+          },
+        },
+      },
+    });
+
+    await monitorTelegramProvider({ token: "tok-default" });
+
+    expect(createTelegramBotSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "default" }),
     );
   });
 

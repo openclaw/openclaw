@@ -121,6 +121,15 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
   return true;
 }
 
+function disabledSearchPayload() {
+  return {
+    error: "web_search_disabled",
+    message:
+      "web_search is disabled by configuration. Enable tools.web.search.enabled to use this tool.",
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
+}
+
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
     search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
@@ -467,13 +476,8 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
-  const perplexityConfig = resolvePerplexityConfig(search);
-
   const description =
-    provider === "perplexity"
-      ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+    "Search the web using the configured provider (Brave Search or Perplexity Sonar). Returns citations or result snippets depending on provider.";
 
   return {
     label: "Web Search",
@@ -481,6 +485,12 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const search = resolveSearchConfig(options?.config);
+      if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
+        return jsonResult(disabledSearchPayload());
+      }
+      const provider = resolveSearchProvider(search);
+      const perplexityConfig = resolvePerplexityConfig(search);
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
       const apiKey =

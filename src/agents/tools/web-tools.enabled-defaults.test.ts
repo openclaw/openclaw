@@ -19,6 +19,16 @@ describe("web tools defaults", () => {
     const tool = createWebSearchTool({ config: {}, sandboxed: false });
     expect(tool?.name).toBe("web_search");
   });
+
+  it("rejects execution when web_search is disabled after creation", async () => {
+    const config = { tools: { web: { search: { enabled: true } } } };
+    const tool = createWebSearchTool({ config, sandboxed: false });
+    config.tools.web.search.enabled = false;
+
+    const result = await tool?.execute?.(1, { query: "test" });
+
+    expect(result?.details).toMatchObject({ error: "web_search_disabled" });
+  });
 });
 
 describe("web_search country and language parameters", () => {
@@ -246,6 +256,30 @@ describe("web_search perplexity baseUrl defaults", () => {
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/pplx/chat/completions");
+  });
+
+  it("resolves provider at execution time for updated config", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const config = { tools: { web: { search: { provider: "brave" } } } };
+    const tool = createWebSearchTool({
+      config,
+      sandboxed: true,
+    });
+    config.tools.web.search.provider = "perplexity";
+
+    await tool?.execute?.(1, { query: "test-dynamic-provider" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
   });
 
   it("defaults to Perplexity direct when apiKey looks like Perplexity", async () => {
