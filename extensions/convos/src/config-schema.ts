@@ -65,6 +65,9 @@ export const ConvosConfigSchema = z.object({
 
   /** XMTP public address (inbox ID) for display / share. */
   inboxId: z.string().optional(),
+
+  /** Invite URL for joining the owner conversation (displayed as QR). */
+  inviteUrl: z.string().optional(),
 });
 
 export type ConvosConfigInput = z.infer<typeof ConvosConfigSchema>;

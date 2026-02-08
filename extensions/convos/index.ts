@@ -164,10 +164,25 @@ async function handleSetup(params: {
 }
 
 function handleStatus() {
+  if (cachedSetupResponse?.inviteUrl) {
+    return {
+      active: setupAgent !== null,
+      joined: setupJoinState.joined,
+      joinerInboxId: setupJoinState.joinerInboxId,
+      inviteUrl: cachedSetupResponse.inviteUrl,
+      conversationId: cachedSetupResponse.conversationId,
+    };
+  }
+  const cfg = getConvosRuntime().config.loadConfig() as OpenClawConfig;
+  const convos = (cfg?.channels as Record<string, unknown>)?.["convos"] as
+    | Record<string, unknown>
+    | undefined;
   return {
-    active: setupAgent !== null,
-    joined: setupJoinState.joined,
+    active: false,
+    joined: !!convos?.privateKey,
     joinerInboxId: setupJoinState.joinerInboxId,
+    inviteUrl: convos?.inviteUrl as string | undefined,
+    conversationId: convos?.ownerConversationId as string | undefined,
   };
 }
 
@@ -218,6 +233,9 @@ async function handleComplete() {
         enabled: true,
         ...(setupResult.inboxId ? { inboxId: setupResult.inboxId } : {}),
         ...(allowFrom.length > 0 ? { allowFrom } : {}),
+        inviteUrl: (cachedSetupResponse?.inviteUrl ?? existingConvos.inviteUrl) as
+          | string
+          | undefined,
       },
       xmtp: {
         ...existingXmtp,

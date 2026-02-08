@@ -179,12 +179,8 @@ async function handleInboundMessage(
       },
       onError: (err, info) => {
         const msg = String(err);
-        // When Convos is also handling the same XMTP inbox, Convos sends the reply;
-        // XMTP deliver can fail with "agent not available". Downgrade to info to avoid confusion.
         if (msg.includes("XMTP agent not available")) {
-          log?.info(
-            `[${account.accountId}] XMTP ${info.kind} reply skipped (agent unavailable; Convos may have sent).`,
-          );
+          log?.info(`[${account.accountId}] XMTP ${info.kind} reply skipped (agent unavailable).`);
           return;
         }
         log?.error(`[${account.accountId}] XMTP ${info.kind} reply failed: ${msg}`);
@@ -257,6 +253,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
     threads: false,
   },
   reload: { configPrefixes: ["channels.xmtp"] },
+  gatewayMethods: ["xmtp.setup", "xmtp.setup.status", "xmtp.setup.complete", "xmtp.setup.cancel"],
   configSchema: xmtpChannelConfigSchema,
   onboarding: xmtpOnboardingAdapter,
   config: {
