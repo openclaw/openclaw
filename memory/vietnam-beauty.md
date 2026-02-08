@@ -640,11 +640,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `b766ce9 feat(web): add UCP widget to dashboard page (02-08)`
 - `2056b28 feat(api): add feed health check endpoint (02-08)`
 - `b5bdf4c feat(api): add UCP events list endpoint (02-08)`
 - `7837ae7 feat(web): add UCP order event timeline (02-08)`
 - `fe8745c feat(api): add UCP summary stats endpoint (02-08)`
-- `c7488a7 feat(web): add UCP summary dashboard widget (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
