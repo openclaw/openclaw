@@ -148,10 +148,10 @@ function resolveXiaomiApiKey(): string | undefined {
   return undefined;
 }
 
-async function resolveOAuthToken(params: {
+async function resolveOAuthTokens(params: {
   provider: UsageProviderId;
   agentDir?: string;
-}): Promise<ProviderAuth | null> {
+}): Promise<ProviderAuth[]> {
   const cfg = loadConfig();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
@@ -170,6 +170,7 @@ async function resolveOAuthToken(params: {
     }
   }
 
+  const results: ProviderAuth[] = [];
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
@@ -192,20 +193,20 @@ async function resolveOAuthToken(params: {
         const parsed = parseGoogleToken(resolved.apiKey);
         token = parsed?.token ?? resolved.apiKey;
       }
-      return {
+      results.push({
         provider: params.provider,
         token,
         accountId:
           cred.type === "oauth" && "accountId" in cred
             ? (cred as { accountId?: string }).accountId
             : undefined,
-      };
+      });
     } catch {
       // ignore
     }
   }
 
-  return null;
+  return results;
 }
 
 function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
@@ -276,13 +277,11 @@ export async function resolveProviderAuths(params: {
     if (!oauthProviders.includes(provider)) {
       continue;
     }
-    const auth = await resolveOAuthToken({
+    const resolved = await resolveOAuthTokens({
       provider,
       agentDir: params.agentDir,
     });
-    if (auth) {
-      auths.push(auth);
-    }
+    auths.push(...resolved);
   }
 
   return auths;
