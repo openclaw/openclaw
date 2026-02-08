@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- MSTeams: fix inline pasted image downloads — add `trafficmanager.net` to auth-allowed hosts so Bot Framework 401 responses trigger token fallback, append `/views/original` to Bot Framework attachment URLs for binary content, fetch `hostedContents/$value` Graph endpoint for hosted images, and gate on `some()` HTML attachments instead of `every()`. (#5448)
 - Cron: scheduler reliability (timer drift, restart catch-up, lock contention, stale running markers). (#10776) Thanks @tyler6204.
 - Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
 - Telegram: auto-inject DM topic threadId in message tool + subagent announce. (#7235) Thanks @Lukavyi.

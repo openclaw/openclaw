@@ -298,6 +298,54 @@ describe("msteams attachments", () => {
       expect(media).toHaveLength(0);
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it("appends /views/original to Bot Framework attachment URLs", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async () => {
+        return new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      });
+
+      const bfUrl = "https://smba.trafficmanager.net/amer/72f988bf/v3/attachments/0-wus-d11-abc";
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/*", contentUrl: bfUrl }],
+        maxBytes: 1024 * 1024,
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(`${bfUrl}/views/original`);
+      expect(media).toHaveLength(1);
+    });
+
+    it("uses auth fallback for Bot Framework 401 responses", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.headers && "Authorization" in (init.headers as Record<string, string>)) {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          });
+        }
+        return new Response("Unauthorized", { status: 401 });
+      });
+
+      const tokenProvider = {
+        getAccessToken: vi.fn(async () => "test-token"),
+      };
+
+      const bfUrl = "https://smba.trafficmanager.net/amer/72f988bf/v3/attachments/0-abc123";
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/*", contentUrl: bfUrl }],
+        maxBytes: 1024 * 1024,
+        tokenProvider,
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(1);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalled();
+    });
   });
 
   describe("buildMSTeamsGraphMessageUrls", () => {
@@ -337,23 +385,23 @@ describe("msteams attachments", () => {
   });
 
   describe("downloadMSTeamsGraphMedia", () => {
-    it("downloads hostedContents images", async () => {
+    it("downloads hostedContents images via $value endpoint", async () => {
       const { downloadMSTeamsGraphMedia } = await load();
-      const base64 = Buffer.from("png").toString("base64");
       const fetchMock = vi.fn(async (url: string) => {
         if (url.endsWith("/hostedContents")) {
+          // Real Graph API returns contentBytes: null in collection responses.
           return new Response(
             JSON.stringify({
-              value: [
-                {
-                  id: "1",
-                  contentType: "image/png",
-                  contentBytes: base64,
-                },
-              ],
+              value: [{ id: "1", contentType: "image/png", contentBytes: null }],
             }),
             { status: 200 },
           );
+        }
+        if (url.includes("/hostedContents/1/$value")) {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          });
         }
         if (url.endsWith("/attachments")) {
           return new Response(JSON.stringify({ value: [] }), { status: 200 });
@@ -369,28 +417,30 @@ describe("msteams attachments", () => {
       });
 
       expect(media.media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/hostedContents/1/$value"),
+        expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
+      );
       expect(saveMediaBufferMock).toHaveBeenCalled();
     });
 
     it("merges SharePoint reference attachments with hosted content", async () => {
       const { downloadMSTeamsGraphMedia } = await load();
-      const hostedBase64 = Buffer.from("png").toString("base64");
       const shareUrl = "https://contoso.sharepoint.com/site/file";
       const fetchMock = vi.fn(async (url: string) => {
         if (url.endsWith("/hostedContents")) {
           return new Response(
             JSON.stringify({
-              value: [
-                {
-                  id: "hosted-1",
-                  contentType: "image/png",
-                  contentBytes: hostedBase64,
-                },
-              ],
+              value: [{ id: "hosted-1", contentType: "image/png", contentBytes: null }],
             }),
             { status: 200 },
           );
+        }
+        if (url.includes("/hostedContents/hosted-1/$value")) {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          });
         }
         if (url.endsWith("/attachments")) {
           return new Response(
@@ -439,6 +489,37 @@ describe("msteams attachments", () => {
       });
 
       expect(media.media).toHaveLength(2);
+    });
+
+    it("skips hosted content when $value fetch fails", async () => {
+      const { downloadMSTeamsGraphMedia } = await load();
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith("/hostedContents")) {
+          return new Response(
+            JSON.stringify({
+              value: [{ id: "1", contentType: "image/png", contentBytes: null }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/hostedContents/1/$value")) {
+          return new Response("forbidden", { status: 403 });
+        }
+        if (url.endsWith("/attachments")) {
+          return new Response(JSON.stringify({ value: [] }), { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      const media = await downloadMSTeamsGraphMedia({
+        messageUrl: "https://graph.microsoft.com/v1.0/chats/19%3Achat/messages/123",
+        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        maxBytes: 1024 * 1024,
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media.media).toHaveLength(0);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
     });
   });
 
