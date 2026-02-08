@@ -9,8 +9,65 @@ function stripThreadSuffix(value: string): string {
 }
 
 /**
+ * Extracts tool call IDs from an assistant message's content blocks.
+ */
+function extractToolCallIds(msg: AgentMessage): Set<string> {
+  if (msg.role !== "assistant") return new Set();
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) return new Set();
+
+  const ids = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as { type?: unknown; id?: unknown };
+    if (typeof rec.id !== "string" || !rec.id) continue;
+    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+      ids.add(rec.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Extracts the tool call ID from a toolResult message.
+ */
+function extractToolResultId(msg: AgentMessage): string | null {
+  if (msg.role !== "toolResult") return null;
+  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) return toolCallId;
+  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) return toolUseId;
+  return null;
+}
+
+/**
+ * Removes orphaned toolResult messages that reference tool calls not present
+ * in any assistant message within the given message list.
+ */
+function dropOrphanedToolResults(messages: AgentMessage[]): AgentMessage[] {
+  // Collect all tool call IDs from assistant messages
+  const availableToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    for (const id of extractToolCallIds(msg)) {
+      availableToolCallIds.add(id);
+    }
+  }
+
+  // Filter out toolResult messages that reference missing tool calls
+  return messages.filter((msg) => {
+    if (msg.role !== "toolResult") return true;
+    const id = extractToolResultId(msg);
+    // Keep if we can't determine the ID (defensive) or if the ID exists
+    return !id || availableToolCallIds.has(id);
+  });
+}
+
+/**
  * Limits conversation history to the last N user turns (and their associated
  * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * Also removes any orphaned toolResult messages that would reference tool calls
+ * from truncated assistant messages, preventing API validation errors.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -27,7 +84,10 @@ export function limitHistoryTurns(
     if (messages[i].role === "user") {
       userCount++;
       if (userCount > limit) {
-        return messages.slice(lastUserIndex);
+        const truncated = messages.slice(lastUserIndex);
+        // Remove any toolResult messages that reference tool calls from truncated
+        // assistant messages. This prevents "unexpected tool_use_id" API errors.
+        return dropOrphanedToolResults(truncated);
       }
       lastUserIndex = i;
     }
