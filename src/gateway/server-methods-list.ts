@@ -25,6 +25,9 @@ const BASE_METHODS = [
   "exec.approvals.node.set",
   "exec.approval.request",
   "exec.approval.resolve",
+  "agentshield.approval.request",
+  "agentshield.approval.resolve",
+  "agentshield.approval.list",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",
@@ -114,4 +117,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "agentshield.approval.requested",
+  "agentshield.approval.resolved",
 ];

@@ -28,6 +28,7 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { createAgentShieldApprovalForwarder } from "../infra/agentshield-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -43,6 +44,7 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
+import { AgentShieldApprovalManager } from "./agentshield-approval-manager.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
@@ -54,6 +56,8 @@ import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+import { createAgentShieldApprovalHandlers } from "./server-methods/agentshield-approval.js";
+import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -227,6 +231,7 @@ export async function startGatewayServer(
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();
+
   const { pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
     cfg: cfgAtStart,
     workspaceDir: defaultWorkspaceDir,
@@ -241,7 +246,19 @@ export async function startGatewayServer(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+  const allGatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+
+  const agentShieldApprovalsEnabled = process.env.AGENTSHIELD_APPROVALS_ENABLED === "1";
+
+  const gatewayMethods = agentShieldApprovalsEnabled
+    ? allGatewayMethods
+    : allGatewayMethods.filter(
+        (m) =>
+          m !== "agentshield.approval.request" &&
+          m !== "agentshield.approval.resolve" &&
+          m !== "agentshield.approval.list",
+      );
+
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -467,6 +484,15 @@ export async function startGatewayServer(
     forwarder: execApprovalForwarder,
   });
 
+  const agentShieldApprovalHandlers: GatewayRequestHandlers =
+    agentShieldApprovalsEnabled
+      ? createAgentShieldApprovalHandlers(
+          new AgentShieldApprovalManager(),
+          { forwarder: createAgentShieldApprovalForwarder() },
+        )
+      : {};
+
+
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
   attachGatewayWsHandlers({
@@ -485,6 +511,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...agentShieldApprovalHandlers,
     },
     broadcast,
     context: {

@@ -78,6 +78,11 @@ import type {
   ExecApprovalResolveParamsSchema,
 } from "./exec-approvals.js";
 import type {
+  AgentShieldApprovalRequestParamsSchema,
+  AgentShieldApprovalResolveParamsSchema,
+  AgentShieldApprovalListParamsSchema,
+} from "./agentshield-approvals.js";
+import type {
   ConnectParamsSchema,
   ErrorShapeSchema,
   EventFrameSchema,
@@ -227,6 +232,9 @@ export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParam
 export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
 export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
 export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type AgentShieldApprovalRequestParams = Static<typeof AgentShieldApprovalRequestParamsSchema>;
+export type AgentShieldApprovalResolveParams = Static<typeof AgentShieldApprovalResolveParamsSchema>;
+export type AgentShieldApprovalListParams = Static<typeof AgentShieldApprovalListParamsSchema>;
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
