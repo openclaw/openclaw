@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import fs from "node:fs/promises";
-import type { SpoolEventCreate, SpoolPriority } from "../../spool/types.js";
+import type { SpoolPriority } from "../../spool/types.js";
 import type { SpoolEvent } from "../../spool/types.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -65,7 +65,7 @@ export function registerSpoolEnqueueCommand(spool: Command) {
             if (!createValidation.valid) {
               throw new Error(`Invalid create request: ${createValidation.error}`);
             }
-            event = await createSpoolEvent(createValidation.create as SpoolEventCreate);
+            event = await createSpoolEvent(createValidation.create);
           } else if (data.kind === "agentTurn" && data.message) {
             // Just a payload - validate before creating
             const payloadValidation = validateSpoolPayload(data);

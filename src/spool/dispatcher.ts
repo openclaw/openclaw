@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SpoolEvent, SpoolDispatchResult } from "./types.js";
 import { moveToDeadLetter } from "./dead-letter.js";
 import { runSpoolIsolatedAgentTurn } from "./isolated-agent/index.js";
-import { deleteSpoolEvent } from "./reader.js";
+import { deleteSpoolEvent, readSpoolEventFile } from "./reader.js";
 import { writeSpoolEvent } from "./writer.js";
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -154,9 +154,6 @@ export async function dispatchSpoolEventFile(
   params: DispatchSpoolEventFileParams,
 ): Promise<SpoolDispatchResult> {
   const { cfg, deps, filePath } = params;
-
-  // Import readSpoolEventFile dynamically to avoid circular dependency
-  const { readSpoolEventFile } = await import("./reader.js");
 
   // Extract event ID from filename (use path.basename for cross-platform support)
   const filename = path.basename(filePath);
