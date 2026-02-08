@@ -15,8 +15,13 @@ import { formatCliCommand } from "./command-format.js";
 export function resolveBundledExtensionRootDir(
   here = path.dirname(fileURLToPath(import.meta.url)),
 ) {
+  // Walk up from `here` until we find an assets/chrome-extension directory
+  // that contains a manifest.json.  This works regardless of whether the
+  // code runs from the original source tree (src/cli/) or a bundled dist
+  // directory (dist/) — the loop terminates as soon as it finds the
+  // package-root level `assets/chrome-extension`.
   let current = here;
-  while (true) {
+  for (;;) {
     const candidate = path.join(current, "assets", "chrome-extension");
     if (hasManifest(candidate)) {
       return candidate;
@@ -28,6 +33,18 @@ export function resolveBundledExtensionRootDir(
     current = parent;
   }
 
+  // Fallback: try common relative offsets for both source (`src/cli/`)
+  // and bundled (`dist/`) layouts so the path survives tree-shaking
+  // even if the bundler inlines this branch and drops the loop above.
+  for (const rel of ["../../assets/chrome-extension", "../assets/chrome-extension"]) {
+    const fallback = path.resolve(here, rel);
+    if (hasManifest(fallback)) {
+      return fallback;
+    }
+  }
+
+  // Return the source-tree path as the final default (original behavior)
+  // so the error message in the caller remains accurate.
   return path.resolve(here, "../../assets/chrome-extension");
 }
 

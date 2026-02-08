@@ -40,6 +40,24 @@ describe("bundled extension resolver", () => {
     }
   });
 
+  it("resolves from a flat dist directory (bundled layout)", async () => {
+    // Simulates the bundled layout where code lives in dist/ (1 level deep)
+    // rather than src/cli/ (2 levels deep)
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-flat-"));
+    const here = path.join(root, "dist");
+    const assets = path.join(root, "assets", "chrome-extension");
+
+    try {
+      writeManifest(assets);
+      fs.mkdirSync(here, { recursive: true });
+
+      const { resolveBundledExtensionRootDir } = await import("./browser-cli-extension.js");
+      expect(resolveBundledExtensionRootDir(here)).toBe(assets);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("prefers the nearest assets directory", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ext-root-"));
     const here = path.join(root, "dist", "cli");
