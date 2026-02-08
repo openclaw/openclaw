@@ -738,7 +738,7 @@ export async function healthCommand(
 
     if (resolvedAgents.length > 0) {
       const agentLabels = resolvedAgents.map((agent) =>
-        agent.isDefault ? `${agent.agentId} (default)` : agent.agentId,
+        agent.isDefault ? `${agent.agentId} (channel default)` : agent.agentId,
       );
       runtime.log(info(`Agents: ${agentLabels.join(", ")}`));
     }
