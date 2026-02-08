@@ -26,9 +26,27 @@ const watchers = new Map<string, SkillsWatchState>();
 let globalVersion = 0;
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
+  // Version control
   /(^|[\\/])\.git([\\/]|$)/,
+  // Node.js
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
+  // Python virtual environments (can cause spawn EBADF on macOS after path migration)
+  /(^|[\\/])\.venv([\\/]|$)/,
+  /(^|[\\/])venv([\\/]|$)/,
+  /(^|[\\/])\.envs([\\/]|$)/,
+  /(^|[\\/])ENV([\\/]|$)/,
+  // Python caches
+  /(^|[\\/])__pycache__([\\/]|$)/,
+  /(^|[\\/])\.pytest_cache([\\/]|$)/,
+  /(^|[\\/])\.mypy_cache([\\/]|$)/,
+  /(^|[\\/])\.ruff_cache([\\/]|$)/,
+  // Build outputs
+  /(^|[\\/])build([\\/]|$)/,
+  /(^|[\\/])coverage([\\/]|$)/,
+  // Temp/cache directories
+  /(^|[\\/])\.cache([\\/]|$)/,
+  /(^|[\\/])\.tmp([\\/]|$)/,
 ];
 
 function bumpVersion(current: number): number {
