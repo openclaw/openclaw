@@ -1,0 +1,82 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "agent",
+    "target": "エージェント"
+  },
+  {
+    "source": "channel",
+    "target": "チャンネル"
+  },
+  {
+    "source": "session",
+    "target": "セッション"
+  },
+  {
+    "source": "provider",
+    "target": "プロバイダー"
+  },
+  {
+    "source": "model",
+    "target": "モデル"
+  },
+  {
+    "source": "tool",
+    "target": "ツール"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "インストール健全性チェック"
+  },
+  {
+    "source": "get unstuck",
+    "target": "行き詰まり解消"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "トラブルシューティング"
+  },
+  {
+    "source": "FAQ",
+    "target": "FAQ"
+  },
+  {
+    "source": "onboarding",
+    "target": "オンボーディング"
+  },
+  {
+    "source": "wizard",
+    "target": "ウィザード"
+  },
+  {
+    "source": "environment variables",
+    "target": "環境変数"
+  },
+  {
+    "source": "environment variable",
+    "target": "環境変数"
+  },
+  {
+    "source": "env vars",
+    "target": "環境変数"
+  },
+  {
+    "source": "env var",
+    "target": "環境変数"
+  }
+]
