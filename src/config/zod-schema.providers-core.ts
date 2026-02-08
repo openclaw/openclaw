@@ -426,6 +426,13 @@ export const SlackDmSchema = z
     });
   });
 
+const SlackThreadSchemaBase = z
+  .object({
+    historyScope: z.enum(["thread", "channel"]).optional(),
+    inheritParent: z.boolean().optional(),
+  })
+  .strict();
+
 export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -437,15 +444,11 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    thread: SlackThreadSchemaBase.optional(),
   })
   .strict();
 
-export const SlackThreadSchema = z
-  .object({
-    historyScope: z.enum(["thread", "channel"]).optional(),
-    inheritParent: z.boolean().optional(),
-  })
-  .strict();
+export const SlackThreadSchema = SlackThreadSchemaBase;
 
 const SlackReplyToModeByChatTypeSchema = z
   .object({

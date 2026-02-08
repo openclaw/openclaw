@@ -42,6 +42,8 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** Thread session behavior overrides for this channel. */
+  thread?: SlackThreadConfig;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";

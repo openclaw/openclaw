@@ -80,6 +80,10 @@ export type SlackMonitorContext = {
       users?: Array<string | number>;
       skills?: string[];
       systemPrompt?: string;
+      thread?: {
+        historyScope?: "thread" | "channel";
+        inheritParent?: boolean;
+      };
     }
   >;
   groupPolicy: GroupPolicy;

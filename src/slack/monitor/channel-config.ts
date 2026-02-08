@@ -15,6 +15,10 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  thread?: {
+    historyScope?: "thread" | "channel";
+    inheritParent?: boolean;
+  };
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -84,6 +88,10 @@ export function resolveSlackChannelConfig(params: {
       users?: Array<string | number>;
       skills?: string[];
       systemPrompt?: string;
+      thread?: {
+        historyScope?: "thread" | "channel";
+        inheritParent?: boolean;
+      };
     }
   >;
   defaultRequireMention?: boolean;
@@ -125,6 +133,7 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const thread = firstDefined(resolved.thread, fallback?.thread);
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -132,6 +141,7 @@ export function resolveSlackChannelConfig(params: {
     users,
     skills,
     systemPrompt,
+    thread,
   };
   return applyChannelMatchMeta(result, match);
 }
