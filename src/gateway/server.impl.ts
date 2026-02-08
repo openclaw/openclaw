@@ -41,6 +41,7 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -269,6 +270,7 @@ export async function startGatewayServer(
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
+  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- ControlUiRootState resolves to error type at lint time
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
     const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
@@ -557,6 +559,15 @@ export async function startGatewayServer(
     logChannels,
     logBrowser,
   }));
+
+  try {
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner) {
+      await hookRunner.runGatewayStart({ port }, {});
+    }
+  } catch (err) {
+    log.warn(`gateway_start hook failed: ${String(err)}`);
+  }
 
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps,
