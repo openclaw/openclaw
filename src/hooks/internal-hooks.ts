@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -164,6 +164,39 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+export interface MessageReceivedContext {
+  ctxPayload: Record<string, unknown>;
+  channel: string;
+  messageId: string;
+  from: string;
+  to: string;
+  isGroup: boolean;
+  chatId: string;
+  senderId?: string;
+  hasMedia?: boolean;
+  mediaCount?: number;
+  timestamp?: number;
+}
+
+export type MessageReceivedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "received";
+  context: MessageReceivedContext;
+};
+
+export function isMessageReceivedEvent(
+  event: InternalHookEvent,
+): event is MessageReceivedHookEvent {
+  if (event.type !== "message" || event.action !== "received") {
+    return false;
+  }
+  const context = event.context as Partial<MessageReceivedContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.channel === "string" && typeof context.messageId === "string";
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
