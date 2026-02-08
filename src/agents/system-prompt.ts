@@ -564,7 +564,7 @@ export function buildAgentSystemPrompt(params: {
     }
     lines.push("");
     for (const file of contextFiles) {
-      lines.push(`## ${file.path ?? "undefined"}`, "", file.content, "");
+      lines.push(`## ${file.path ?? "(unknown)"}`, "", file.content, "");
     }
   }
 
