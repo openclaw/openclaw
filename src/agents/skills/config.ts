@@ -99,13 +99,33 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
+
+  // On Windows, use PATHEXT to determine executable extensions
+  const isWindows = process.platform === "win32";
+  let extensions = [""];
+  if (isWindows) {
+    // Parse PATHEXT (e.g., ".COM;.EXE;.BAT;.CMD") or use sensible defaults
+    const pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
+    const pathExtList = pathExt
+      .split(";")
+      .map((ext) => ext.toLowerCase())
+      .filter(Boolean);
+    // Check if bin already has a known executable extension
+    const binLower = bin.toLowerCase();
+    const hasKnownExt = pathExtList.some((ext) => binLower.endsWith(ext));
+    // If no known extension, probe with PATHEXT extensions (plus exact name)
+    extensions = hasKnownExt ? [""] : ["", ...pathExtList];
+  }
+
   for (const part of parts) {
-    const candidate = path.join(part, bin);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return true;
-    } catch {
-      // keep scanning
+    for (const ext of extensions) {
+      const candidate = path.join(part, bin + ext);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return true;
+      } catch {
+        // keep scanning
+      }
     }
   }
   return false;
