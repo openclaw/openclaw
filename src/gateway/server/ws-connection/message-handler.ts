@@ -658,6 +658,18 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
+        const connectAuthResolved = resolveConnectAuthFromCookie(connectParams, upgradeReq);
+
+        const authResult = await authorizeGatewayConnect({
+          auth: resolvedAuth,
+          connectAuth: connectAuthResolved,
+          req: upgradeReq,
+          trustedProxies,
+        });
+        let authOk = authResult.ok;
+        let authMethod =
+          authResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
+
         if (!authOk && connectParams.auth?.token && device) {
           const tokenCheck = await verifyDeviceToken({
             deviceId: device.id,
