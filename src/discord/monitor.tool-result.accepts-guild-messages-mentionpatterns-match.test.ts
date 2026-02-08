@@ -432,7 +432,7 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
+    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:thread:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #general");
@@ -645,7 +645,7 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
+    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:thread:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:forum-1");
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
@@ -755,7 +755,7 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(capturedCtx?.SessionKey).toBe("agent:support:discord:channel:t1");
+    expect(capturedCtx?.SessionKey).toBe("agent:support:discord:thread:t1");
     expect(capturedCtx?.ParentSessionKey).toBe("agent:support:discord:channel:p1");
   });
 });
