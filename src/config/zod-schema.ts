@@ -152,6 +152,16 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        llmTracing: z
+          .object({
+            enabled: z.boolean().optional(),
+            endpoint: z.string().optional(),
+            headers: z.record(z.string(), z.string()).optional(),
+            serviceName: z.string().optional(),
+            sampleRate: z.number().min(0).max(1).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

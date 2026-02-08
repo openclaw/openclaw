@@ -263,6 +263,44 @@ Notes:
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
 
+### LLM Content Tracing
+
+The `llm-tracing` plugin exports LLM input/output content as OpenTelemetry
+traces using the GenAI semantic attributes. This is separate from diagnostics
+telemetry and is opt-in.
+
+```json
+{
+  "plugins": {
+    "allow": ["llm-tracing"],
+    "entries": {
+      "llm-tracing": {
+        "enabled": true
+      }
+    }
+  },
+  "diagnostics": {
+    "llmTracing": {
+      "enabled": true,
+      "endpoint": "http://otel-collector:4318/v1/traces",
+      "headers": {
+        "authorization": "Bearer YOUR_TOKEN"
+      },
+      "serviceName": "openclaw-gateway",
+      "sampleRate": 0.2
+    }
+  }
+}
+```
+
+Notes:
+
+- You can also enable the plugin with `openclaw plugins enable llm-tracing`.
+- This exports prompt and response content plus tool calls. Treat it as sensitive.
+- If `endpoint` does not include `/v1/traces`, the plugin appends it.
+- Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_SERVICE_NAME`.
+
 ### Exported metrics (names + types)
 
 Model usage:

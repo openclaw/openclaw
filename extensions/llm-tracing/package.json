@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/llm-tracing",
+  "version": "2026.2.6-3",
+  "description": "LLM content tracing for OpenTelemetry-compatible platforms",
+  "type": "module",
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.211.0",
+    "@opentelemetry/resources": "^2.5.0",
+    "@opentelemetry/sdk-node": "^0.211.0",
+    "@opentelemetry/sdk-trace-base": "^2.5.0",
+    "@opentelemetry/semantic-conventions": "^1.39.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

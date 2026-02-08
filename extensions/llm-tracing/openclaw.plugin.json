@@ -1,0 +1,8 @@
+{
+  "id": "llm-tracing",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

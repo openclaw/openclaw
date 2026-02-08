@@ -206,6 +206,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llm-task/**"
+"extensions: llm-tracing":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llm-tracing/**"
 "extensions: lobster":
   - changed-files:
       - any-glob-to-any-file:
