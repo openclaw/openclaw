@@ -107,7 +107,7 @@ describe("/model chat UX", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-5",
       aliasIndex: baseAliasIndex(),
       allowedModelCatalog: [],
       resetModelOverride: false,

@@ -38,6 +38,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
+import { isFallbackModelActive } from "./fallback-state.js";
 import { buildGroupIntro } from "./groups.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
@@ -294,10 +295,15 @@ export async function runPreparedReply(
     if (channel && to) {
       const modelLabel = `${provider}/${model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
-      const text =
-        modelLabel === defaultLabel
-          ? `✅ New session started · model: ${modelLabel}`
-          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+      const fallbackActive = isFallbackModelActive({
+        provider,
+        model,
+        defaultProvider,
+        defaultModel,
+      });
+      const text = fallbackActive
+        ? `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`
+        : `✅ New session started · model: ${modelLabel}`;
       await routeReply({
         payload: { text },
         channel,

@@ -22,6 +22,7 @@ import {
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
+import { isFallbackModelActive } from "./fallback-state.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
 function buildModelPickerCatalog(params: {
@@ -216,9 +217,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
   if (wantsSummary) {
     const current = `${params.provider}/${params.model}`;
     const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
-    const fallbackActive =
-      normalizeProviderId(params.provider) !== normalizeProviderId(params.defaultProvider) ||
-      params.model !== params.defaultModel;
+    const fallbackActive = isFallbackModelActive({
+      provider: params.provider,
+      model: params.model,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
     const isTelegram = params.surface === "telegram";
 
     if (isTelegram) {
