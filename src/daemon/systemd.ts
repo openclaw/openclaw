@@ -173,31 +173,87 @@ async function execSystemctl(
   }
 }
 
+export type SystemdPreflightResult = {
+  available: boolean;
+  missingEnvVars?: string[];
+  errorDetail?: string;
+};
+
+/**
+ * Check if the systemd user environment is properly configured.
+ * On headless Ubuntu servers, XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS
+ * may not be set without a graphical session, causing systemd --user to fail.
+ */
+export function checkSystemdUserEnvPreflight(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): { ok: boolean; missing: string[] } {
+  const missing: string[] = [];
+
+  // XDG_RUNTIME_DIR is required for systemd --user to locate the user socket
+  if (!env.XDG_RUNTIME_DIR) {
+    missing.push("XDG_RUNTIME_DIR");
+  }
+
+  // DBUS_SESSION_BUS_ADDRESS is required for D-Bus communication with systemd --user
+  // On headless systems, this is often missing alongside XDG_RUNTIME_DIR
+  if (!env.DBUS_SESSION_BUS_ADDRESS) {
+    missing.push("DBUS_SESSION_BUS_ADDRESS");
+  }
+
+  return { ok: missing.length === 0, missing };
+}
+
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
+  const result = await checkSystemdUserServiceAvailable();
+  return result.available;
+}
+
+/**
+ * Check if systemd user services are available.
+ *
+ * The `env` parameter is used for preflight validation of required environment
+ * variables (XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS). The actual systemctl
+ * command always runs with the current process.env since that's what systemctl
+ * will use regardless of what we pass to execFile.
+ */
+export async function checkSystemdUserServiceAvailable(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): Promise<SystemdPreflightResult> {
+  // First check environment prerequisites (uses provided env for validation)
+  const preflight = checkSystemdUserEnvPreflight(env);
+  if (!preflight.ok) {
+    return {
+      available: false,
+      missingEnvVars: preflight.missing,
+      errorDetail: `Missing required environment variables: ${preflight.missing.join(", ")}`,
+    };
+  }
+
+  // Note: systemctl inherits process.env regardless of what we pass
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
-    return true;
+    return { available: true };
   }
   const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
   if (!detail) {
-    return false;
+    return { available: false, errorDetail: "Unknown error" };
   }
   if (detail.includes("not found")) {
-    return false;
+    return { available: false, errorDetail: "systemctl not found" };
   }
   if (detail.includes("failed to connect")) {
-    return false;
+    return { available: false, errorDetail: "Failed to connect to user bus" };
   }
   if (detail.includes("not been booted")) {
-    return false;
+    return { available: false, errorDetail: "System not booted with systemd" };
   }
   if (detail.includes("no such file or directory")) {
-    return false;
+    return { available: false, errorDetail: "Systemd socket not found" };
   }
   if (detail.includes("not supported")) {
-    return false;
+    return { available: false, errorDetail: "Systemd user services not supported" };
   }
-  return false;
+  return { available: false, errorDetail: detail.trim() || "Unknown error" };
 }
 
 async function assertSystemdAvailable() {

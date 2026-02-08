@@ -14,7 +14,31 @@ export function isSystemdUnavailableDetail(detail?: string): boolean {
   );
 }
 
-export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): string[] {
+export function renderSystemdUnavailableHints(options: {
+  wsl?: boolean;
+  missingEnvVars?: string[];
+} = {}): string[] {
+  if (options.missingEnvVars?.length) {
+    const hints: string[] = [
+      `Missing environment variables for systemd --user: ${options.missingEnvVars.join(", ")}`,
+    ];
+    const missingXdg = options.missingEnvVars.includes("XDG_RUNTIME_DIR");
+    const missingDbus = options.missingEnvVars.includes("DBUS_SESSION_BUS_ADDRESS");
+    if (missingXdg || missingDbus) {
+      hints.push("On headless servers, enable lingering to create a user session at boot:");
+      hints.push("  loginctl enable-linger $USER");
+      hints.push("Then log out and back in, or reboot.");
+      hints.push("");
+      hints.push("Alternatively, set the variables manually:");
+      if (missingXdg) {
+        hints.push("  export XDG_RUNTIME_DIR=/run/user/$(id -u)");
+      }
+      if (missingDbus) {
+        hints.push("  export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus");
+      }
+    }
+    return hints;
+  }
   if (options.wsl) {
     return [
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
