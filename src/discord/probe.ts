@@ -104,7 +104,7 @@ async function fetchWithTimeout(
     throw new Error("fetch is not available");
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
   try {
     return await fetchImpl(url, { signal: controller.signal, headers });
   } finally {

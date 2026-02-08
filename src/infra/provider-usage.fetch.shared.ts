@@ -5,7 +5,7 @@ export async function fetchJson(
   fetchFn: typeof fetch,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
   try {
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {

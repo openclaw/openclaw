@@ -1,5 +1,10 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
+/** Relay abort without forwarding the Event argument as the abort reason. */
+function relayAbort(this: AbortController) {
+  this.abort();
+}
+
 function throwAbortError(): never {
   const err = new Error("Aborted");
   err.name = "AbortError";
@@ -36,7 +41,7 @@ function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | un
   }
 
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
+  const onAbort = relayAbort.bind(controller);
   a?.addEventListener("abort", onAbort, { once: true });
   b?.addEventListener("abort", onAbort, { once: true });
   return controller.signal;

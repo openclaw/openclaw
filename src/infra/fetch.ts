@@ -1,3 +1,8 @@
+/** Relay abort without forwarding the Event argument as the abort reason. */
+function relayAbort(this: AbortController) {
+  this.abort();
+}
+
 type FetchWithPreconnect = typeof fetch & {
   preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
 };
@@ -42,7 +47,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       return fetchImpl(input, patchedInit);
     }
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
+    const onAbort = relayAbort.bind(controller);
     if (signal.aborted) {
       controller.abort();
     } else {
