@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import { resolveControlUiRepoRoot, resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   buildControlUiAvatarUrl,
@@ -12,6 +13,13 @@ import {
 } from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
+const AUTO_BUILD_ENV = process.env.OPENCLAW_CONTROL_UI_AUTO_BUILD;
+const AUTO_BUILD_ENABLED =
+  AUTO_BUILD_ENV == null ||
+  AUTO_BUILD_ENV === "" ||
+  AUTO_BUILD_ENV === "1" ||
+  AUTO_BUILD_ENV === "true";
+let autoBuildAttempted = false;
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -24,6 +32,30 @@ export type ControlUiRootState =
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
+
+function tryAutoBuildControlUi() {
+  if (!AUTO_BUILD_ENABLED || autoBuildAttempted) {
+    return;
+  }
+  autoBuildAttempted = true;
+  const repoRoot = resolveControlUiRepoRoot(process.argv[1]);
+  if (!repoRoot) {
+    return;
+  }
+  const uiScript = path.join(repoRoot, "scripts", "ui.js");
+  if (!fs.existsSync(uiScript)) {
+    return;
+  }
+  const result = spawnSync(process.execPath, [uiScript, "build"], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    timeout: 10 * 60_000,
+    env: process.env,
+  });
+  if (result.error) {
+    return;
+  }
+}
 
 function contentTypeForExt(ext: string): string {
   switch (ext) {
@@ -288,16 +320,8 @@ export function handleControlUiHttpRequest(
     );
     return true;
   }
-  if (rootState?.kind === "missing") {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
-    return true;
-  }
 
-  const root =
+  let root =
     rootState?.kind === "resolved"
       ? rootState.path
       : resolveControlUiRootSync({
@@ -305,11 +329,21 @@ export function handleControlUiHttpRequest(
           argv1: process.argv[1],
           cwd: process.cwd(),
         });
+
+  if (!root) {
+    tryAutoBuildControlUi();
+    root = resolveControlUiRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+  }
+
   if (!root) {
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+      "Control UI assets not found. Auto-build was attempted. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
     );
     return true;
   }
