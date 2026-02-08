@@ -349,6 +349,7 @@ function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
   heartbeat?: HeartbeatConfig,
+  overrideSessionKey?: string,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -361,6 +362,18 @@ function resolveHeartbeatSession(
   });
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
+
+  if (overrideSessionKey) {
+    const owner = resolveAgentIdFromSessionKey(overrideSessionKey);
+    if (!owner || normalizeAgentId(owner) === resolvedAgentId) {
+      return {
+        sessionKey: overrideSessionKey,
+        storePath,
+        store,
+        entry: store[overrideSessionKey],
+      };
+    }
+  }
 
   if (scope === "global") {
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
@@ -492,6 +505,7 @@ export async function runHeartbeatOnce(opts: {
   agentId?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
+  sessionKey?: string;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
@@ -544,7 +558,12 @@ export async function runHeartbeatOnce(opts: {
     // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -976,6 +995,7 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
+    const sessionKey = params?.sessionKey;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -991,6 +1011,7 @@ export function startHeartbeatRunner(opts: {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         reason,
+        sessionKey,
         deps: { runtime: state.runtime },
       });
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -1012,7 +1033,9 @@ export function startHeartbeatRunner(opts: {
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
-  setHeartbeatWakeHandler(async (params) => run({ reason: params.reason }));
+  setHeartbeatWakeHandler(async (params) =>
+    run({ reason: params.reason, sessionKey: params.sessionKey }),
+  );
   updateConfig(state.cfg);
 
   const cleanup = () => {
