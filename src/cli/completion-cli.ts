@@ -390,7 +390,7 @@ compdef _${rootCmd}_root_completion ${rootCmd}
 function generateZshArgs(cmd: Command): string {
   return (cmd.options || [])
     .map((opt) => {
-      const flags = opt.flags.split(/[ ,|]+/);
+      const flags = opt.flags.split(/[ ,|]+/).filter(Boolean);
       const name = flags.find((f) => f.startsWith("--")) || flags[0];
       const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
       const desc = opt.description
@@ -518,7 +518,7 @@ function generatePowerShellCompletion(program: Command): string {
 
     // Command completion for this level
     const subCommands = cmd.commands.map((c) => c.name());
-    const options = cmd.options.map((o) => o.flags.split(/[ ,|]+/)[0]); // Take first flag
+    const options = cmd.options.map((o) => o.flags.split(/[ ,|]+/)[0]).filter(Boolean);
     const allCompletions = [...subCommands, ...options].map((s) => `'${s}'`).join(",");
 
     if (allCompletions.length > 0) {
