@@ -102,6 +102,8 @@ export class DiscordReactionListener extends MessageReactionAddListener {
       botUserId?: string;
       guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
       logger: Logger;
+      /** Optional: used for reactionTriggers to synthesize an inbound message turn. */
+      messageHandler?: DiscordMessageHandler;
     },
   ) {
     super();
@@ -119,6 +121,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
         botUserId: this.params.botUserId,
         guildEntries: this.params.guildEntries,
         logger: this.params.logger,
+        messageHandler: this.params.messageHandler,
       });
     } finally {
       logSlowDiscordListener({
@@ -169,6 +172,8 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 }
 
+const reactionTriggerDebounce = new Map<string, number>();
+
 async function handleDiscordReactionEvent(params: {
   data: DiscordReactionEvent;
   client: Client;
@@ -178,6 +183,7 @@ async function handleDiscordReactionEvent(params: {
   botUserId?: string;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  messageHandler?: DiscordMessageHandler;
 }) {
   try {
     const { data, client, action, botUserId, guildEntries } = params;
@@ -246,6 +252,9 @@ async function handleDiscordReactionEvent(params: {
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
     const message = await data.message.fetch().catch(() => null);
     const messageAuthorId = message?.author?.id ?? undefined;
+
+    const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+
     const shouldNotify = shouldEmitDiscordReactionNotification({
       mode: reactionMode,
       botId: botUserId,
@@ -255,11 +264,21 @@ async function handleDiscordReactionEvent(params: {
       userTag: formatDiscordUserTag(user),
       allowlist: guildInfo?.users,
     });
-    if (!shouldNotify) {
+
+    const triggerCfg = guildInfo?.reactionTriggers;
+    const shouldTrigger =
+      params.action === "added" &&
+      Boolean(params.messageHandler) &&
+      Boolean(triggerCfg?.enabled) &&
+      ((triggerCfg?.onOwnMessages ?? true) ? messageAuthorId === botUserId : true) &&
+      (!triggerCfg?.emojis || triggerCfg.emojis.length === 0
+        ? true
+        : triggerCfg.emojis.includes(emojiLabel));
+
+    if (!shouldNotify && !shouldTrigger) {
       return;
     }
 
-    const emojiLabel = formatDiscordReactionEmoji(data.emoji);
     const actorLabel = formatDiscordUserTag(user);
     const guildSlug =
       guildInfo?.slug || (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : data.guild_id);
@@ -283,6 +302,36 @@ async function handleDiscordReactionEvent(params: {
       sessionKey: route.sessionKey,
       contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
     });
+
+    if (shouldTrigger && params.messageHandler) {
+      const debounceMs = Math.max(0, triggerCfg?.debounceMs ?? 1000);
+      const triggerKey = `discord:reaction-trigger:${data.guild_id}:${data.channel_id}:${data.message_id}:${user.id}:${emojiLabel}`;
+      const now = Date.now();
+      const last = reactionTriggerDebounce.get(triggerKey) ?? 0;
+      if (debounceMs === 0 || now - last >= debounceMs) {
+        reactionTriggerDebounce.set(triggerKey, now);
+
+        // Synthesize an inbound message so the normal Discord message pipeline runs,
+        // but without requiring the user to type.
+        const syntheticMessage = {
+          ...(message ?? (data.message as unknown as Record<string, unknown>)),
+          id: data.message_id,
+          channelId: data.channel_id,
+          content: emojiLabel,
+        } as unknown as DiscordMessageEvent["message"];
+
+        const syntheticEvent = {
+          guild_id: data.guild_id,
+          channel_id: data.channel_id,
+          message: syntheticMessage,
+          author: user,
+          member: (data as unknown as { member?: unknown }).member,
+          guild: data.guild,
+        } as unknown as DiscordMessageEvent;
+
+        await params.messageHandler(syntheticEvent, client);
+      }
+    }
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

@@ -44,6 +44,17 @@ export type DiscordGuildChannelConfig = {
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
+export type DiscordReactionTriggerConfig = {
+  /** Enable treating matching reaction adds as inbound triggers (Discord-only). Default: false. */
+  enabled?: boolean;
+  /** Optional allowlist of emojis that should trigger (unicode like "👍" or custom like "name:id"). */
+  emojis?: string[];
+  /** Only trigger on reactions to the bot's own messages (default: true). */
+  onOwnMessages?: boolean;
+  /** Debounce window in ms to avoid bursts/double-taps (default: 1000). */
+  debounceMs?: number;
+};
+
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
@@ -52,6 +63,8 @@ export type DiscordGuildEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
+  /** Experimental: treat reaction *adds* as inbound triggers that wake the agent. */
+  reactionTriggers?: DiscordReactionTriggerConfig;
   users?: Array<string | number>;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };

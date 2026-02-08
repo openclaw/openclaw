@@ -562,6 +562,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId,
       guildEntries,
       logger,
+      messageHandler,
     }),
   );
   registerDiscordListener(

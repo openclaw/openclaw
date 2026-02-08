@@ -1151,6 +1151,12 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
           slug: "friends-of-openclaw",
           requireMention: false, // per-guild default
           reactionNotifications: "own", // off | own | all | allowlist
+          reactionTriggers: {
+            enabled: true,
+            emojis: ["👍", "👎", "✅", "❌"], // optional allowlist
+            onOwnMessages: true,
+            debounceMs: 1000,
+          },
           users: ["987654321098765432"], // optional per-guild user allowlist
           channels: {
             general: { allow: true },

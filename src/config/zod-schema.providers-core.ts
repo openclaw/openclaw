@@ -248,6 +248,15 @@ export const DiscordGuildSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionTriggers: z
+      .object({
+        enabled: z.boolean().optional(),
+        emojis: z.array(z.string()).optional(),
+        onOwnMessages: z.boolean().optional().default(true),
+        debounceMs: z.number().int().min(0).optional().default(1000),
+      })
+      .strict()
+      .optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
