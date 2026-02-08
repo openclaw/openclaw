@@ -103,10 +103,17 @@ function getAnnounceQueue(
 }
 
 async function sendIfFresh(queue: AnnounceQueueState, key: string, item: AnnounceQueueItem) {
-  if (isStaleItem(queue, item)) {
-    defaultRuntime.log?.(`announce stale dropped for ${key}`);
+  const now = Date.now();
+  const queueAgeMs = Math.max(0, now - item.enqueuedAt);
+  if (isStaleItem(queue, item, now)) {
+    defaultRuntime.log?.(
+      `[subagent_announce_metric] stale_message_dropped key=${key} queue_age_ms=${queueAgeMs} max_age_ms=${queue.maxAgeMs}`,
+    );
     return;
   }
+  defaultRuntime.log?.(
+    `[subagent_announce_metric] queue_delivery key=${key} queue_age_ms=${queueAgeMs}`,
+  );
   await queue.send(item);
 }
 

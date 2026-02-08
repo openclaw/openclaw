@@ -36,7 +36,12 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  clearFollowupQueue,
+  enqueueFollowupRun,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -105,6 +110,15 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+
+  if (activeIsNewSession) {
+    const cleared = clearFollowupQueue(queueKey);
+    if (cleared > 0) {
+      defaultRuntime.log?.(
+        `[queue] cleared stale queued followups on new session: key=${queueKey} cleared=${cleared}`,
+      );
+    }
+  }
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -180,7 +194,7 @@ export async function runReplyAgent(params: {
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    const enqueued = enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     if (activeSessionEntry && activeSessionStore && sessionKey) {
       const updatedAt = Date.now();
       activeSessionEntry.updatedAt = updatedAt;
@@ -194,6 +208,12 @@ export async function runReplyAgent(params: {
       }
     }
     typing.cleanup();
+    const isGroupChat = sessionCtx.ChatType === "group" || sessionCtx.ChatType === "channel";
+    if (enqueued && isGroupChat && shouldFollowup) {
+      return {
+        text: "⏳ 收到，当前有任务在处理中；这条我已先排队，处理完会继续回复。",
+      };
+    }
     return undefined;
   }
 

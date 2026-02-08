@@ -559,7 +559,16 @@ export async function runSubagentAnnounceFlow(params: {
     const announceState = outcome.status;
     const sameRunAnnounceKey = `${params.requesterSessionKey}|${taskIdentity}|${params.childRunId}|${announceState}`;
     if (seenSameRunAnnounce(sameRunAnnounceKey)) {
+      defaultRuntime.log?.(
+        `[subagent_announce_metric] announce_deduped_same_run session=${params.requesterSessionKey} task=${taskIdentity} run_id=${params.childRunId}`,
+      );
       return true;
+    }
+
+    if (hasMultipleActualRuns) {
+      defaultRuntime.log?.(
+        `[subagent_announce_metric] multi_execution_detected session=${params.requesterSessionKey} task=${taskIdentity} run_ids=${seenRunIds.join("|")}`,
+      );
     }
 
     const triggerMessage = [
