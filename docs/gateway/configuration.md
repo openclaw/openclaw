@@ -3278,6 +3278,28 @@ Disable live reload (and file watching) if the directory is large or you hit `EM
 }
 ```
 
+#### Remote gateway access (`canvasHost.advertisedUrl`)
+
+When the gateway runs on a **remote server** (cloud VM, VPS) and nodes connect via VPN (Tailscale) or over the internet, nodes cannot reach the default `canvasHostUrl` because it resolves to the gateway's local address (e.g., `http://127.0.0.1:18793`).
+
+Set `advertisedUrl` to a publicly reachable URL that nodes can use instead:
+
+```json5
+{
+  canvasHost: {
+    advertisedUrl: "https://gateway.example.com",
+  },
+  gateway: {
+    // Include your VPN CIDR (Tailscale uses 100.64.0.0/10)
+    trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "100.64.0.0/10"],
+  },
+}
+```
+
+When `advertisedUrl` is set, the gateway returns this URL to nodes instead of the auto-detected local address. This enables A2UI Canvas and `canvas.navigate` to work from remote nodes.
+
+**Note:** You also need `gateway.trustedProxies` to include the IP ranges of connecting nodes (e.g., Tailscale CGNAT `100.64.0.0/10`) so WebSocket connections aren't rejected.
+
 Changes to `canvasHost.*` require a gateway restart (config reload will restart).
 
 Disable with:

@@ -23,6 +23,7 @@ export function attachGatewayWsConnectionHandler(params: {
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
+  canvasHostAdvertisedUrl?: string;
   resolvedAuth: ResolvedGatewayAuth;
   gatewayMethods: string[];
   events: string[];
@@ -47,6 +48,7 @@ export function attachGatewayWsConnectionHandler(params: {
     gatewayHost,
     canvasHostEnabled,
     canvasHostServerPort,
+    canvasHostAdvertisedUrl,
     resolvedAuth,
     gatewayMethods,
     events,
@@ -77,6 +79,7 @@ export function attachGatewayWsConnectionHandler(params: {
     const canvasHostOverride =
       gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
     const canvasHostUrl = resolveCanvasHostUrl({
+      advertisedUrl: canvasHostAdvertisedUrl,
       canvasPort: canvasHostPortForWs,
       hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
       requestHost: upgradeReq.headers.host,

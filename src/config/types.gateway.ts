@@ -44,6 +44,13 @@ export type CanvasHostConfig = {
   port?: number;
   /** Enable live-reload file watching + WS reloads (default: true). */
   liveReload?: boolean;
+  /**
+   * Public URL to advertise to remote nodes for canvas host access.
+   * Use this when the gateway is behind a reverse proxy or when nodes
+   * connect remotely and cannot reach the gateway's local address.
+   * Example: "https://gateway.example.com"
+   */
+  advertisedUrl?: string;
 };
 
 export type TalkConfig = {

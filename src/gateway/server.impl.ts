@@ -268,6 +268,7 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+  const canvasHostAdvertisedUrl = runtimeConfig.canvasHostAdvertisedUrl;
 
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
@@ -476,6 +477,7 @@ export async function startGatewayServer(
     gatewayHost: bindHost ?? undefined,
     canvasHostEnabled: Boolean(canvasHost),
     canvasHostServerPort,
+    canvasHostAdvertisedUrl,
     resolvedAuth,
     gatewayMethods,
     events: GATEWAY_EVENTS,
