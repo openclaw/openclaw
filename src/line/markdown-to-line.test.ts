@@ -207,6 +207,15 @@ describe("stripMarkdown", () => {
     expect(stripMarkdown("Use `const` keyword")).toBe("Use const keyword");
   });
 
+  it("replaces markdown links with just the URL", () => {
+    expect(stripMarkdown("Check [Google](https://google.com) out")).toBe(
+      "Check https://google.com out",
+    );
+    expect(stripMarkdown("[Click here](https://example.com/path)")).toBe(
+      "https://example.com/path",
+    );
+  });
+
   it("handles complex markdown", () => {
     const input = `# Title
 
