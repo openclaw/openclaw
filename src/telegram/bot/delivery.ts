@@ -526,6 +526,11 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  // Telegram rejects messages with empty text. Validate the final outgoing string.
+  if (!htmlText?.trim()) {
+    logVerbose("telegram sendTelegramText skipped: empty htmlText");
+    return undefined;
+  }
   try {
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
@@ -545,6 +550,10 @@ async function sendTelegramText(
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const fallbackText = opts?.plainText ?? text;
+      if (!fallbackText?.trim()) {
+        logVerbose("telegram sendTelegramText skipped: empty fallbackText");
+        return undefined;
+      }
       const res = await withTelegramApiErrorLogging({
         operation: "sendMessage",
         runtime,
