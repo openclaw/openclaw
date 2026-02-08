@@ -264,7 +264,18 @@ Telegram forum topics include a `message_thread_id` per message. OpenClaw:
 - Topic-specific configuration is available under `channels.telegram.groups.<chatId>.topics.<threadId>` (skills, allowlists, auto-reply, system prompts, disable).
 - Topic configs inherit group settings (requireMention, allowlists, skills, prompts, enabled) unless overridden per topic.
 
-Private chats can include `message_thread_id` in some edge cases. OpenClaw keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
+### DM threaded mode (forum topics in private chats)
+
+Private chats can enable forum topic mode via BotFather. When enabled, each DM thread becomes its own session with a thread-aware key (e.g., `agent:main:main:thread:20574`). OpenClaw uses the thread id for replies/draft streaming.
+
+> ⚠️ **Warning:** Enabling DM threaded mode is effectively a **one-way door** for your conversation context:
+>
+> - Unlike group forums, DM threaded mode has **no General topic** — every new message must create a new thread
+> - Your original main session (`agent:main:main`) becomes **unreachable** from the Telegram UI
+> - Each thread starts with fresh context; accumulated context in the main session is orphaned
+> - To regain access to your main session, you must disable threaded mode in BotFather
+>
+> Consider this trade-off before enabling DM threaded mode for draft streaming.
 
 ## Inline Buttons
 
