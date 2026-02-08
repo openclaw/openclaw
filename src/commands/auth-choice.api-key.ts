@@ -23,8 +23,17 @@ export function normalizeApiKeyInput(raw: string): string {
   return withoutSemicolon.trim();
 }
 
-export const validateApiKeyInput = (value: string) =>
-  normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
+export const validateApiKeyInput = (value: string) => {
+  const normalized = normalizeApiKeyInput(value);
+  if (normalized.length === 0) {
+    return "Required";
+  }
+  // Detect if user pasted a setup-token instead of an API key
+  if (normalized.startsWith("sk-ant-oat01-")) {
+    return "That looks like a setup-token. Select 'Anthropic token (paste setup-token)' instead of 'Anthropic API key'.";
+  }
+  return undefined;
+};
 
 export function formatApiKeyPreview(
   raw: string,

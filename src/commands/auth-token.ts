@@ -28,6 +28,10 @@ export function validateAnthropicSetupToken(raw: string): string | undefined {
   if (!trimmed) {
     return "Required";
   }
+  // Detect if user pasted an API key instead of a setup-token
+  if (trimmed.startsWith("sk-ant-api")) {
+    return "That looks like an API key. Select 'Anthropic API key' instead of 'Anthropic token (paste setup-token)'.";
+  }
   if (!trimmed.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
     return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIX}`;
   }

@@ -1,3 +1,4 @@
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import {
@@ -55,6 +56,22 @@ export async function applyAuthChoiceAnthropic(
       provider,
       mode: "token",
     });
+
+    // Also save token to config file as fallback for gateway
+    nextConfig = {
+      ...nextConfig,
+      models: {
+        ...nextConfig.models,
+        providers: {
+          ...nextConfig.models?.providers,
+          anthropic: {
+            ...(nextConfig.models?.providers?.anthropic || {}),
+            apiKey: token,
+          },
+        },
+      },
+    };
+
     return { config: nextConfig };
   }
 
@@ -67,8 +84,11 @@ export async function applyAuthChoiceAnthropic(
     let hasCredential = false;
     const envKey = process.env.ANTHROPIC_API_KEY?.trim();
 
+    let apiKey: string | undefined;
+
     if (params.opts?.token) {
-      await setAnthropicApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      apiKey = normalizeApiKeyInput(params.opts.token);
+      await setAnthropicApiKey(apiKey, params.agentDir);
       hasCredential = true;
     }
 
@@ -78,7 +98,8 @@ export async function applyAuthChoiceAnthropic(
         initialValue: true,
       });
       if (useExisting) {
-        await setAnthropicApiKey(envKey, params.agentDir);
+        apiKey = envKey;
+        await setAnthropicApiKey(apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -87,13 +108,32 @@ export async function applyAuthChoiceAnthropic(
         message: "Enter Anthropic API key",
         validate: validateApiKeyInput,
       });
-      await setAnthropicApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      apiKey = normalizeApiKeyInput(String(key));
+      await setAnthropicApiKey(apiKey, params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
       provider: "anthropic",
       mode: "api_key",
     });
+
+    // Also save API key to config file as fallback for gateway
+    if (apiKey) {
+      nextConfig = {
+        ...nextConfig,
+        models: {
+          ...nextConfig.models,
+          providers: {
+            ...nextConfig.models?.providers,
+            anthropic: {
+              ...(nextConfig.models?.providers?.anthropic || {}),
+              apiKey,
+            },
+          },
+        },
+      };
+    }
+
     return { config: nextConfig };
   }
 
