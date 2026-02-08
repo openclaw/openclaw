@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+.github
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 编辑器
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 测试
+test
+tests
+*.test.js
+coverage
+
+# 文档（构建时不需要）
+*.md
+!README.md
+docs
+
+# Docker 相关（避免递归复制）
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 其他
+.env
+.env.*
