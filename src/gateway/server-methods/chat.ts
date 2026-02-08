@@ -10,6 +10,8 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { DEFAULT_MAX_BYTES as MEDIA_DEFAULT_MAX_BYTES } from "../../media-understanding/defaults.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -18,7 +20,12 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatImageContent,
+  type NormalizedAttachment,
+  getFirstAudioAttachment,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -427,6 +434,32 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    let gatewayAudioPath: string | undefined;
+    let gatewayAudioType: string | undefined;
+    try {
+      const firstAudio = await getFirstAudioAttachment(
+        normalizedAttachments as NormalizedAttachment[],
+        MEDIA_DEFAULT_MAX_BYTES.audio,
+      );
+      if (firstAudio) {
+        const saved = await saveMediaBuffer(
+          firstAudio.buffer,
+          firstAudio.mimeType,
+          "gateway",
+          MEDIA_DEFAULT_MAX_BYTES.audio,
+        );
+        gatewayAudioPath = saved.path;
+        gatewayAudioType = saved.contentType ?? firstAudio.mimeType;
+      }
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, err instanceof Error ? err.message : String(err)),
+      );
+      return;
+    }
+
     try {
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
@@ -471,6 +504,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
       };
+
+      if (gatewayAudioPath && gatewayAudioType) {
+        ctx.MediaPath = gatewayAudioPath;
+        ctx.MediaType = gatewayAudioType;
+        if (!ctx.Body?.trim()) {
+          ctx.Body = "<media:audio>";
+        }
+      }
 
       const agentId = resolveSessionAgentId({
         sessionKey: p.sessionKey,

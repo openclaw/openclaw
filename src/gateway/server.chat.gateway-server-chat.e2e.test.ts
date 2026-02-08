@@ -243,6 +243,39 @@ describe("gateway server chat", () => {
         | undefined;
       expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
+      const callsBeforeAudio = spy.mock.calls.length;
+      const audioB64 = Buffer.from([0, 0, 0, 0]).toString("base64");
+      const reqIdAudio = "chat-audio";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: reqIdAudio,
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "",
+            idempotencyKey: "idem-audio-1",
+            attachments: [
+              {
+                type: "audio",
+                mimeType: "audio/ogg",
+                fileName: "voice.ogg",
+                content: audioB64,
+              },
+            ],
+          },
+        }),
+      );
+      const audioRes = await onceMessage(ws, (o) => o.type === "res" && o.id === reqIdAudio, 8000);
+      expect(audioRes.ok).toBe(true);
+      expect(audioRes.payload?.runId).toBeDefined();
+      await waitFor(() => spy.mock.calls.length > callsBeforeAudio, 8000);
+      const audioCtx = spy.mock.calls.at(-1)?.[0] as
+        | { MediaPath?: string; MediaType?: string }
+        | undefined;
+      expect(audioCtx?.MediaPath).toBeDefined();
+      expect(audioCtx?.MediaType).toBe("audio/ogg");
+
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");

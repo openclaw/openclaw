@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
+  type NormalizedAttachment,
+  getFirstAudioAttachment,
   parseMessageWithAttachments,
 } from "./chat-attachments.js";
 
@@ -209,5 +211,79 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+  });
+});
+
+describe("getFirstAudioAttachment", () => {
+  const tinyAudioBase64 = Buffer.from([0, 0, 0, 0]).toString("base64"); // "AAAAAA=="
+  const maxBytes = 20 * 1024 * 1024; // 20 MB
+
+  it("returns first audio attachment when mimeType is audio/*", async () => {
+    const attachments: NormalizedAttachment[] = [
+      { content: tinyAudioBase64, mimeType: "audio/ogg", fileName: "voice.ogg" },
+    ];
+    const result = await getFirstAudioAttachment(attachments, maxBytes);
+    expect(result).not.toBeNull();
+    expect(result?.buffer).toBeInstanceOf(Buffer);
+    expect(result?.buffer.byteLength).toBe(4);
+    expect(result?.mimeType).toBe("audio/ogg");
+  });
+
+  it("returns null when only image attachments", async () => {
+    const attachments: NormalizedAttachment[] = [
+      { content: PNG_1x1, mimeType: "image/png", fileName: "dot.png" },
+    ];
+    const result = await getFirstAudioAttachment(attachments, maxBytes);
+    expect(result).toBeNull();
+  });
+
+  it("returns first audio when first is image and second is audio", async () => {
+    const attachments: NormalizedAttachment[] = [
+      { content: PNG_1x1, mimeType: "image/png", fileName: "dot.png" },
+      { content: tinyAudioBase64, mimeType: "audio/ogg", fileName: "voice.ogg" },
+    ];
+    const result = await getFirstAudioAttachment(attachments, maxBytes);
+    expect(result).not.toBeNull();
+    expect(result?.mimeType).toBe("audio/ogg");
+    expect(result?.buffer.byteLength).toBe(4);
+  });
+
+  it("throws when audio attachment exceeds size limit", async () => {
+    const smallMax = 10;
+    const contentOverLimit = Buffer.alloc(20, 0).toString("base64");
+    const attachments: NormalizedAttachment[] = [
+      { content: contentOverLimit, mimeType: "audio/ogg", fileName: "big.ogg" },
+    ];
+    await expect(getFirstAudioAttachment(attachments, smallMax)).rejects.toThrow(
+      /exceeds size limit/i,
+    );
+  });
+
+  it("throws on invalid base64 content", async () => {
+    const attachments: NormalizedAttachment[] = [
+      { content: "%not-base64%", mimeType: "audio/ogg", fileName: "x.ogg" },
+    ];
+    await expect(getFirstAudioAttachment(attachments, maxBytes)).rejects.toThrow(/base64/i);
+  });
+
+  it("returns null for empty attachments", async () => {
+    const result = await getFirstAudioAttachment([], maxBytes);
+    expect(result).toBeNull();
+    const result2 = await getFirstAudioAttachment(undefined, maxBytes);
+    expect(result2).toBeNull();
+  });
+
+  it("strips data URL prefix from audio content", async () => {
+    const attachments: NormalizedAttachment[] = [
+      {
+        content: `data:audio/ogg;base64,${tinyAudioBase64}`,
+        mimeType: "audio/ogg",
+        fileName: "voice.ogg",
+      },
+    ];
+    const result = await getFirstAudioAttachment(attachments, maxBytes);
+    expect(result).not.toBeNull();
+    expect(result?.buffer.byteLength).toBe(4);
+    expect(result?.mimeType).toBe("audio/ogg");
   });
 });
