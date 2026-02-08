@@ -133,11 +133,14 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
+  const subOpts: { name?: string; minLevel?: number; prefix?: string[] } = {
     name,
-    minLevel,
     prefix: bindings ? [name ?? ""] : [],
-  });
+  };
+  if (minLevel !== undefined) {
+    subOpts.minLevel = minLevel;
+  }
+  return base.getSubLogger(subOpts);
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
