@@ -9,6 +9,12 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "X-Title": "OpenClaw",
 };
 
+/** Default server-side compaction strategy for Anthropic API. */
+const DEFAULT_COMPACTION_STRATEGY = "compact_20260112";
+
+/** Beta header required for Anthropic server-side compaction. */
+const ANTHROPIC_CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -118,8 +124,93 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+ * Resolve server-side compaction configuration for Anthropic provider.
+ * Returns undefined if not enabled or not applicable.
+ */
+function resolveServerSideCompaction(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): { strategy: string } | undefined {
+  if (provider !== "anthropic") {
+    return undefined;
+  }
+
+  const serverSideConfig = cfg?.agents?.defaults?.compaction?.serverSide;
+  if (!serverSideConfig?.enabled) {
+    return undefined;
+  }
+
+  return {
+    strategy: serverSideConfig.strategy ?? DEFAULT_COMPACTION_STRATEGY,
+  };
+}
+
+/**
+ * Create a streamFn wrapper that adds Anthropic server-side compaction parameters.
+ * Adds the context-management beta header and context_management.edits body parameter.
+ *
+ * @see https://docs.anthropic.com/en/docs/build-with-claude/compaction
+ */
+function createAnthropicServerSideCompactionWrapper(
+  baseStreamFn: StreamFn | undefined,
+  strategy: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+
+  log.debug(`enabling Anthropic server-side compaction with strategy: ${strategy}`);
+
+  return (model, context, options) => {
+    // Add beta header for context management.
+    // Cast to Record<string, unknown> since runtime headers may contain non-string values.
+    const existingHeaders = (options?.headers ?? {}) as Record<string, unknown>;
+    const existingBeta = existingHeaders["anthropic-beta"];
+    const betaValue =
+      typeof existingBeta === "string" && existingBeta.length > 0
+        ? `${existingBeta},${ANTHROPIC_CONTEXT_MANAGEMENT_BETA}`
+        : ANTHROPIC_CONTEXT_MANAGEMENT_BETA;
+
+    // Merge with any existing extraBody, preserving existing context_management fields
+    const existingExtraBody =
+      options && "extraBody" in options
+        ? (options as { extraBody?: unknown }).extraBody
+        : undefined;
+    const existingExtraBodyObj =
+      typeof existingExtraBody === "object" && existingExtraBody !== null
+        ? (existingExtraBody as Record<string, unknown>)
+        : {};
+    const existingCtxMgmt = existingExtraBodyObj.context_management as
+      | { edits?: unknown[] }
+      | undefined;
+    const existingEdits =
+      existingCtxMgmt !== null &&
+      existingCtxMgmt !== undefined &&
+      Array.isArray(existingCtxMgmt.edits)
+        ? existingCtxMgmt.edits
+        : [];
+
+    const extraBody = {
+      ...existingExtraBodyObj,
+      context_management: {
+        ...existingCtxMgmt,
+        edits: [...existingEdits, { type: strategy }],
+      },
+    };
+
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...existingHeaders,
+        "anthropic-beta": betaValue,
+      },
+      extraBody,
+    } as SimpleStreamOptions);
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
- * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
+ * Also adds OpenRouter app attribution headers when using the OpenRouter provider,
+ * and Anthropic server-side compaction when configured.
  *
  * @internal Exported for testing
  */
@@ -152,5 +243,17 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  // Apply Anthropic server-side compaction if enabled
+  const serverSideCompaction = resolveServerSideCompaction(cfg, provider);
+  if (serverSideCompaction) {
+    log.info(
+      `enabling Anthropic server-side compaction for ${provider}/${modelId} with strategy: ${serverSideCompaction.strategy}`,
+    );
+    agent.streamFn = createAnthropicServerSideCompactionWrapper(
+      agent.streamFn,
+      serverSideCompaction.strategy,
+    );
   }
 }

@@ -245,6 +245,28 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 
+/**
+ * Server-side compaction configuration for Anthropic models.
+ * When enabled, uses Anthropic's native context_management API to automatically
+ * compact conversation history on the server, reducing token usage and latency.
+ *
+ * Requires Anthropic provider and models supporting the context-management beta.
+ * @see https://docs.anthropic.com/en/docs/build-with-claude/compaction
+ */
+export type AgentServerSideCompactionConfig = {
+  /**
+   * Enable Anthropic's server-side compaction API.
+   * When enabled, the compact_20260112 strategy is sent with API requests.
+   * Default: false (uses client-side compaction).
+   */
+  enabled?: boolean;
+  /**
+   * Compaction strategy version to use (e.g., "compact_20260112").
+   * Default: "compact_20260112" (latest stable strategy).
+   */
+  strategy?: string;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -254,6 +276,12 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /**
+   * Anthropic server-side compaction configuration.
+   * Offloads context summarization to Anthropic's API for better performance.
+   * Only applies when using Anthropic provider models.
+   */
+  serverSide?: AgentServerSideCompactionConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

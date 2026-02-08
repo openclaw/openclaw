@@ -54,6 +54,43 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
 
+## Server-side compaction (Anthropic)
+
+Anthropic models (Opus 4.6+) support **server-side compaction**, which offloads
+context summarization to Anthropic's API. This can provide better summarization
+quality and reduce latency compared to client-side compaction.
+
+To enable server-side compaction:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        serverSide: {
+          enabled: true,
+          // Optional: override the compaction strategy (default: "compact_20260112")
+          // strategy: "compact_20260112",
+        },
+      },
+    },
+  },
+}
+```
+
+**Notes:**
+
+- Only applies when using the Anthropic provider
+- Uses Anthropic's `context_management.edits` API
+- Requires the `context-management-2025-06-27` beta feature
+- Client-side compaction remains the default for backward compatibility
+- Can be combined with other compaction settings (`mode`, `reserveTokensFloor`, etc.)
+
+When enabled, OpenClaw sends the compaction strategy to Anthropic with each API
+request, and Anthropic handles context compression automatically when needed.
+See the [Anthropic compaction docs](https://docs.anthropic.com/en/docs/build-with-claude/compaction)
+for more details on the API.
+
 ## Tips
 
 - Use `/compact` when sessions feel stale or context is bloated.

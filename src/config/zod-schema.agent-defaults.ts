@@ -102,6 +102,13 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        serverSide: z
+          .object({
+            enabled: z.boolean().optional(),
+            strategy: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
