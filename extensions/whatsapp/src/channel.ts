@@ -30,6 +30,7 @@ import {
   type ResolvedWhatsAppAccount,
 } from "openclaw/plugin-sdk";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { sanitizeWhatsAppOutboundPoll, sanitizeWhatsAppOutboundText } from "./sanitize.js";
 
 const meta = getChatChannelMeta("whatsapp");
 
@@ -341,7 +342,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     },
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
-      const result = await send(to, text, {
+      const sanitized = sanitizeWhatsAppOutboundText(text);
+      const result = await send(to, sanitized, {
         verbose: false,
         accountId: accountId ?? undefined,
         gifPlayback,
@@ -350,7 +352,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
-      const result = await send(to, text, {
+      const sanitized = sanitizeWhatsAppOutboundText(text);
+      const result = await send(to, sanitized, {
         verbose: false,
         mediaUrl,
         accountId: accountId ?? undefined,
@@ -359,10 +362,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       return { channel: "whatsapp", ...result };
     },
     sendPoll: async ({ to, poll, accountId }) =>
-      await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(to, poll, {
-        verbose: getWhatsAppRuntime().logging.shouldLogVerbose(),
-        accountId: accountId ?? undefined,
-      }),
+      await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(
+        to,
+        sanitizeWhatsAppOutboundPoll(poll),
+        {
+          verbose: getWhatsAppRuntime().logging.shouldLogVerbose(),
+          accountId: accountId ?? undefined,
+        },
+      ),
   },
   auth: {
     login: async ({ cfg, accountId, runtime, verbose }) => {

@@ -11,6 +11,7 @@ export async function applySessionHints(params: {
   storePath?: string;
   abortKey?: string;
   messageId?: string;
+  channelId?: string;
 }): Promise<string> {
   let prefixedBodyBase = params.baseBody;
   const abortedHint = params.abortedLastRun
@@ -41,7 +42,15 @@ export async function applySessionHints(params: {
     }
   }
 
-  const messageIdHint = params.messageId?.trim() ? `[message_id: ${params.messageId.trim()}]` : "";
+  // Do not include raw provider message IDs in the model-visible prompt for WhatsApp.
+  // WhatsApp group mentions sometimes show up as opaque IDs; if the model sees an ID-like token it may echo it.
+  const channelId = (params.channelId || "").trim().toLowerCase();
+  const allowMessageIdHint = channelId !== "whatsapp";
+
+  const messageIdHint =
+    allowMessageIdHint && params.messageId?.trim()
+      ? `[message_id: ${params.messageId.trim()}]`
+      : "";
   if (messageIdHint) {
     prefixedBodyBase = `${prefixedBodyBase}\n${messageIdHint}`;
   }
