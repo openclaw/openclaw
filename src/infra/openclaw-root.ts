@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,10 +15,36 @@ async function readPackageName(dir: string): Promise<string | null> {
   }
 }
 
+function readPackageNameSync(dir: string): string | null {
+  try {
+    const raw = fsSync.readFileSync(path.join(dir, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
+  } catch {
+    return null;
+  }
+}
+
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     const name = await readPackageName(current);
+    if (name && CORE_PACKAGE_NAMES.has(name)) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    const name = readPackageNameSync(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
@@ -62,6 +89,33 @@ export async function resolveOpenClawPackageRoot(opts: {
 
   for (const candidate of candidates) {
     const found = await findPackageRoot(candidate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+export function resolveOpenClawPackageRootSync(opts: {
+  cwd?: string;
+  argv1?: string;
+  moduleUrl?: string;
+}): string | null {
+  const candidates: string[] = [];
+
+  if (opts.moduleUrl) {
+    candidates.push(path.dirname(fileURLToPath(opts.moduleUrl)));
+  }
+  if (opts.argv1) {
+    candidates.push(...candidateDirsFromArgv1(opts.argv1));
+  }
+  if (opts.cwd) {
+    candidates.push(opts.cwd);
+  }
+
+  for (const candidate of candidates) {
+    const found = findPackageRootSync(candidate);
     if (found) {
       return found;
     }

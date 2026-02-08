@@ -1,11 +1,10 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { truncateText } from "./format";
+import { truncateText } from "./format.ts";
 
 marked.setOptions({
   gfm: true,
   breaks: true,
-  mangle: false,
 });
 
 const allowedTags = [

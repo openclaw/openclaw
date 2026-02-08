@@ -1119,6 +1119,35 @@ public struct SessionsCompactParams: Codable, Sendable {
     }
 }
 
+public struct SessionsUsageParams: Codable, Sendable {
+    public let key: String?
+    public let startdate: String?
+    public let enddate: String?
+    public let limit: Int?
+    public let includecontextweight: Bool?
+
+    public init(
+        key: String?,
+        startdate: String?,
+        enddate: String?,
+        limit: Int?,
+        includecontextweight: Bool?
+    ) {
+        self.key = key
+        self.startdate = startdate
+        self.enddate = enddate
+        self.limit = limit
+        self.includecontextweight = includecontextweight
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case startdate = "startDate"
+        case enddate = "endDate"
+        case limit
+        case includecontextweight = "includeContextWeight"
+    }
+}
+
 public struct ConfigGetParams: Codable, Sendable {
 }
 
@@ -1560,6 +1589,140 @@ public struct AgentSummary: Codable, Sendable {
     }
 }
 
+public struct AgentsCreateParams: Codable, Sendable {
+    public let name: String
+    public let workspace: String
+    public let emoji: String?
+    public let avatar: String?
+
+    public init(
+        name: String,
+        workspace: String,
+        emoji: String?,
+        avatar: String?
+    ) {
+        self.name = name
+        self.workspace = workspace
+        self.emoji = emoji
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case workspace
+        case emoji
+        case avatar
+    }
+}
+
+public struct AgentsCreateResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let name: String
+    public let workspace: String
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        name: String,
+        workspace: String
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case name
+        case workspace
+    }
+}
+
+public struct AgentsUpdateParams: Codable, Sendable {
+    public let agentid: String
+    public let name: String?
+    public let workspace: String?
+    public let model: String?
+    public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String?,
+        workspace: String?,
+        model: String?,
+        avatar: String?
+    ) {
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+        self.model = model
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case workspace
+        case model
+        case avatar
+    }
+}
+
+public struct AgentsUpdateResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+
+    public init(
+        ok: Bool,
+        agentid: String
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+    }
+}
+
+public struct AgentsDeleteParams: Codable, Sendable {
+    public let agentid: String
+    public let deletefiles: Bool?
+
+    public init(
+        agentid: String,
+        deletefiles: Bool?
+    ) {
+        self.agentid = agentid
+        self.deletefiles = deletefiles
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case deletefiles = "deleteFiles"
+    }
+}
+
+public struct AgentsDeleteResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let removedbindings: Int
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        removedbindings: Int
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+        self.removedbindings = removedbindings
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case removedbindings = "removedBindings"
+    }
+}
+
 public struct AgentsFileEntry: Codable, Sendable {
     public let name: String
     public let path: String
@@ -1872,7 +2035,7 @@ public struct CronJob: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let isolation: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
     public let state: [String: AnyCodable]
 
     public init(
@@ -1888,7 +2051,7 @@ public struct CronJob: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        isolation: [String: AnyCodable]?,
+        delivery: [String: AnyCodable]?,
         state: [String: AnyCodable]
     ) {
         self.id = id
@@ -1903,7 +2066,7 @@ public struct CronJob: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
-        self.isolation = isolation
+        self.delivery = delivery
         self.state = state
     }
     private enum CodingKeys: String, CodingKey {
@@ -1919,7 +2082,7 @@ public struct CronJob: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
-        case isolation
+        case delivery
         case state
     }
 }
@@ -1950,7 +2113,7 @@ public struct CronAddParams: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let isolation: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
 
     public init(
         name: String,
@@ -1962,7 +2125,7 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        isolation: [String: AnyCodable]?
+        delivery: [String: AnyCodable]?
     ) {
         self.name = name
         self.agentid = agentid
@@ -1973,7 +2136,7 @@ public struct CronAddParams: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
-        self.isolation = isolation
+        self.delivery = delivery
     }
     private enum CodingKeys: String, CodingKey {
         case name
@@ -1985,7 +2148,7 @@ public struct CronAddParams: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
-        case isolation
+        case delivery
     }
 }
 
@@ -1996,6 +2159,8 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let status: AnyCodable?
     public let error: String?
     public let summary: String?
+    public let sessionid: String?
+    public let sessionkey: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -2007,6 +2172,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         status: AnyCodable?,
         error: String?,
         summary: String?,
+        sessionid: String?,
+        sessionkey: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?
@@ -2017,6 +2184,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.status = status
         self.error = error
         self.summary = summary
+        self.sessionid = sessionid
+        self.sessionkey = sessionkey
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -2028,6 +2197,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         case status
         case error
         case summary
+        case sessionid = "sessionId"
+        case sessionkey = "sessionKey"
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"

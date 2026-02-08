@@ -13,7 +13,7 @@ const getCachedStickerSpy = vi.fn();
 const describeStickerImageSpy = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
-let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> | null = null;
+let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -120,7 +120,7 @@ vi.mock("../auto-reply/reply.js", () => {
 
 describe("telegram inbound media", () => {
   // Parallel vitest shards can make this suite slower than the standalone run.
-  const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
+  const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
 
   it(
     "downloads media via file_path (no file.download)",

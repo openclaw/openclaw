@@ -1,14 +1,18 @@
 ---
-summary: "iMessage support via imsg (JSON-RPC over stdio), setup, and chat_id routing"
+summary: "Legacy iMessage support via imsg (JSON-RPC over stdio). New setups should use BlueBubbles."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
 title: iMessage
 ---
 
-# iMessage (imsg)
+# iMessage (legacy: imsg)
 
-Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
+> **Recommended:** Use [BlueBubbles](/channels/bluebubbles) for new iMessage setups.
+>
+> The `imsg` channel is a legacy external-CLI integration and may be removed in a future release.
+
+Status: legacy external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
 ## Quick setup (beginner)
 
@@ -58,6 +62,28 @@ Disable with:
 - Automation permission when sending.
 - `channels.imessage.cliPath` can point to any command that proxies stdin/stdout (for example, a wrapper script that SSHes to another Mac and runs `imsg rpc`).
 
+## Troubleshooting macOS Privacy and Security TCC
+
+If sending/receiving fails (for example, `imsg rpc` exits non-zero, times out, or the gateway appears to hang), a common cause is a macOS permission prompt that was never approved.
+
+macOS grants TCC permissions per app/process context. Approve prompts in the same context that runs `imsg` (for example, Terminal/iTerm, a LaunchAgent session, or an SSH-launched process).
+
+Checklist:
+
+- **Full Disk Access**: allow access for the process running OpenClaw (and any shell/SSH wrapper that executes `imsg`). This is required to read the Messages database (`chat.db`).
+- **Automation → Messages**: allow the process running OpenClaw (and/or your terminal) to control **Messages.app** for outbound sends.
+- **`imsg` CLI health**: verify `imsg` is installed and supports RPC (`imsg rpc --help`).
+
+Tip: If OpenClaw is running headless (LaunchAgent/systemd/SSH) the macOS prompt can be easy to miss. Run a one-time interactive command in a GUI terminal to force the prompt, then retry:
+
+```bash
+imsg chats --limit 1
+# or
+imsg send <handle> "test"
+```
+
+Related macOS folder permissions (Desktop/Documents/Downloads): [/platforms/mac/permissions](/platforms/mac/permissions).
+
 ## Setup (fast path)
 
 1. Ensure Messages is signed in on this Mac.
@@ -77,7 +103,7 @@ If you want the bot to send from a **separate iMessage identity** (and keep your
 6. Set up SSH so `ssh <bot-macos-user>@localhost true` works without a password.
 7. Point `channels.imessage.accounts.bot.cliPath` at an SSH wrapper that runs `imsg` as the bot user.
 
-First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the _bot macOS user_. If `imsg rpc` looks stuck or exits, log into that user (Screen Sharing helps), run a one-time `imsg chats --limit 1` / `imsg send ...`, approve prompts, then retry.
+First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the _bot macOS user_. If `imsg rpc` looks stuck or exits, log into that user (Screen Sharing helps), run a one-time `imsg chats --limit 1` / `imsg send ...`, approve prompts, then retry. See [Troubleshooting macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
 Example wrapper (`chmod +x`). Replace `<bot-macos-user>` with your actual macOS username:
 
@@ -198,7 +224,7 @@ DMs:
 - Approve via:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/channels/pairing)
 
 Groups:
 

@@ -2,31 +2,31 @@
 read_when:
   - 集成使用 OpenResponses API 的客户端
   - 你需要基于 item 的输入、客户端工具调用或 SSE 事件
-summary: 从 Gateway网关暴露一个兼容 OpenResponses 的 /v1/responses HTTP 端点
+summary: 从 Gateway 网关暴露兼容 OpenResponses 的 /v1/responses HTTP 端点
 title: OpenResponses API
 x-i18n:
-  generated_at: "2026-02-01T20:35:34Z"
+  generated_at: "2026-02-03T07:48:43Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: 0597714837f8b210c38eeef53561894220c1473e54c56a5c69984847685d518c
   source_path: gateway/openresponses-http-api.md
-  workflow: 14
+  workflow: 15
 ---
 
-# OpenResponses API (HTTP)
+# OpenResponses API（HTTP）
 
-OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/responses` 端点。
+OpenClaw 的 Gateway 网关可以提供兼容 OpenResponses 的 `POST /v1/responses` 端点。
 
 此端点**默认禁用**。请先在配置中启用。
 
 - `POST /v1/responses`
-- 与 Gateway网关使用相同端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/responses`
+- 与 Gateway 网关相同的端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/responses`
 
-底层实现中，请求作为普通的 Gateway网关智能体运行来执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与你的 Gateway网关一致。
+底层实现中，请求作为正常的 Gateway 网关智能体运行执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与你的 Gateway 网关一致。
 
 ## 认证
 
-使用 Gateway网关的认证配置。发送 bearer 令牌：
+使用 Gateway 网关认证配置。发送 bearer 令牌：
 
 - `Authorization: Bearer <token>`
 
@@ -37,7 +37,7 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 
 ## 选择智能体
 
-无需自定义头：在 OpenResponses 的 `model` 字段中编码智能体 ID：
+无需自定义头：在 OpenResponses `model` 字段中编码智能体 id：
 
 - `model: "openclaw:<agentId>"`（示例：`"openclaw:main"`、`"openclaw:beta"`）
 - `model: "agent:<agentId>"`（别名）
@@ -46,7 +46,7 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 
 - `x-openclaw-agent-id: <agentId>`（默认：`main`）
 
-高级用法：
+高级：
 
 - `x-openclaw-session-key: <sessionKey>` 完全控制会话路由。
 
@@ -84,11 +84,11 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 
 ## 会话行为
 
-默认情况下，端点是**每次请求无状态的**（每次调用生成一个新的会话密钥）。
+默认情况下，端点**每个请求都是无状态的**（每次调用生成新的会话键）。
 
-如果请求包含 OpenResponses 的 `user` 字符串，Gateway网关会从中派生一个稳定的会话密钥，使重复调用可以共享同一个智能体会话。
+如果请求包含 OpenResponses `user` 字符串，Gateway 网关会从中派生稳定的会话键，这样重复调用可以共享智能体会话。
 
-## 请求结构（已支持）
+## 请求结构（支持的）
 
 请求遵循 OpenResponses API，使用基于 item 的输入。当前支持：
 
@@ -100,7 +100,7 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 - `max_output_tokens`：尽力而为的输出限制（取决于提供商）。
 - `user`：稳定的会话路由。
 
-已接受但**当前忽略**：
+接受但**当前忽略**：
 
 - `max_tool_calls`
 - `reasoning`
@@ -109,17 +109,17 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 - `previous_response_id`
 - `truncation`
 
-## Items（输入）
+## Item（输入）
 
 ### `message`
 
 角色：`system`、`developer`、`user`、`assistant`。
 
-- `system` 和 `developer` 附加到系统提示中。
+- `system` 和 `developer` 追加到系统提示。
 - 最近的 `user` 或 `function_call_output` item 成为"当前消息"。
-- 更早的 user/assistant 消息作为历史上下文包含在内。
+- 较早的 user/assistant 消息作为上下文历史包含。
 
-### `function_call_output`（基于轮次的工具）
+### `function_call_output`（基于回合的工具）
 
 将工具结果发送回模型：
 
@@ -133,16 +133,15 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 
 ### `reasoning` 和 `item_reference`
 
-为兼容 schema 而接受，但在构建提示时忽略。
+为了 schema 兼容性而接受，但在构建提示时忽略。
 
 ## 工具（客户端函数工具）
 
-通过 `tools: [{ type: "function", function: { name, description?, parameters? } }]` 提供工具。
+使用 `tools: [{ type: "function", function: { name, description?, parameters? } }]` 提供工具。
 
-如果智能体决定调用工具，响应会返回一个 `function_call` 输出 item。
-然后你发送一个包含 `function_call_output` 的后续请求以继续该轮次。
+如果智能体决定调用工具，响应返回一个 `function_call` 输出 item。然后你发送带有 `function_call_output` 的后续请求以继续回合。
 
-## 图片（`input_image`）
+## 图像（`input_image`）
 
 支持 base64 或 URL 来源：
 
@@ -172,25 +171,24 @@ OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/r
 }
 ```
 
-允许的 MIME 类型（当前）：`text/plain`、`text/markdown`、`text/html`、`text/csv`、
-`application/json`、`application/pdf`。
+允许的 MIME 类型（当前）：`text/plain`、`text/markdown`、`text/html`、`text/csv`、`application/json`、`application/pdf`。
 
 最大大小（当前）：5MB。
 
 当前行为：
 
-- 文件内容被解码并添加到**系统提示**中，而非用户消息中，因此它是临时的（不会持久化到会话历史中）。
-- PDF 会被解析提取文本。如果发现的文本很少，前几页会被光栅化为图片并传递给模型。
+- 文件内容被解码并添加到**系统提示**，而不是用户消息，所以它保持临时性（不持久化在会话历史中）。
+- PDF 被解析提取文本。如果发现的文本很少，前几页会被栅格化为图像并传递给模型。
 
-PDF 解析使用对 Node 友好的 `pdfjs-dist` 旧版构建（无 worker）。现代 PDF.js 构建需要浏览器 worker/DOM 全局对象，因此不在 Gateway网关中使用。
+PDF 解析使用 Node 友好的 `pdfjs-dist` legacy 构建（无 worker）。现代 PDF.js 构建期望浏览器 worker/DOM 全局变量，因此不在 Gateway 网关中使用。
 
 URL 获取默认值：
 
 - `files.allowUrl`：`true`
 - `images.allowUrl`：`true`
-- 请求受到保护（DNS 解析、私有 IP 阻止、重定向上限、超时）。
+- 请求受到保护（DNS 解析、私有 IP 阻止、重定向限制、超时）。
 
-## 文件和图片限制（配置）
+## 文件 + 图像限制（配置）
 
 默认值可在 `gateway.http.endpoints.responses` 下调整：
 
@@ -252,10 +250,10 @@ URL 获取默认值：
 
 ## 流式传输（SSE）
 
-设置 `stream: true` 以接收服务器发送事件（SSE）：
+设置 `stream: true` 接收 Server-Sent Events（SSE）：
 
 - `Content-Type: text/event-stream`
-- 每个事件行为 `event: <type>` 和 `data: <json>`
+- 每个事件行是 `event: <type>` 和 `data: <json>`
 - 流以 `data: [DONE]` 结束
 
 当前发出的事件类型：
@@ -285,8 +283,8 @@ URL 获取默认值：
 
 常见情况：
 
-- `401` 缺少/无效的认证
-- `400` 无效的请求体
+- `401` 缺少/无效认证
+- `400` 无效请求体
 - `405` 错误的方法
 
 ## 示例

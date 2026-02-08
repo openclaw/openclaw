@@ -5,31 +5,34 @@ import {
   runUpdate,
   updateConfigFormValue,
   type ConfigState,
-} from "./config";
+} from "./config.ts";
 
 function createState(): ConfigState {
   return {
-    client: null,
-    connected: false,
     applySessionKey: "main",
+    client: null,
+    configActiveSection: null,
+    configActiveSubsection: null,
+    configApplying: false,
+    configForm: null,
+    configFormDirty: false,
+    configFormMode: "form",
+    configFormOriginal: null,
+    configIssues: [],
     configLoading: false,
     configRaw: "",
     configRawOriginal: "",
-    configValid: null,
-    configIssues: [],
     configSaving: false,
-    configApplying: false,
-    updateRunning: false,
-    configSnapshot: null,
     configSchema: null,
-    configSchemaVersion: null,
     configSchemaLoading: false,
+    configSchemaVersion: null,
+    configSearchQuery: "",
+    configSnapshot: null,
     configUiHints: {},
-    configForm: null,
-    configFormOriginal: null,
-    configFormDirty: false,
-    configFormMode: "form",
+    configValid: null,
+    connected: false,
     lastError: null,
+    updateRunning: false,
   };
 }
 

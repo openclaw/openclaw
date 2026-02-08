@@ -112,7 +112,7 @@ Example:
 Notes:
 
 - DM access control is **global per WhatsApp account** (pairing/allowlist), not per agent.
-- For shared groups, bind the group to one agent or use [Broadcast groups](/broadcast-groups).
+- For shared groups, bind the group to one agent or use [Broadcast groups](/channels/broadcast-groups).
 
 ## Routing rules (how messages pick an agent)
 
@@ -221,7 +221,7 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },
@@ -255,7 +255,7 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },
@@ -373,4 +373,4 @@ Note: `tools.elevated` is **global** and sender-based; it is not configurable pe
 If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.

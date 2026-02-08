@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   buildControlUiAvatarUrl,
@@ -17,34 +17,13 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
+  root?: ControlUiRootState;
 };
 
-function resolveControlUiRoot(): string | null {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const execDir = (() => {
-    try {
-      return path.dirname(fs.realpathSync(process.execPath));
-    } catch {
-      return null;
-    }
-  })();
-  const candidates = [
-    // Packaged app: control-ui lives alongside the executable.
-    execDir ? path.resolve(execDir, "control-ui") : null,
-    // Running from dist: dist/gateway/control-ui.js -> dist/control-ui
-    path.resolve(here, "../control-ui"),
-    // Running from source: src/gateway/control-ui.ts -> dist/control-ui
-    path.resolve(here, "../../dist/control-ui"),
-    // Fallback to cwd (dev)
-    path.resolve(process.cwd(), "dist", "control-ui"),
-  ].filter((dir): dir is string => Boolean(dir));
-  for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "index.html"))) {
-      return dir;
-    }
-  }
-  return null;
-}
+export type ControlUiRootState =
+  | { kind: "resolved"; path: string }
+  | { kind: "invalid"; path: string }
+  | { kind: "missing" };
 
 function contentTypeForExt(ext: string): string {
   switch (ext) {
@@ -87,6 +66,12 @@ type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
 
+function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -120,6 +105,8 @@ export function handleControlUiAvatarRequest(
   if (!pathname.startsWith(pathWithBase)) {
     return false;
   }
+
+  applyControlUiSecurityHeaders(res);
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
@@ -271,6 +258,7 @@ export function handleControlUiHttpRequest(
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
     }
@@ -278,6 +266,7 @@ export function handleControlUiHttpRequest(
 
   if (basePath) {
     if (pathname === basePath) {
+      applyControlUiSecurityHeaders(res);
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
       res.end();
@@ -288,7 +277,34 @@ export function handleControlUiHttpRequest(
     }
   }
 
-  const root = resolveControlUiRoot();
+  applyControlUiSecurityHeaders(res);
+
+  const rootState = opts?.root;
+  if (rootState?.kind === "invalid") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      `Control UI assets not found at ${rootState.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
+    );
+    return true;
+  }
+  if (rootState?.kind === "missing") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    );
+    return true;
+  }
+
+  const root =
+    rootState?.kind === "resolved"
+      ? rootState.path
+      : resolveControlUiRootSync({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        });
   if (!root) {
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");

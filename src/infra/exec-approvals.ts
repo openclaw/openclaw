@@ -132,6 +132,37 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
+// entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
+function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) {
+    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
+  }
+  let changed = false;
+  const result: ExecAllowlistEntry[] = [];
+  for (const item of allowlist) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        result.push({ pattern: trimmed });
+        changed = true;
+      } else {
+        changed = true; // dropped empty string
+      }
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecAllowlistEntry);
+      } else {
+        changed = true; // dropped invalid entry
+      }
+    } else {
+      changed = true; // dropped invalid entry
+    }
+  }
+  return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
+}
+
 function ensureAllowlistIds(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
@@ -160,7 +191,8 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
-    const allowlist = ensureAllowlistIds(agent.allowlist);
+    const coerced = coerceAllowlistEntries(agent.allowlist);
+    const allowlist = ensureAllowlistIds(coerced);
     if (allowlist !== agent.allowlist) {
       agents[key] = { ...agent, allowlist };
     }
@@ -586,6 +618,19 @@ export type ExecCommandAnalysis = {
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
+const WINDOWS_UNSUPPORTED_TOKENS = new Set([
+  "&",
+  "|",
+  "<",
+  ">",
+  "^",
+  "(",
+  ")",
+  "%",
+  "!",
+  "\n",
+  "\r",
+]);
 
 function isDoubleQuoteEscape(next: string | undefined): next is string {
   return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
@@ -735,6 +780,86 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   return { ok: true, segments: result.parts };
 }
 
+function findWindowsUnsupportedToken(command: string): string | null {
+  for (const ch of command) {
+    if (WINDOWS_UNSUPPORTED_TOKENS.has(ch)) {
+      if (ch === "\n" || ch === "\r") {
+        return "newline";
+      }
+      return ch;
+    }
+  }
+  return null;
+}
+
+function tokenizeWindowsSegment(segment: string): string[] | null {
+  const tokens: string[] = [];
+  let buf = "";
+  let inDouble = false;
+
+  const pushToken = () => {
+    if (buf.length > 0) {
+      tokens.push(buf);
+      buf = "";
+    }
+  };
+
+  for (let i = 0; i < segment.length; i += 1) {
+    const ch = segment[i];
+    if (ch === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inDouble && /\s/.test(ch)) {
+      pushToken();
+      continue;
+    }
+    buf += ch;
+  }
+
+  if (inDouble) {
+    return null;
+  }
+  pushToken();
+  return tokens.length > 0 ? tokens : null;
+}
+
+function analyzeWindowsShellCommand(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): ExecCommandAnalysis {
+  const unsupported = findWindowsUnsupportedToken(params.command);
+  if (unsupported) {
+    return {
+      ok: false,
+      reason: `unsupported windows shell token: ${unsupported}`,
+      segments: [],
+    };
+  }
+  const argv = tokenizeWindowsSegment(params.command);
+  if (!argv || argv.length === 0) {
+    return { ok: false, reason: "unable to parse windows command", segments: [] };
+  }
+  return {
+    ok: true,
+    segments: [
+      {
+        raw: params.command,
+        argv,
+        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+      },
+    ],
+  };
+}
+
+function isWindowsPlatform(platform?: string | null): boolean {
+  const normalized = String(platform ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized.startsWith("win");
+}
+
 function tokenizeShellSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
@@ -828,7 +953,11 @@ export function analyzeShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
+  if (isWindowsPlatform(params.platform)) {
+    return analyzeWindowsShellCommand(params);
+  }
   // First try splitting by chain operators (&&, ||, ;)
   const chainParts = splitCommandChain(params.command);
   if (chainParts) {
@@ -1190,13 +1319,15 @@ export function evaluateShellAllowlist(params: {
   env?: NodeJS.ProcessEnv;
   skillBins?: Set<string>;
   autoAllowSkills?: boolean;
+  platform?: string | null;
 }): ExecAllowlistAnalysis {
-  const chainParts = splitCommandChain(params.command);
+  const chainParts = isWindowsPlatform(params.platform) ? null : splitCommandChain(params.command);
   if (!chainParts) {
     const analysis = analyzeShellCommand({
       command: params.command,
       cwd: params.cwd,
       env: params.env,
+      platform: params.platform,
     });
     if (!analysis.ok) {
       return {
@@ -1230,6 +1361,7 @@ export function evaluateShellAllowlist(params: {
       command: part,
       cwd: params.cwd,
       env: params.env,
+      platform: params.platform,
     });
     if (!analysis.ok) {
       return {

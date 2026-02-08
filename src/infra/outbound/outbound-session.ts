@@ -816,6 +816,61 @@ function resolveTlonSession(
   };
 }
 
+/**
+ * Feishu ID formats:
+ * - oc_xxx: chat_id (group chat)
+ * - ou_xxx: user open_id (DM)
+ * - on_xxx: user union_id (DM)
+ * - cli_xxx: app_id (not a valid send target)
+ */
+function resolveFeishuSession(
+  params: ResolveOutboundSessionRouteParams,
+): OutboundSessionRoute | null {
+  let trimmed = stripProviderPrefix(params.target, "feishu");
+  trimmed = stripProviderPrefix(trimmed, "lark").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  let isGroup = false;
+
+  if (lower.startsWith("group:") || lower.startsWith("chat:")) {
+    trimmed = trimmed.replace(/^(group|chat):/i, "").trim();
+    isGroup = true;
+  } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
+    trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
+    isGroup = false;
+  }
+
+  const idLower = trimmed.toLowerCase();
+  if (idLower.startsWith("oc_")) {
+    isGroup = true;
+  } else if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
+    isGroup = false;
+  }
+
+  const peer: RoutePeer = {
+    kind: isGroup ? "group" : "dm",
+    id: trimmed,
+  };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "feishu",
+    accountId: params.accountId,
+    peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer,
+    chatType: isGroup ? "group" : "direct",
+    from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
+    to: trimmed,
+  };
+}
+
 function resolveFallbackSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -890,6 +945,8 @@ export async function resolveOutboundSessionRoute(
       return resolveNostrSession({ ...params, target });
     case "tlon":
       return resolveTlonSession({ ...params, target });
+    case "feishu":
+      return resolveFeishuSession({ ...params, target });
     default:
       return resolveFallbackSession({ ...params, target });
   }

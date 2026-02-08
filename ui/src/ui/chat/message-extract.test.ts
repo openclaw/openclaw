@@ -4,7 +4,7 @@ import {
   extractTextCached,
   extractThinking,
   extractThinkingCached,
-} from "./message-extract";
+} from "./message-extract.ts";
 
 describe("extractTextCached", () => {
   it("matches extractText output", () => {

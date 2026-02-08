@@ -12,7 +12,9 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "openai-api-key": "openai",
   "openrouter-api-key": "openrouter",
   "ai-gateway-api-key": "vercel-ai-gateway",
+  "cloudflare-ai-gateway-api-key": "cloudflare-ai-gateway",
   "moonshot-api-key": "moonshot",
+  "moonshot-api-key-cn": "moonshot",
   "kimi-code-api-key": "kimi-coding",
   "gemini-api-key": "google",
   "google-antigravity": "google-antigravity",
@@ -28,8 +30,10 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "minimax-api-lightning": "minimax",
   minimax: "lmstudio",
   "opencode-zen": "opencode",
+  "xai-api-key": "xai",
   "qwen-portal": "qwen-portal",
   "minimax-portal": "minimax-portal",
+  "qianfan-api-key": "qianfan",
 };
 
 export function resolvePreferredProviderForAuthChoice(choice: AuthChoice): string | undefined {

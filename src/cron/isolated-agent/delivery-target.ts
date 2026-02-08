@@ -24,11 +24,13 @@ export async function resolveDeliveryTarget(
   channel: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
   mode: "explicit" | "implicit";
   error?: Error;
 }> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -40,7 +42,7 @@ export async function resolveDeliveryTarget(
     entry: main,
     requestedChannel,
     explicitTo,
-    allowMismatchedLastTo: true,
+    allowMismatchedLastTo,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -59,7 +61,7 @@ export async function resolveDeliveryTarget(
         requestedChannel,
         explicitTo,
         fallbackChannel,
-        allowMismatchedLastTo: true,
+        allowMismatchedLastTo,
         mode: preliminary.mode,
       })
     : preliminary;
@@ -69,7 +71,13 @@ export async function resolveDeliveryTarget(
   const toCandidate = resolved.to;
 
   if (!toCandidate) {
-    return { channel, to: undefined, accountId: resolved.accountId, mode };
+    return {
+      channel,
+      to: undefined,
+      accountId: resolved.accountId,
+      threadId: resolved.threadId,
+      mode,
+    };
   }
 
   const docked = resolveOutboundTarget({
@@ -83,6 +91,7 @@ export async function resolveDeliveryTarget(
     channel,
     to: docked.ok ? docked.to : undefined,
     accountId: resolved.accountId,
+    threadId: resolved.threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };

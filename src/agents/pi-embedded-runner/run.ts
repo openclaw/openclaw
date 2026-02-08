@@ -3,7 +3,6 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -29,9 +28,11 @@ import {
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   classifyFailoverReason,
   formatAssistantErrorText,
   isAuthAssistantError,
+  isBillingAssistantError,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverAssistantError,
@@ -44,12 +45,17 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import {
+  truncateOversizedToolResultsInSession,
+  sessionLikelyHasOversizedToolResults,
+} from "./tool-result-truncation.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -90,7 +96,21 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const workspaceResolution = resolveRunWorkspaceDir({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+      });
+      const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const redactedSessionId = redactRunIdentifier(params.sessionId);
+      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+      if (workspaceResolution.usedFallback) {
+        log.warn(
+          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
+        );
+      }
       const prevCwd = process.cwd();
 
       const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -303,7 +323,9 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      let overflowCompactionAttempted = false;
+      const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      let overflowCompactionAttempts = 0;
+      let toolResultTruncationAttempted = false;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -324,12 +346,13 @@ export async function runEmbeddedPiAgent(
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
+            senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
-            workspaceDir: params.workspaceDir,
+            workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
             skillsSnapshot: params.skillsSnapshot,
@@ -341,6 +364,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
+            agentId: workspaceResolution.agentId,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -372,13 +396,23 @@ export async function runEmbeddedPiAgent(
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
+              const msgCount = attempt.messagesSnapshot?.length ?? 0;
+              log.warn(
+                `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `provider=${provider}/${modelId} messages=${msgCount} ` +
+                  `sessionFile=${params.sessionFile} compactionAttempts=${overflowCompactionAttempts} ` +
+                  `error=${errorText.slice(0, 200)}`,
+              );
               const isCompactionFailure = isCompactionFailureError(errorText);
               // Attempt auto-compaction on context overflow (not compaction_failure)
-              if (!isCompactionFailure && !overflowCompactionAttempted) {
+              if (
+                !isCompactionFailure &&
+                overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+              ) {
+                overflowCompactionAttempts++;
                 log.warn(
-                  `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
+                  `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
                 );
-                overflowCompactionAttempted = true;
                 const compactResult = await compactEmbeddedPiSessionDirect({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -387,10 +421,11 @@ export async function runEmbeddedPiAgent(
                   agentAccountId: params.agentAccountId,
                   authProfileId: lastProfileId,
                   sessionFile: params.sessionFile,
-                  workspaceDir: params.workspaceDir,
+                  workspaceDir: resolvedWorkspace,
                   agentDir,
                   config: params.config,
                   skillsSnapshot: params.skillsSnapshot,
+                  senderIsOwner: params.senderIsOwner,
                   provider,
                   model: modelId,
                   thinkLevel,
@@ -407,6 +442,47 @@ export async function runEmbeddedPiAgent(
                   `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
                 );
               }
+
+              // Fallback: try truncating oversized tool results in the session.
+              // This handles the case where a single tool result (e.g., reading a
+              // huge file or getting a massive PR diff) exceeds the context window,
+              // and compaction can't help because there's no older history to compact.
+              if (!toolResultTruncationAttempted) {
+                const contextWindowTokens = ctxInfo.tokens;
+                const hasOversized = attempt.messagesSnapshot
+                  ? sessionLikelyHasOversizedToolResults({
+                      messages: attempt.messagesSnapshot,
+                      contextWindowTokens,
+                    })
+                  : false;
+
+                if (hasOversized) {
+                  toolResultTruncationAttempted = true;
+                  log.warn(
+                    `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
+                      `(contextWindow=${contextWindowTokens} tokens)`,
+                  );
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: params.sessionFile,
+                    contextWindowTokens,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+                    );
+                    // Reset compaction attempts so compaction can be tried again
+                    // after truncation (the session is now smaller)
+                    overflowCompactionAttempts = 0;
+                    continue;
+                  }
+                  log.warn(
+                    `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+                  );
+                }
+              }
+
               const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
               return {
                 payloads: [
@@ -536,6 +612,7 @@ export async function runEmbeddedPiAgent(
 
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
+          const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
@@ -607,9 +684,11 @@ export async function runEmbeddedPiAgent(
                   ? "LLM request timed out."
                   : rateLimitFailure
                     ? "LLM request rate limited."
-                    : authFailure
-                      ? "LLM request unauthorized."
-                      : "LLM request failed.");
+                    : billingFailure
+                      ? BILLING_ERROR_USER_MESSAGE
+                      : authFailure
+                        ? "LLM request unauthorized."
+                        : "LLM request failed.");
               const status =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
