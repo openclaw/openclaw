@@ -191,10 +191,18 @@ export function normalizeAgentPayload(
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const idFactory = opts?.idFactory ?? randomUUID;
-  const sessionKey =
-    typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
-      ? sessionKeyRaw.trim()
-      : `hook:${idFactory()}`;
+  let sessionKey: string;
+  if (typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()) {
+    const trimmed = sessionKeyRaw.trim();
+    // Hook callers must use the hook: namespace. Reject agent-scoped session
+    // keys to prevent hooks from accessing user conversation sessions (CWE-639).
+    if (trimmed.toLowerCase().startsWith("agent:")) {
+      return { ok: false, error: "hook session keys must use the hook: namespace" };
+    }
+    sessionKey = trimmed;
+  } else {
+    sessionKey = `hook:${idFactory()}`;
+  }
   const channel = resolveHookChannel(payload.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };

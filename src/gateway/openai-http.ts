@@ -157,6 +157,7 @@ function resolveOpenAiSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;
+  authUser?: string | undefined;
 }): string {
   return resolveSessionKey({ ...params, prefix: "openai" });
 }
@@ -206,7 +207,7 @@ export async function handleOpenAiHttpRequest(
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
   const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
+  const sessionKey = resolveOpenAiSessionKey({ req, agentId, user, authUser: authResult.user });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {

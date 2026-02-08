@@ -29,7 +29,7 @@ import {
   sendMethodNotAllowed,
   sendUnauthorized,
 } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import { getBearerToken, getHeader, sessionKeyBelongsToUser } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -165,6 +165,22 @@ export async function handleToolsInvokeHttpRequest(
       : {};
 
   const rawSessionKey = resolveSessionKeyFromBody(body);
+  // When auth identifies a specific user (e.g. Tailscale), reject body-supplied
+  // session keys that belong to a different user (CWE-639).
+  if (
+    rawSessionKey &&
+    authResult.user &&
+    !sessionKeyBelongsToUser(rawSessionKey, authResult.user)
+  ) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "Session key does not belong to the authenticated user.",
+      },
+    });
+    return true;
+  }
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
 
