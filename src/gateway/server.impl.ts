@@ -218,6 +218,8 @@ export async function startGatewayServer(
   }
 
   const cfgAtStart = loadConfig();
+  const { syncCliScripts } = await import("../infra/cli-scripts-sync.js");
+  await syncCliScripts();
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();

@@ -11,6 +11,7 @@
   "files": [
     "assets/",
     "CHANGELOG.md",
+    "cli-scripts/",
     "dist/",
     "docs/",
     "extensions/",

@@ -240,7 +240,7 @@ export const HumanDelaySchema = z
 
 export const CliBackendSchema = z
   .object({
-    command: z.string(),
+    command: z.string().optional(),
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),

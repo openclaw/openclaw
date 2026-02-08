@@ -78,9 +78,19 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
+  const agentId = params.agentId ?? "unknown";
   const extraSystemPrompt = [
     params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
+    [
+      "## Inter-Agent Communication",
+      `Your agent ID is: ${agentId}`,
+      "You can communicate with other agents using Bash to run these scripts:",
+      '- Send message: bash ~/.openclaw/scripts/session-send.sh <sessionKey> "<message>"',
+      "- List sessions: bash ~/.openclaw/scripts/session-list.sh",
+      "- View history: bash ~/.openclaw/scripts/session-history.sh <sessionKey> [limit]",
+      "Session keys follow the format: agent:<agentId>:<sessionName> (e.g. agent:developer:main)",
+      "Messages prefixed with [from:<agentId>] are from other agents.",
+    ].join("\n"),
   ]
     .filter(Boolean)
     .join("\n");
@@ -221,6 +231,9 @@ export async function runCliAgent(params: {
 
       const env = (() => {
         const next = { ...process.env, ...backend.env };
+        if (params.agentId) {
+          next.OPENCLAW_AGENT_ID = params.agentId;
+        }
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
         }

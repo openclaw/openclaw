@@ -4,7 +4,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 
 const mergeOrigin = (
@@ -43,6 +43,15 @@ const mergeOrigin = (
 };
 
 export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
+  // Webchat messages should not overwrite the session's external origin.
+  const rawProvider =
+    (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
+    ctx.Surface ||
+    ctx.Provider;
+  if (normalizeMessageChannel(rawProvider) === INTERNAL_MESSAGE_CHANNEL) {
+    return undefined;
+  }
+
   const label = resolveConversationLabel(ctx)?.trim();
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
