@@ -85,6 +85,47 @@ describe("markAuthProfileFailure", () => {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
+  it("caps rate_limit cooldown at 5 minutes after repeated failures (#11352)", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:manual": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-manual",
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      const maxCooldownMs = 5 * 60 * 1000;
+
+      for (let i = 0; i < 15; i++) {
+        const before = Date.now();
+        await markAuthProfileFailure({
+          store,
+          profileId: "anthropic:manual",
+          reason: "rate_limit",
+          agentDir,
+        });
+        const cooldownUntil = store.usageStats?.["anthropic:manual"]?.cooldownUntil;
+        expect(typeof cooldownUntil).toBe("number");
+        const remainingMs = (cooldownUntil as number) - before;
+        expect(remainingMs).toBeLessThanOrEqual(maxCooldownMs + 100);
+      }
+
+      expect(store.usageStats?.["anthropic:manual"]?.errorCount).toBe(15);
+      expect(store.usageStats?.["anthropic:manual"]?.failureCounts?.rate_limit).toBe(15);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {

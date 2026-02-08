@@ -25,5 +25,7 @@ export type AuthConfig = {
      * this window, counters reset. Default: 24.
      */
     failureWindowHours?: number;
+    /** Max cooldown duration for rate-limit/transient failures (minutes). Default: 5. */
+    maxCooldownMinutes?: number;
   };
 };
