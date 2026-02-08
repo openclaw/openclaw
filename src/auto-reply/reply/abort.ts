@@ -22,6 +22,7 @@ import { clearSessionQueues } from "./queue.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
+const MAX_ABORT_ENTRIES = 10000;
 
 export function isAbortTrigger(text?: string): boolean {
   if (!text) {
@@ -36,6 +37,18 @@ export function getAbortMemory(key: string): boolean | undefined {
 }
 
 export function setAbortMemory(key: string, value: boolean): void {
+  // If value is false, delete entry entirely (cleanup)
+  if (!value) {
+    ABORT_MEMORY.delete(key);
+    return;
+  }
+  // Size limit: evict oldest entry (FIFO - Map preserves insertion order)
+  if (ABORT_MEMORY.size >= MAX_ABORT_ENTRIES) {
+    const firstKey = ABORT_MEMORY.keys().next().value;
+    if (firstKey !== undefined) {
+      ABORT_MEMORY.delete(firstKey);
+    }
+  }
   ABORT_MEMORY.set(key, value);
 }
 
