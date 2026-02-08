@@ -1,7 +1,18 @@
 FROM node:22-bookworm
 
+ARG BUN_VERSION=1.3.8
+ARG BUN_SHA256=0322b17f0722da76a64298aad498225aedcbf6df1008a1dee45e16ecb226a3f1
+
 # Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /root/.bun/bin \
+    && curl -fsSL -o /tmp/bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" \
+    && printf '%s  %s\n' "${BUN_SHA256}" "/tmp/bun.zip" | sha256sum -c - \
+    && unzip -q /tmp/bun.zip -d /tmp \
+    && install -m 755 /tmp/bun-linux-x64/bun /root/.bun/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bun-linux-x64
 ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable

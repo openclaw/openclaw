@@ -7,6 +7,8 @@ PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-cert
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"
 BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
+BUN_VERSION="${BUN_VERSION:-1.3.8}"
+BUN_SHA256="${BUN_SHA256:-0322b17f0722da76a64298aad498225aedcbf6df1008a1dee45e16ecb226a3f1}"
 INSTALL_BREW="${INSTALL_BREW:-1}"
 BREW_INSTALL_DIR="${BREW_INSTALL_DIR:-/home/linuxbrew/.linuxbrew}"
 
@@ -23,6 +25,8 @@ docker build \
   --build-arg INSTALL_PNPM="${INSTALL_PNPM}" \
   --build-arg INSTALL_BUN="${INSTALL_BUN}" \
   --build-arg BUN_INSTALL_DIR="${BUN_INSTALL_DIR}" \
+  --build-arg BUN_VERSION="${BUN_VERSION}" \
+  --build-arg BUN_SHA256="${BUN_SHA256}" \
   --build-arg INSTALL_BREW="${INSTALL_BREW}" \
   --build-arg BREW_INSTALL_DIR="${BREW_INSTALL_DIR}" \
   - <<EOF
@@ -31,6 +35,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG INSTALL_PNPM=1
 ARG INSTALL_BUN=1
 ARG BUN_INSTALL_DIR=/opt/bun
+ARG BUN_VERSION=1.3.8
+ARG BUN_SHA256=0322b17f0722da76a64298aad498225aedcbf6df1008a1dee45e16ecb226a3f1
 ARG INSTALL_BREW=1
 ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
 ENV BUN_INSTALL=\${BUN_INSTALL_DIR}
@@ -43,7 +49,12 @@ RUN apt-get update \\
   && rm -rf /var/lib/apt/lists/*
 RUN if [ "\${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
 RUN if [ "\${INSTALL_BUN}" = "1" ]; then \\
-  curl -fsSL https://bun.sh/install | bash; \\
+  mkdir -p "\${BUN_INSTALL_DIR}/bin"; \\
+  curl -fsSL -o /tmp/bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v\${BUN_VERSION}/bun-linux-x64.zip"; \\
+  printf '%s  %s\n' "\${BUN_SHA256}" "/tmp/bun.zip" | sha256sum -c -; \\
+  unzip -q /tmp/bun.zip -d /tmp; \\
+  install -m 755 /tmp/bun-linux-x64/bun "\${BUN_INSTALL_DIR}/bin/bun"; \\
+  rm -rf /tmp/bun.zip /tmp/bun-linux-x64; \\
   ln -sf "\${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \\
 fi
 RUN if [ "\${INSTALL_BREW}" = "1" ]; then \\
