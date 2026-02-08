@@ -156,6 +156,7 @@ export function connectGateway(host: GatewayHost) {
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {
       host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      void loadChatHistory(host as unknown as OpenClawApp);
     },
   });
   host.client.start();
@@ -198,20 +199,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       );
     }
     const state = handleChatEvent(host as unknown as OpenClawApp, payload);
-    if (state === "final" || state === "error" || state === "aborted") {
+    const isTerminal = state === "final" || state === "error" || state === "aborted";
+    if (isTerminal) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
       const runId = payload?.runId;
       if (runId && host.refreshSessionsAfterChat.has(runId)) {
         host.refreshSessionsAfterChat.delete(runId);
-        if (state === "final") {
-          void loadSessions(host as unknown as OpenClawApp, {
-            activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-          });
-        }
+        void loadSessions(host as unknown as OpenClawApp, {
+          activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        });
       }
-    }
-    if (state === "final") {
       void loadChatHistory(host as unknown as OpenClawApp);
     }
     return;
