@@ -287,7 +287,7 @@ def init_skill(skill_name, path, resources, include_examples):
 
     skill_md_path = skill_dir / "SKILL.md"
     try:
-        skill_md_path.write_text(skill_content)
+        skill_md_path.write_text(skill_content, encoding="utf-8")
         print("[OK] Created SKILL.md")
     except Exception as e:
         print(f"[ERROR] Error creating SKILL.md: {e}")
