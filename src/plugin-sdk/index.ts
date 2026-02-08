@@ -337,6 +337,29 @@ export {
 } from "../channels/plugins/normalize/whatsapp.js";
 export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/whatsapp.js";
 
+// Channel: LINQ
+export {
+  listLinqAccountIds,
+  resolveDefaultLinqAccountId,
+  resolveLinqAccount,
+  type ResolvedLinqAccount,
+} from "../linq/accounts.js";
+export { linqOnboardingAdapter } from "../channels/plugins/onboarding/linq.js";
+export {
+  looksLikeLinqTargetId,
+  normalizeLinqMessagingTarget,
+} from "../channels/plugins/normalize/linq.js";
+export { collectLinqStatusIssues } from "../channels/plugins/status-issues/linq.js";
+export {
+  resolveLinqGroupRequireMention,
+  resolveLinqGroupToolPolicy,
+} from "../channels/plugins/group-mentions.js";
+export { monitorLinqProvider } from "../linq/monitor.js";
+export { linqOutbound } from "../channels/plugins/outbound/linq.js";
+export { linqMessageActions } from "../channels/plugins/actions/linq.js";
+export { LinqClient } from "../linq/client.js";
+export type { LinqAccountConfig, LinqConfig } from "../config/types.linq.js";
+
 // Channel: BlueBubbles
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 

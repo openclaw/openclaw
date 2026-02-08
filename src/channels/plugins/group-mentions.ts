@@ -406,3 +406,27 @@ export function resolveBlueBubblesGroupToolPolicy(
     senderE164: params.senderE164,
   });
 }
+
+export function resolveLinqGroupRequireMention(params: GroupMentionParams): boolean {
+  return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "linq",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export function resolveLinqGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "linq",
+    groupId: params.groupId,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+}
