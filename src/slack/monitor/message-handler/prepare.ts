@@ -397,7 +397,10 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
-  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
+  const threadInfo = message.thread_ts
+    ? ` thread_ts: ${message.thread_ts}${message.parent_user_id ? ` parent_user: ${message.parent_user_id}` : ""}`
+    : "";
+  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });
@@ -466,7 +469,9 @@ export async function prepareSlackMessage(params: {
     if (starter?.text) {
       const starterUser = starter.userId ? await ctx.resolveUserName(starter.userId) : null;
       const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
-      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
+      // For thread starters, include thread_ts (using threadTs, the thread root timestamp)
+      const starterThreadInfo = threadTs ? ` thread_ts: ${threadTs}` : "";
+      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}${starterThreadInfo}]`;
       threadStarterBody = formatThreadStarterEnvelope({
         channel: "Slack",
         author: starterName,
