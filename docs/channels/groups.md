@@ -371,4 +371,4 @@ The agent system prompt includes a group intro on the first turn of a new group 
 
 ## WhatsApp specifics
 
-See [Group messages](/concepts/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).

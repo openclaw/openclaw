@@ -10,7 +10,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 504c824bff4790006c8b73600daca66b919e049178e9711e6e65b6254731911a
-  source_path: debugging.md
+  source_path: help/debugging.md
   workflow: 15
 ---
 

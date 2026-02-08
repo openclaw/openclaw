@@ -8,7 +8,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 181a72f12f5021af77c2e4c913120f711e0c0bc271d218d75cb6fe80dab675bb
-  source_path: concepts/group-messages.md
+  source_path: channels/group-messages.md
   workflow: 15
 ---
 

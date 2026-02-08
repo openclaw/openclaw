@@ -28,6 +28,23 @@ export function readSessionMessages(
       const parsed = JSON.parse(line);
       if (parsed?.message) {
         messages.push(parsed.message);
+        continue;
+      }
+
+      // Compaction entries are not "message" records, but they're useful context for debugging.
+      // Emit a lightweight synthetic message that the Web UI can render as a divider.
+      if (parsed?.type === "compaction") {
+        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        messages.push({
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof parsed.id === "string" ? parsed.id : undefined,
+          },
+        });
       }
     } catch {
       // ignore bad lines
