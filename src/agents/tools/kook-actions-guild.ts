@@ -119,8 +119,8 @@ export async function handleKookGuildAction(
     }
 
     case "getGuildUsers": {
-      if (!isActionEnabled("memberInfo")) {
-        throw new Error("KOOK member info is disabled.");
+      if (!isActionEnabled("getGuildUsers") || !isActionEnabled("guildInfo")) {
+        throw new Error("KOOK getGuildUsers action is disabled.");
       }
       const guildId = readStringParam(params, "guildId", { required: true });
       const page = readNumberParam(params, "page", {}) ?? 1;

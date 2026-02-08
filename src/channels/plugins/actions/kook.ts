@@ -55,7 +55,12 @@ export const kookMessageActions: ChannelMessageActionAdapter = {
       return [];
     }
     const gate = createActionGate(cfg.channels?.kook?.actions);
-    const actions = new Set<ChannelMessageActionName>(["send"]);
+    const actions = new Set<ChannelMessageActionName>();
+
+    // Message send (default: enabled)
+    if (gate("messages", true)) {
+      actions.add("send");
+    }
 
     // User Actions (read-only, default: enabled) - kebab-case for message tool compatibility
     if (gate("getMe", true)) {
@@ -66,27 +71,27 @@ export const kookMessageActions: ChannelMessageActionAdapter = {
     }
 
     // Guild Actions (read-only, default: enabled) - kebab-case
-    if (gate("getGuildList", true)) {
+    if (gate("getGuildList", true) && gate("guildInfo", true)) {
       actions.add("guild-list" as ChannelMessageActionName);
     }
-    if (gate("getGuild", true)) {
+    if (gate("getGuild", true) && gate("guildInfo", true)) {
       actions.add("guild-info" as ChannelMessageActionName);
     }
-    if (gate("getGuildUserCount", true)) {
+    if (gate("getGuildUserCount", true) && gate("guildInfo", true)) {
       actions.add("guild-user-count" as ChannelMessageActionName);
     }
-    if (gate("getGuildUsers", true)) {
+    if (gate("getGuildUsers", true) && gate("guildInfo", true)) {
       actions.add("guild-users" as ChannelMessageActionName);
     }
 
     // Channel Actions (read-only, default: enabled) - kebab-case
-    if (gate("getChannel", true)) {
+    if (gate("getChannel", true) && gate("channelInfo", true)) {
       actions.add("channel-info" as ChannelMessageActionName);
     }
-    if (gate("getChannelList", true)) {
+    if (gate("getChannelList", true) && gate("channelInfo", true)) {
       actions.add("channel-list" as ChannelMessageActionName);
     }
-    if (gate("getChannelUserList", true)) {
+    if (gate("getChannelUserList", true) && gate("channelInfo", true)) {
       actions.add("channel-user-list" as ChannelMessageActionName);
     }
 
@@ -147,6 +152,15 @@ export const kookMessageActions: ChannelMessageActionAdapter = {
     return null;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
+    if (action === "send") {
+      const to = readStringParam(params, "to", { required: true });
+      const message = readStringParam(params, "message", { required: true, allowEmpty: true });
+      return await handleKookAction(
+        { action: "sendMessage", to, content: message, accountId: accountId ?? undefined },
+        cfg,
+      );
+    }
+
     // ============================================
     // 关键：kebab-case → camelCase 转换
     // ============================================

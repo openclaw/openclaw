@@ -10,6 +10,11 @@ import {
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "kook" as const;
+type KookOnboardingLocale = "en" | "zh-CN";
+
+function tr(locale: KookOnboardingLocale, en: string, zh: string): string {
+  return locale === "zh-CN" ? zh : en;
+}
 
 function setKookDmPolicy(
   cfg: OpenClawConfig,
@@ -23,23 +28,41 @@ function setKookDmPolicy(
       ...cfg.channels,
       kook: {
         ...cfg.channels?.kook,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
+        dm: {
+          ...cfg.channels?.kook?.dm,
+          policy: dmPolicy,
+          ...(allowFrom ? { allowFrom } : {}),
+        },
       },
     },
   } as OpenClawConfig;
 }
 
-async function noteKookTokenHelp(prompter: WizardPrompter): Promise<void> {
+async function noteKookTokenHelp(
+  prompter: WizardPrompter,
+  locale: KookOnboardingLocale,
+): Promise<void> {
   await prompter.note(
     [
-      "1) Open KOOK Developer Portal: https://developer.kookapp.cn",
-      "2) Create a bot and get the token",
-      "3) Token looks like a JWT string",
-      "Tip: you can also set KOOK_BOT_TOKEN in your env.",
-      "Docs: https://docs.openclaw.ai/channels/kook",
+      tr(
+        locale,
+        "1) Open KOOK Developer Portal: https://developer.kookapp.cn",
+        "1) 打开 KOOK 开发者平台：https://developer.kookapp.cn",
+      ),
+      tr(locale, "2) Create a bot and get the token", "2) 创建 Bot 并获取 Token"),
+      tr(locale, "3) Token looks like a JWT string", "3) Token 通常是类似 JWT 的字符串"),
+      tr(
+        locale,
+        "Tip: you can also set KOOK_BOT_TOKEN in your env.",
+        "提示：你也可以通过环境变量设置 KOOK_BOT_TOKEN。",
+      ),
+      tr(
+        locale,
+        "Docs: https://docs.openclaw.ai/channels/kook",
+        "文档：https://docs.openclaw.ai/channels/kook",
+      ),
     ].join("\n"),
-    "KOOK bot token",
+    tr(locale, "KOOK bot token", "KOOK Bot Token"),
   );
 }
 
@@ -47,13 +70,14 @@ async function promptKookAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId: string;
+  locale: KookOnboardingLocale;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter, accountId } = params;
+  const { cfg, prompter, accountId, locale } = params;
   const resolved = resolveKookAccount({ cfg, accountId });
   const existingAllowFrom = resolved.config.dm?.allowFrom ?? [];
   const entry = await prompter.text({
-    message: "KOOK allowFrom (user id)",
-    placeholder: "123456789",
+    message: tr(locale, "KOOK allowFrom (user id)", "KOOK allowFrom（用户 ID）"),
+    placeholder: tr(locale, "123456789", "例如：123456789"),
     initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
     validate: (value: unknown) => {
       const raw =
@@ -63,10 +87,10 @@ async function promptKookAllowFrom(params: {
             ? String(value).trim()
             : "";
       if (!raw) {
-        return "Required";
+        return tr(locale, "Required", "必填");
       }
       if (!/^\d+$/.test(raw)) {
-        return "Use a numeric KOOK user id";
+        return tr(locale, "Use a numeric KOOK user id", "请输入纯数字 KOOK 用户 ID");
       }
       return undefined;
     },
@@ -123,11 +147,16 @@ async function promptKookAllowFrom(params: {
 async function promptKookNumericConfig(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
+  locale: KookOnboardingLocale;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter } = params;
+  const { cfg, prompter, locale } = params;
 
   const configureNumeric = await prompter.confirm({
-    message: "Configure numeric settings (history limit, media size, text chunk)?",
+    message: tr(
+      locale,
+      "Configure numeric settings (history limit, media size, text chunk)?",
+      "是否配置数值项（历史条数、媒体大小、文本分块）？",
+    ),
     initialValue: false,
   });
 
@@ -136,39 +165,39 @@ async function promptKookNumericConfig(params: {
   }
 
   const historyLimit = await prompter.text({
-    message: "History limit (number of messages to fetch)",
-    placeholder: "10",
+    message: tr(locale, "History limit (number of messages to fetch)", "历史消息条数（拉取数量）"),
+    placeholder: tr(locale, "10", "例如：10"),
     initialValue: String(cfg.channels?.kook?.historyLimit ?? 10),
     validate: (value) => {
       const num = Number(value);
       if (isNaN(num) || num < 1) {
-        return "Must be a positive number";
+        return tr(locale, "Must be a positive number", "必须是正数");
       }
       return undefined;
     },
   });
 
   const mediaMaxMb = await prompter.text({
-    message: "Media max size (MB)",
-    placeholder: "10",
+    message: tr(locale, "Media max size (MB)", "媒体大小上限（MB）"),
+    placeholder: tr(locale, "10", "例如：10"),
     initialValue: String(cfg.channels?.kook?.mediaMaxMb ?? 10),
     validate: (value) => {
       const num = Number(value);
       if (isNaN(num) || num < 1) {
-        return "Must be a positive number";
+        return tr(locale, "Must be a positive number", "必须是正数");
       }
       return undefined;
     },
   });
 
   const textChunkLimit = await prompter.text({
-    message: "Text chunk limit (characters)",
-    placeholder: "2000",
+    message: tr(locale, "Text chunk limit (characters)", "文本分块上限（字符）"),
+    placeholder: tr(locale, "2000", "例如：2000"),
     initialValue: String(cfg.channels?.kook?.textChunkLimit ?? 2000),
     validate: (value) => {
       const num = Number(value);
       if (isNaN(num) || num < 100) {
-        return "Must be at least 100";
+        return tr(locale, "Must be at least 100", "最小为 100");
       }
       return undefined;
     },
@@ -191,11 +220,12 @@ async function promptKookNumericConfig(params: {
 async function promptKookGroupPolicy(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
+  locale: KookOnboardingLocale;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter } = params;
+  const { cfg, prompter, locale } = params;
 
   const configurePolicy = await prompter.confirm({
-    message: "Configure group/server access policy?",
+    message: tr(locale, "Configure group/server access policy?", "是否配置群组/服务器访问策略？"),
     initialValue: false,
   });
 
@@ -204,11 +234,17 @@ async function promptKookGroupPolicy(params: {
   }
 
   const policy = await prompter.select({
-    message: "Group/Server access policy",
+    message: tr(locale, "Group/Server access policy", "群组/服务器访问策略"),
     options: [
-      { value: "open", label: "Open - allow all servers" },
-      { value: "allowlist", label: "Allowlist - only configured servers" },
-      { value: "disabled", label: "Disabled - no server access" },
+      { value: "open", label: tr(locale, "Open - allow all servers", "开放：允许所有服务器") },
+      {
+        value: "allowlist",
+        label: tr(locale, "Allowlist - only configured servers", "白名单：仅允许已配置服务器"),
+      },
+      {
+        value: "disabled",
+        label: tr(locale, "Disabled - no server access", "禁用：不允许服务器访问"),
+      },
     ],
   });
 
@@ -227,8 +263,9 @@ async function promptKookGroupPolicy(params: {
 async function promptKookGuilds(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
+  locale: KookOnboardingLocale;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter } = params;
+  const { cfg, prompter, locale } = params;
 
   const existingGuilds = cfg.channels?.kook?.guilds ?? {};
   const guildIds = Object.keys(existingGuilds);
@@ -236,8 +273,8 @@ async function promptKookGuilds(params: {
   const addGuild = await prompter.confirm({
     message:
       guildIds.length > 0
-        ? "Configure additional guilds/servers?"
-        : "Configure specific guilds/servers?",
+        ? tr(locale, "Configure additional guilds/servers?", "是否继续配置其他服务器？")
+        : tr(locale, "Configure specific guilds/servers?", "是否配置指定服务器？"),
     initialValue: false,
   });
 
@@ -249,14 +286,18 @@ async function promptKookGuilds(params: {
 
   while (true) {
     const guildId = await prompter.text({
-      message: "Guild ID (numeric) or leave empty to finish",
-      placeholder: "6367541001667830",
+      message: tr(
+        locale,
+        "Guild ID (numeric) or leave empty to finish",
+        "服务器 ID（数字），留空结束",
+      ),
+      placeholder: tr(locale, "6367541001667830", "例如：6367541001667830"),
       validate: (value) => {
         if (!value?.trim()) {
           return undefined;
         }
         if (!/^\d+$/.test(value)) {
-          return "Must be numeric";
+          return tr(locale, "Must be numeric", "必须是数字");
         }
         return undefined;
       },
@@ -267,26 +308,33 @@ async function promptKookGuilds(params: {
     }
 
     const slug = await prompter.text({
-      message: "Guild slug/alias (optional)",
-      placeholder: "main-server",
+      message: tr(locale, "Guild slug/alias (optional)", "服务器别名（可选）"),
+      placeholder: tr(locale, "main-server", "例如：main-server"),
     });
 
     const requireMention = await prompter.confirm({
-      message: "Require @mention in this guild?",
+      message: tr(locale, "Require @mention in this guild?", "该服务器是否必须 @提及？"),
       initialValue: existingGuilds[guildId]?.requireMention ?? false,
     });
 
     const channelIds: string[] = [];
     while (true) {
       const channelId = await prompter.text({
-        message: "Channel ID to allow (numeric) or leave empty to finish",
-        placeholder: "5265829152322102",
+        message: tr(
+          locale,
+          "Channel ID to allow (numeric) or leave empty to finish",
+          "允许的频道 ID（数字），留空结束",
+        ),
+        placeholder: tr(locale, "5265829152322102", "例如：5265829152322102"),
       });
       if (!channelId?.trim()) {
         break;
       }
       if (!/^\d+$/.test(channelId)) {
-        await prompter.note("Channel ID must be numeric", "Invalid input");
+        await prompter.note(
+          tr(locale, "Channel ID must be numeric", "频道 ID 必须是数字"),
+          tr(locale, "Invalid input", "输入无效"),
+        );
         continue;
       }
       channelIds.push(channelId);
@@ -299,8 +347,12 @@ async function promptKookGuilds(params: {
     const userIds: string[] = [];
     while (true) {
       const userId = await prompter.text({
-        message: "User ID allowed in this guild (numeric) or leave empty",
-        placeholder: "1567351889",
+        message: tr(
+          locale,
+          "User ID allowed in this guild (numeric) or leave empty",
+          "该服务器允许的用户 ID（数字），留空结束",
+        ),
+        placeholder: tr(locale, "1567351889", "例如：1567351889"),
       });
       if (!userId?.trim()) {
         break;
@@ -316,7 +368,7 @@ async function promptKookGuilds(params: {
     };
 
     const addMore = await prompter.confirm({
-      message: "Add another guild?",
+      message: tr(locale, "Add another guild?", "是否继续添加服务器？"),
       initialValue: false,
     });
     if (!addMore) {
@@ -339,12 +391,13 @@ async function promptKookGuilds(params: {
 async function promptKookActions(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
+  locale: KookOnboardingLocale;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter } = params;
+  const { cfg, prompter, locale } = params;
   const existing = cfg.channels?.kook?.actions ?? {};
 
   const configureActions = await prompter.confirm({
-    message: "Configure feature toggles (actions)?",
+    message: tr(locale, "Configure feature toggles (actions)?", "是否配置功能开关（actions）？"),
     initialValue: false,
   });
 
@@ -353,89 +406,99 @@ async function promptKookActions(params: {
   }
 
   const actions = {
+    // Messaging
+    messages: await prompter.confirm({
+      message: tr(
+        locale,
+        "Enable message send/read/edit/delete actions?",
+        "启用消息发送/读取/编辑/删除能力？",
+      ),
+      initialValue: existing.messages ?? true,
+    }),
+
     // User Queries
     getMe: await prompter.confirm({
-      message: "Enable getMe (bot self info)?",
+      message: tr(locale, "Enable getMe (bot self info)?", "启用 getMe（机器人自身信息）？"),
       initialValue: existing.getMe ?? true,
     }),
     getUser: await prompter.confirm({
-      message: "Enable getUser (user lookup)?",
+      message: tr(locale, "Enable getUser (user lookup)?", "启用 getUser（用户查询）？"),
       initialValue: existing.getUser ?? true,
     }),
 
     // Guild Queries
     getGuildList: await prompter.confirm({
-      message: "Enable getGuildList?",
+      message: tr(locale, "Enable getGuildList?", "启用 getGuildList？"),
       initialValue: existing.getGuildList ?? true,
     }),
     getGuild: await prompter.confirm({
-      message: "Enable getGuild?",
+      message: tr(locale, "Enable getGuild?", "启用 getGuild？"),
       initialValue: existing.getGuild ?? true,
     }),
     getGuildUserCount: await prompter.confirm({
-      message: "Enable getGuildUserCount?",
+      message: tr(locale, "Enable getGuildUserCount?", "启用 getGuildUserCount？"),
       initialValue: existing.getGuildUserCount ?? true,
     }),
     getGuildUsers: await prompter.confirm({
-      message: "Enable getGuildUsers?",
+      message: tr(locale, "Enable getGuildUsers?", "启用 getGuildUsers？"),
       initialValue: existing.getGuildUsers ?? true,
     }),
 
     // Channel Queries
     getChannel: await prompter.confirm({
-      message: "Enable getChannel?",
+      message: tr(locale, "Enable getChannel?", "启用 getChannel？"),
       initialValue: existing.getChannel ?? true,
     }),
     getChannelList: await prompter.confirm({
-      message: "Enable getChannelList?",
+      message: tr(locale, "Enable getChannelList?", "启用 getChannelList？"),
       initialValue: existing.getChannelList ?? true,
     }),
     getChannelUserList: await prompter.confirm({
-      message: "Enable getChannelUserList?",
+      message: tr(locale, "Enable getChannelUserList?", "启用 getChannelUserList？"),
       initialValue: existing.getChannelUserList ?? true,
     }),
 
     // Group toggles
     guildInfo: await prompter.confirm({
-      message: "Enable guildInfo group?",
+      message: tr(locale, "Enable guildInfo group?", "启用 guildInfo 分组？"),
       initialValue: existing.guildInfo ?? true,
     }),
     channelInfo: await prompter.confirm({
-      message: "Enable channelInfo group?",
+      message: tr(locale, "Enable channelInfo group?", "启用 channelInfo 分组？"),
       initialValue: existing.channelInfo ?? true,
     }),
     roleInfo: await prompter.confirm({
-      message: "Enable roleInfo (read-only)?",
+      message: tr(locale, "Enable roleInfo (read-only)?", "启用 roleInfo（只读）？"),
       initialValue: existing.roleInfo ?? true,
     }),
     emojiList: await prompter.confirm({
-      message: "Enable emojiList (read-only)?",
+      message: tr(locale, "Enable emojiList (read-only)?", "启用 emojiList（只读）？"),
       initialValue: existing.emojiList ?? true,
     }),
 
     // Write operations (default enabled for role management)
     roles: await prompter.confirm({
-      message: "Enable role write operations?",
+      message: tr(locale, "Enable role write operations?", "启用角色写操作？"),
       initialValue: existing.roles ?? true,
     }),
     channels: await prompter.confirm({
-      message: "Enable channel write operations?",
+      message: tr(locale, "Enable channel write operations?", "启用频道写操作？"),
       initialValue: existing.channels ?? false,
     }),
     memberInfo: await prompter.confirm({
-      message: "Enable member info write operations?",
+      message: tr(locale, "Enable member info write operations?", "启用成员信息写操作？"),
       initialValue: existing.memberInfo ?? false,
     }),
     moderation: await prompter.confirm({
-      message: "Enable moderation operations?",
+      message: tr(locale, "Enable moderation operations?", "启用管理操作（moderation）？"),
       initialValue: existing.moderation ?? false,
     }),
     emojiUploads: await prompter.confirm({
-      message: "Enable emoji upload operations?",
+      message: tr(locale, "Enable emoji upload operations?", "启用表情上传操作？"),
       initialValue: existing.emojiUploads ?? false,
     }),
     voiceStatus: await prompter.confirm({
-      message: "Enable voice status operations?",
+      message: tr(locale, "Enable voice status operations?", "启用语音状态操作？"),
       initialValue: existing.voiceStatus ?? false,
     }),
   };
@@ -455,8 +518,8 @@ async function promptKookActions(params: {
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "KOOK",
   channel,
-  policyKey: "channels.kook.dmPolicy",
-  allowFromKey: "channels.kook.allowFrom",
+  policyKey: "channels.kook.dm.policy",
+  allowFromKey: "channels.kook.dm.allowFrom",
   getCurrent: (cfg) => (cfg.channels?.kook?.dm?.policy ?? "pairing") as "pairing",
   setPolicy: (cfg, policy) => setKookDmPolicy(cfg, policy),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
@@ -468,6 +531,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
       cfg,
       prompter,
       accountId: id,
+      locale: "en",
     });
   },
 };
@@ -494,96 +558,89 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
+    const useChinese = await prompter.confirm({
+      message: "Use Chinese for KOOK onboarding prompts? / 使用中文进行 KOOK 配置引导？",
+      initialValue: true,
+    });
+    const locale: KookOnboardingLocale = useChinese ? "zh-CN" : "en";
+
     // ===== STEP 0: Permission confirmation =====
     await prompter.note(
       [
-        "🤖 KOOK Bot Permission Configuration",
+        tr(locale, "KOOK Bot Permission Configuration", "KOOK 机器人权限配置"),
         "",
-        "To protect your server security, please confirm the permission configuration:",
+        tr(
+          locale,
+          "To protect your server security, please confirm the permission configuration:",
+          "为保障服务器安全，请确认权限配置：",
+        ),
         "",
-        "If not configured, the following default permissions will be used:",
-        "  ✅ Send messages, send direct messages",
-        "  ✅ Get user info, guild info, channel info",
-        "  ❌ Create/delete/modify roles, channels",
-        "  ❌ Kick/mute users",
-        "  ❌ Other admin operations",
+        tr(
+          locale,
+          "If not configured, the following default permissions will be used:",
+          "如不自定义，将使用以下默认权限：",
+        ),
+        tr(locale, "  - Send messages, send direct messages", "  - 发送消息、发送私聊"),
+        tr(locale, "  - Get user info, guild info, channel info", "  - 查询用户、服务器、频道信息"),
+        tr(
+          locale,
+          "  - No create/delete/update roles or channels",
+          "  - 不允许创建/删除/修改角色与频道",
+        ),
+        tr(locale, "  - No kick/mute users", "  - 不允许踢人/禁言"),
+        tr(locale, "  - No other admin operations", "  - 不允许其他管理操作"),
         "",
-        "💡 Tip: Permission settings can be changed in the config file at any time",
+        tr(
+          locale,
+          "Tip: Permission settings can be changed in the config file at any time",
+          "提示：权限配置可随时在配置文件中修改",
+        ),
       ].join("\n"),
-      "KOOK Permission Configuration",
+      tr(locale, "KOOK Permission Configuration", "KOOK 权限配置"),
     );
 
     const configurePermissions = await prompter.confirm({
-      message: "Configure KOOK Bot permissions in detail? (Recommended for advanced users)",
+      message: tr(
+        locale,
+        "Configure KOOK Bot permissions in detail? (Recommended for advanced users)",
+        "是否详细配置 KOOK 机器人权限？（更适合高级用户）",
+      ),
       initialValue: false,
     });
 
-    // 初始化默认 actions 配置
+    // Initialize default actions config
     let defaultActions: Record<string, boolean> = {};
 
     if (!configurePermissions) {
       // ===== Quick start: default read-only config =====
       defaultActions = {
-        // 基础消息（启用）
-        sendMessage: true,
-        sendDirectMessage: true,
-
-        // 用户查询（启用）
+        // Messaging
+        messages: true,
+        // Read operations
         getMe: true,
         getUser: true,
-
-        // 服务器查询（启用）
         getGuildList: true,
         getGuild: true,
         getGuildUserCount: true,
         getGuildUsers: true,
-
-        // 频道查询（启用）
         getChannel: true,
         getChannelList: true,
         getChannelUserList: true,
-
-        // 角色查询（启用）
         roleInfo: true,
-
-        // 表情查询（启用）
         emojiList: true,
-
-        // Mute query (enabled)
-        muteList: true,
-
-        // ===== The following operations are enabled/disabled by default =====
-
-        // Role management (enabled)
-        roleCreate: true,
-        roleUpdate: true,
-        roleDelete: true,
-        roleGrant: true,
-        roleRevoke: true,
-
-        // Channel management (disabled)
-        createChannel: false,
-        updateChannel: false,
-        deleteChannel: false,
-        moveUser: false,
-
-        // Member management (disabled)
-        updateNickname: false,
-        kickUser: false,
-        leaveGuild: false,
-
-        // Emoji management (disabled)
-        emojiCreate: false,
-        emojiUpdate: false,
-        emojiDelete: false,
-
-        // Mute management (disabled)
-        muteCreate: false,
-        muteDelete: false,
+        // Write operations / grouped gates
+        roles: false,
+        channels: false,
+        memberInfo: false,
+        moderation: false,
+        emojiUploads: false,
+        guildInfo: true,
+        channelInfo: true,
+        voiceStatus: false,
       };
     }
 
-    // 保存默认配置到 cfg
+    // Save defaults to cfg
     cfg = {
       ...cfg,
       channels: {
@@ -621,11 +678,15 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
 
     let token: string | null = null;
     if (!accountConfigured) {
-      await noteKookTokenHelp(prompter);
+      await noteKookTokenHelp(prompter, locale);
     }
     if (canUseEnv && !resolvedAccount.config.token) {
       const keepEnv = await prompter.confirm({
-        message: "KOOK_BOT_TOKEN detected. Use env var?",
+        message: tr(
+          locale,
+          "KOOK_BOT_TOKEN detected. Use env var?",
+          "检测到 KOOK_BOT_TOKEN，是否直接使用环境变量？",
+        ),
         initialValue: true,
       });
       if (keepEnv) {
@@ -642,29 +703,33 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
       } else {
         token = String(
           await prompter.text({
-            message: "Enter KOOK bot token",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
+            message: tr(locale, "Enter KOOK bot token", "请输入 KOOK Bot Token"),
+            validate: (value) => (value?.trim() ? undefined : tr(locale, "Required", "必填")),
           }),
         ).trim();
       }
     } else if (hasConfigToken) {
       const keep = await prompter.confirm({
-        message: "KOOK token already configured. Keep it?",
+        message: tr(
+          locale,
+          "KOOK token already configured. Keep it?",
+          "已检测到 KOOK Token，是否保留？",
+        ),
         initialValue: true,
       });
       if (!keep) {
         token = String(
           await prompter.text({
-            message: "Enter KOOK bot token",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
+            message: tr(locale, "Enter KOOK bot token", "请输入 KOOK Bot Token"),
+            validate: (value) => (value?.trim() ? undefined : tr(locale, "Required", "必填")),
           }),
         ).trim();
       }
     } else {
       token = String(
         await prompter.text({
-          message: "Enter KOOK bot token",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
+          message: tr(locale, "Enter KOOK bot token", "请输入 KOOK Bot Token"),
+          validate: (value) => (value?.trim() ? undefined : tr(locale, "Required", "必填")),
         }),
       ).trim();
     }
@@ -706,22 +771,33 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
 
     await prompter.note(
       [
-        "⚠️  SECURITY WARNING - 安全警告",
+        tr(locale, "SECURITY WARNING", "安全警告"),
         "",
-        "Without an allowlist, your bot will respond to EVERYONE's commands.",
-        "This poses serious risks including:",
-        "  • Unauthorized access to your system",
-        "  • Potential file deletion or data loss",
-        "  • Abuse of bot capabilities",
+        tr(
+          locale,
+          "Without an allowlist, your bot will respond to EVERYONE's commands.",
+          "如果不设置白名单，机器人会响应所有人的命令。",
+        ),
+        tr(locale, "This poses serious risks including:", "这会带来严重风险，包括："),
+        tr(locale, "  - Unauthorized access to your system", "  - 未授权访问你的系统"),
+        tr(locale, "  - Potential file deletion or data loss", "  - 可能发生文件删除或数据丢失"),
+        tr(locale, "  - Abuse of bot capabilities", "  - 机器人能力被滥用"),
         "",
-        "STRONGLY RECOMMENDED: Set up an allowlist to restrict who can use the bot.",
-        "如果不设置允许列表，机器人将响应所有人的命令，存在严重安全风险！",
+        tr(
+          locale,
+          "STRONGLY RECOMMENDED: Set up an allowlist to restrict who can use the bot.",
+          "强烈建议：立即配置白名单，限制可使用机器人的用户。",
+        ),
       ].join("\n"),
-      "🚨 Security Warning",
+      tr(locale, "Security Warning", "安全提醒"),
     );
 
     const setupAllowlist = await prompter.confirm({
-      message: "Set up allowlist now? (STRONGLY RECOMMENDED)",
+      message: tr(
+        locale,
+        "Set up allowlist now? (STRONGLY RECOMMENDED)",
+        "是否现在配置白名单？（强烈建议）",
+      ),
       initialValue: true,
     });
 
@@ -730,18 +806,19 @@ export const kookOnboardingAdapter: ChannelOnboardingAdapter = {
         cfg: next,
         prompter,
         accountId: kookAccountId,
+        locale,
       });
     }
 
-    next = await promptKookGroupPolicy({ cfg: next, prompter });
+    next = await promptKookGroupPolicy({ cfg: next, prompter, locale });
 
     if (next.channels?.kook?.groupPolicy !== "disabled") {
-      next = await promptKookGuilds({ cfg: next, prompter });
+      next = await promptKookGuilds({ cfg: next, prompter, locale });
     }
 
-    next = await promptKookNumericConfig({ cfg: next, prompter });
+    next = await promptKookNumericConfig({ cfg: next, prompter, locale });
 
-    next = await promptKookActions({ cfg: next, prompter });
+    next = await promptKookActions({ cfg: next, prompter, locale });
 
     return { cfg: next, accountId: kookAccountId };
   },

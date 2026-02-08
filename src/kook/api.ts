@@ -89,10 +89,15 @@ export async function fetchKook<T = unknown>(
 /**
  * Get KOOK Gateway WebSocket URL
  */
-export async function getKookGateway(token: string, compress: boolean = true): Promise<string> {
+export async function getKookGateway(
+  token: string,
+  compress: boolean = true,
+  signal?: AbortSignal,
+): Promise<string> {
   const data = await fetchKook<{ url: string }>(
     `/gateway/index?compress=${compress ? "1" : "0"}`,
     token,
+    { signal },
   );
 
   return data.url;

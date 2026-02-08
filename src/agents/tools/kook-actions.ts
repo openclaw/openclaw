@@ -98,7 +98,7 @@ export async function handleKookAction(
   // ============================================================
 
   if (action === "getGuildList") {
-    if (!isActionEnabled("guildInfo")) {
+    if (!isActionEnabled("getGuildList") || !isActionEnabled("guildInfo")) {
       throw new Error("KOOK getGuildList action is disabled.");
     }
     const guilds = await getKookGuildList(token);
@@ -118,7 +118,7 @@ export async function handleKookAction(
   }
 
   if (action === "getGuild") {
-    if (!isActionEnabled("guildInfo")) {
+    if (!isActionEnabled("getGuild") || !isActionEnabled("guildInfo")) {
       throw new Error("KOOK getGuild action is disabled.");
     }
     const guildId = readStringParam(params, "guildId", { required: true });
@@ -153,7 +153,7 @@ export async function handleKookAction(
   }
 
   if (action === "getGuildUserCount") {
-    if (!isActionEnabled("guildInfo")) {
+    if (!isActionEnabled("getGuildUserCount") || !isActionEnabled("guildInfo")) {
       throw new Error("KOOK getGuildUserCount action is disabled.");
     }
     const guildId = readStringParam(params, "guildId", { required: true });
@@ -171,7 +171,7 @@ export async function handleKookAction(
   // ============================================================
 
   if (action === "getChannel") {
-    if (!isActionEnabled("channelInfo")) {
+    if (!isActionEnabled("getChannel") || !isActionEnabled("channelInfo")) {
       throw new Error("KOOK getChannel action is disabled.");
     }
     const channelId = readStringParam(params, "channelId", { required: true });
@@ -192,7 +192,7 @@ export async function handleKookAction(
   }
 
   if (action === "getChannelUserList") {
-    if (!isActionEnabled("channelInfo")) {
+    if (!isActionEnabled("getChannelUserList") || !isActionEnabled("channelInfo")) {
       throw new Error("KOOK getChannelUserList action is disabled.");
     }
     const channelId = readStringParam(params, "channelId", { required: true });

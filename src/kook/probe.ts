@@ -16,7 +16,7 @@ export async function probeKook(token: string, timeoutMs: number = 5000): Promis
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const gatewayUrl = await getKookGateway(token);
+    const gatewayUrl = await getKookGateway(token, true, controller.signal);
     clearTimeout(timeout);
     return {
       success: true,

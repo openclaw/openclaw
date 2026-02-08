@@ -1,13 +1,14 @@
 // KOOK Configuration Schema
 import { z } from "zod";
 
-const DmPolicySchema = z.enum(["open", "allowlist", "pairing"]);
+const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const ReplyToModeSchema = z.enum(["off", "first", "all"]);
 
 const KookChannelConfigSchema = z
   .object({
     allow: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict();
@@ -49,6 +50,10 @@ const KookAccountConfigSchema = z
 // Default: read-only actions enabled, write/modify/delete actions disabled
 const KookActionsSchema = z
   .object({
+    // Messaging actions (default: enabled)
+    messages: z.boolean().optional(),
+    reactions: z.boolean().optional(),
+
     // User Queries (default: enabled)
     getMe: z.boolean().optional(),
     getUser: z.boolean().optional(),

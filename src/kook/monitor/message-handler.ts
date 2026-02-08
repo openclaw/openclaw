@@ -4,9 +4,11 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "../../auto-reply/dispatch.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -193,6 +195,14 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
       const text = resolveMessageContent(event);
       const isDm = event.channel_type === "PERSON";
       const author = event.extra.author;
+      const hasControlCommand = shouldComputeCommandAuthorized(text, currentCfg);
+      const useAccessGroups = currentCfg.commands?.useAccessGroups !== false;
+      let dmAuthorizerConfigured = false;
+      let dmAuthorizerAllowed = false;
+      let guildUsersAuthorizerConfigured = false;
+      let guildUsersAuthorizerAllowed = false;
+      let channelUsersAuthorizerConfigured = false;
+      let channelUsersAuthorizerAllowed = false;
 
       // Skip bot messages
       if (await isBotMessage(event, currentToken)) {
@@ -205,9 +215,11 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         const guildConfig = guilds[event.extra.guild_id];
 
         if (guildConfig?.users && guildConfig.users.length > 0) {
+          guildUsersAuthorizerConfigured = true;
           const isAllowedUser = guildConfig.users.some(
             (userId) => String(userId) === event.author_id,
           );
+          guildUsersAuthorizerAllowed = isAllowedUser;
           if (!isAllowedUser) {
             if (shouldLogVerbose()) {
               logVerbose(`[kook] ignoring message from non-allowed user: ${event.author_id}`);
@@ -231,6 +243,7 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         // Read pairing store allowlist
         const storeAllowFrom = await readChannelAllowFromStore("kook").catch(() => []);
         const combinedAllowFrom = Array.from(new Set([...configuredAllowFrom, ...storeAllowFrom]));
+        dmAuthorizerConfigured = combinedAllowFrom.length > 0;
 
         // Handle disabled policy
         if ((dmPolicy as string) === "disabled") {
@@ -244,6 +257,7 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         if (dmPolicy !== "open") {
           // Handle allowlist and pairing policies
           const isAllowed = combinedAllowFrom.some((entry) => String(entry) === event.author_id);
+          dmAuthorizerAllowed = isAllowed;
 
           if (!isAllowed) {
             if (dmPolicy === "pairing") {
@@ -278,6 +292,8 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
             }
             return;
           }
+        } else {
+          dmAuthorizerAllowed = true;
         }
       }
 
@@ -310,10 +326,22 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
           // Check if channel is allowed
           const channelId = event.target_id;
           const channelConfig = guildConfig.channels?.[channelId];
+          channelUsersAuthorizerConfigured = Boolean(channelConfig?.users?.length);
+          channelUsersAuthorizerAllowed =
+            channelUsersAuthorizerConfigured &&
+            Boolean(channelConfig?.users?.some((entry) => String(entry) === event.author_id));
 
           if (!channelConfig || !channelConfig.allow) {
             if (shouldLogVerbose()) {
               logVerbose(`[kook] ignoring message from non-allowed channel: ${channelId}`);
+            }
+            return;
+          }
+          if (channelUsersAuthorizerConfigured && !channelUsersAuthorizerAllowed) {
+            if (shouldLogVerbose()) {
+              logVerbose(
+                `[kook] ignoring message from non-allowed channel user: ${event.author_id}`,
+              );
             }
             return;
           }
@@ -350,11 +378,6 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
       // For display/logging purposes
       const displayTo = isDm ? `kook:user:${event.author_id}` : `kook:channel:${event.target_id}`;
 
-      console.log(`[KOOK-MSG] Routing: effectiveFrom=${effectiveFrom}, effectiveTo=${effectiveTo}`);
-      console.log(
-        `[KOOK-MSG] Target details: isDm=${isDm}, author_id=${event.author_id}, target_id=${event.target_id}`,
-      );
-
       // Check if channel requires mention
       let requiresMention = true;
       if (!isDm && event.extra.guild_id) {
@@ -377,14 +400,11 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
       if (requiresMention || event.extra.mention?.length) {
         try {
           botUserId = await getBotUserId(params.token);
-          console.log(`[KOOK-MSG] Bot user ID: ${botUserId}`);
           mentionsBot = event.extra.mention?.includes(botUserId) || false;
-          console.log(`[KOOK-MSG] Mention list: ${JSON.stringify(event.extra.mention)}`);
         } catch (error) {
           console.error(`[KOOK-MSG] Failed to check bot mention: ${String(error)}`);
           // If we can't check bot mention and channel requires mention, skip the message
           if (requiresMention) {
-            console.log(`[KOOK-MSG] Skipping message due to bot mention check failure`);
             return;
           }
         }
@@ -392,30 +412,36 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
 
       const mentionAll = event.extra.mention_all || false;
 
-      console.log(
-        `[KOOK-MSG] Mention check: mentionsBot=${mentionsBot}, mentionAll=${mentionAll}, isDm=${isDm}, requiresMention=${requiresMention}`,
-      );
-
       // Only process if it's a DM or if mentions are configured
       if (!isDm && requiresMention && !mentionsBot && !mentionAll) {
-        console.log(
-          `[KOOK-MSG] Skipping channel message without mention (channel requires mention)`,
-        );
-        console.log(
-          `[KOOK-MSG] Message details: guild=${event.extra.guild_id}, channel=${event.target_id}, mentions=${JSON.stringify(event.extra.mention)}`,
-        );
         if (shouldLogVerbose()) {
           logVerbose(`[kook] ignoring message without mention in channel ${event.target_id}`);
         }
         return;
       }
 
-      console.log(`[KOOK-MSG] Message will be processed`);
-
-      console.log(`[KOOK-MSG] Message will be processed`);
+      const commandAuthorized = hasControlCommand
+        ? resolveCommandAuthorizedFromAuthorizers({
+            useAccessGroups,
+            authorizers: [
+              {
+                configured: dmAuthorizerConfigured,
+                allowed: dmAuthorizerAllowed,
+              },
+              {
+                configured: guildUsersAuthorizerConfigured,
+                allowed: guildUsersAuthorizerAllowed,
+              },
+              {
+                configured: channelUsersAuthorizerConfigured,
+                allowed: channelUsersAuthorizerAllowed,
+              },
+            ],
+            modeWhenAccessGroupsOff: "configured-or-allow",
+          })
+        : undefined;
 
       // Build MsgContext
-      console.log(`[KOOK-MSG] Building MsgContext...`);
       const ctxPayload: MsgContext = {
         Body: text,
         RawBody: text,
@@ -439,15 +465,11 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         WasMentioned: mentionsBot || mentionAll,
         MessageSid: event.msg_id,
         Timestamp: event.msg_timestamp,
-        CommandAuthorized: true, // TODO: Implement proper authorization check
+        CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         OriginatingChannel: "kook" as const,
         OriginatingTo: displayTo, // Use displayTo for logging/display
       };
-
-      console.log(
-        `[KOOK-MSG] Built MsgContext: SessionKey=${sessionKey}, ChatType=${ctxPayload.ChatType}`,
-      );
 
       // Finalize context
       const finalizedCtx = finalizeInboundContext(ctxPayload);
@@ -476,9 +498,6 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
       // Create reply dispatcher
       const { replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
         deliver: async (payload) => {
-          console.log(
-            `[KOOK-MSG] Dispatcher delivering: to=${effectiveTo}, text="${(payload.text || "").slice(0, 50)}..."`,
-          );
           // Pass cfg directly to sendMessageKook to ensure token is available
           await sendMessageKook(
             effectiveTo,
@@ -491,10 +510,8 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
             },
             currentCfg,
           );
-          console.log(`[KOOK-MSG] Dispatcher delivery completed`);
         },
         onReplyStart: async () => {
-          console.log(`[KOOK-MSG] Reply starting to ${author?.username ?? event.author_id}`);
           if (shouldLogVerbose()) {
             logVerbose(`[kook] starting reply to ${author?.username ?? event.author_id}`);
           }
@@ -506,25 +523,18 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
       });
 
       // Dispatch to agent
-      console.log(
-        `[KOOK-MSG] Dispatching to agent: agentId=${route.agentId}, sessionKey=${sessionKey}`,
-      );
       if (shouldLogVerbose()) {
         logVerbose(
           `[kook] dispatching message from ${author?.username ?? event.author_id} to agent ${route.agentId}`,
         );
       }
 
-      console.log(`[KOOK-MSG] About to call dispatchInboundMessageWithBufferedDispatcher...`);
       await dispatchInboundMessageWithBufferedDispatcher({
         ctx: finalizedCtx,
         cfg: currentCfg,
         dispatcherOptions: {
           deliver: async (payload) => {
             // Use the created dispatcher to send the message
-            console.log(
-              `[KOOK-MSG] Buffered dispatcher delivering: text="${(payload.text || "").slice(0, 50)}..."`,
-            );
             if (payload.text) {
               // Pass cfg directly to sendMessageKook to ensure token is available
               await sendMessageKook(
@@ -538,7 +548,6 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
                 },
                 currentCfg,
               );
-              console.log(`[KOOK-MSG] Buffered dispatcher delivery completed`);
             }
           },
           responsePrefix: undefined,
@@ -550,7 +559,6 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         },
         replyOptions: {
           onModelSelected: (ctx) => {
-            console.log(`[KOOK-MSG] Model selected: ${ctx.model}`);
             if (shouldLogVerbose()) {
               logVerbose(`[kook] using model: ${ctx.model}`);
             }
@@ -558,7 +566,6 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
         },
       });
 
-      console.log(`[KOOK-MSG] Dispatch completed successfully`);
       markDispatchIdle();
     } catch (error) {
       runtime.error?.(`[kook] message handler error: ${String(error)}`);
