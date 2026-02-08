@@ -38,4 +38,20 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+
+  it("classifies JSON parse errors as format for model failover", () => {
+    // OpenAI-style
+    expect(classifyFailoverReason("is not valid JSON")).toBe("format");
+    expect(classifyFailoverReason("The value is not valid JSON")).toBe("format");
+
+    // Node JSON.parse style
+    expect(classifyFailoverReason("Unexpected token < in JSON at position 0")).toBe("format");
+    expect(classifyFailoverReason("SyntaxError: Unexpected token } in JSON")).toBe("format");
+
+    // Truncated JSON
+    expect(classifyFailoverReason("Unexpected end of JSON input")).toBe("format");
+
+    // Should not match unrelated errors
+    expect(classifyFailoverReason("JSON file not found")).toBeNull();
+  });
 });
