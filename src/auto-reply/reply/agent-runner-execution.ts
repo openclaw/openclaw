@@ -8,12 +8,17 @@ import type { TypingSignaler } from "./typing-mode.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isBillingErrorMessage,
+  isRateLimitErrorMessage,
+  isAuthErrorMessage,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -500,7 +505,6 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
@@ -577,11 +581,48 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const trimmedMessage = message.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-        : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+
+      // Handle FailoverError (rate_limit, billing, auth, timeout) with specific
+      // user-facing messages BEFORE the heuristic context-overflow check.
+      // Without this, the broad isLikelyContextOverflowError regex can match
+      // rate-limit messages (e.g. "request … limit") and mislead the user.
+      let fallbackText: string;
+      if (isFailoverError(err)) {
+        switch (err.reason) {
+          case "rate_limit":
+            fallbackText =
+              "⚠️ API rate limit reached. Please wait a moment and try again, or switch to a different API key/provider.";
+            break;
+          case "billing":
+            fallbackText = `⚠️ ${BILLING_ERROR_USER_MESSAGE}`;
+            break;
+          case "auth":
+            fallbackText =
+              "⚠️ Authentication failed. Check your API key or credentials and try again.";
+            break;
+          case "timeout":
+            fallbackText = "⚠️ LLM request timed out. Please try again.";
+            break;
+          default:
+            fallbackText = `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+            break;
+        }
+      } else if (isRateLimitErrorMessage(message)) {
+        fallbackText =
+          "⚠️ API rate limit reached. Please wait a moment and try again, or switch to a different API key/provider.";
+      } else if (isBillingErrorMessage(message)) {
+        fallbackText = `⚠️ ${BILLING_ERROR_USER_MESSAGE}`;
+      } else if (isAuthErrorMessage(message)) {
+        fallbackText = "⚠️ Authentication failed. Check your API key or credentials and try again.";
+      } else if (isLikelyContextOverflowError(message)) {
+        fallbackText =
+          "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
+      } else if (isRoleOrderingError) {
+        fallbackText =
+          "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
+      } else {
+        fallbackText = `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+      }
 
       return {
         kind: "final",

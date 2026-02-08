@@ -37,6 +37,16 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+  // Exclude known non-overflow error categories whose wording can accidentally
+  // match the broad CONTEXT_OVERFLOW_HINT_RE (e.g. "request … limit" appears
+  // in both rate-limit messages and context-overflow messages).
+  if (
+    isRateLimitErrorMessage(errorMessage) ||
+    isBillingErrorMessage(errorMessage) ||
+    isAuthErrorMessage(errorMessage)
+  ) {
+    return false;
+  }
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
