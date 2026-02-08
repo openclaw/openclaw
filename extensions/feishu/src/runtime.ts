@@ -1,6 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 
-let runtime: PluginRuntime | null = null;
+let runtime: PluginRuntime | null = null; // eslint-disable-line typescript-eslint/no-redundant-type-constituents
 
 export function setFeishuRuntime(next: PluginRuntime) {
   runtime = next;

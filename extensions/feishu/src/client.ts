@@ -10,6 +10,7 @@ const clientCache = new Map<
   }
 >();
 
+// eslint-disable-next-line typescript-eslint/no-redundant-type-constituents
 function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
   if (domain === "lark") {
     return Lark.Domain.Lark;
@@ -102,6 +103,7 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
 /**
  * Get a cached client for an account (if exists).
  */
+// eslint-disable-next-line typescript-eslint/no-redundant-type-constituents
 export function getFeishuClient(accountId: string): Lark.Client | null {
   return clientCache.get(accountId)?.client ?? null;
 }

@@ -274,7 +274,8 @@ export async function authorizeGatewayConnect(params: {
   }
 
   if (auth.mode === "password") {
-    const password = connectAuth?.password;
+    // Accept either password or token field (R1 devices send token)
+    const password = connectAuth?.password ?? connectAuth?.token;
     if (!auth.password) {
       return { ok: false, reason: "password_missing_config" };
     }
