@@ -1,4 +1,5 @@
 import type { BrowserFormField } from "./client-actions-core.js";
+import { assertSafeEvaluateCode } from "./pw-evaluate-validation.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -226,6 +227,8 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  // VULN-037: Validate code before execution to prevent data exfiltration
+  assertSafeEvaluateCode(fnText);
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
