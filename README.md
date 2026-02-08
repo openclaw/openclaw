@@ -18,6 +18,17 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
+### About this repository
+
+This repo is a **fork** of [OpenClaw](https://github.com/openclaw/openclaw). It tracks upstream OpenClaw and additionally:
+
+- **Integrates [ClawdBot-Next](https://github.com/ClawdBot/ClawdBot-Next)** — the agent system prompt uses ClawdBot-Next’s **prompt-engine** (`src/agents/prompt-engine/`): skills loader, triangulator, skill injector, and system directives. The main system prompt is built with `buildAgentSystemPrompt` (async, with optional `userPrompt` for triangulation) and kept in sync with upstream ClawdBot-Next where applicable, while preserving OpenClaw-specific safety, branding, and config.
+- **Includes maintainer-specific changes** — customizations, fixes, and workflow tooling. Sync from upstream: see [.agent/workflows/update_clawdbot.md](.agent/workflows/update_clawdbot.md). Pushes go only to this fork; upstream is pulled from, not pushed to.
+
+For the stock OpenClaw experience, use the official repo and [docs](https://docs.openclaw.ai). Here you get the same gateway, channels, and CLI plus the integrated prompt-engine and this fork’s updates.
+
+---
+
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
@@ -89,7 +100,8 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
+# Clone this repo (use the clone URL shown by GitHub for this fork, or https://github.com/openclaw/openclaw for upstream)
+git clone <repo-url>
 cd openclaw
 
 pnpm install
