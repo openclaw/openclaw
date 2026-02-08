@@ -2,6 +2,16 @@ export type ChatAttachment = {
   id: string;
   dataUrl: string;
   mimeType: string;
+  /** Original file name */
+  fileName?: string;
+  /** File size in bytes */
+  fileSize?: number;
+  /** True for non-image files */
+  isFile?: boolean;
+  /** Server-side upload ID after upload */
+  uploadId?: string;
+  /** Server-side file path after upload */
+  uploadPath?: string;
 };
 
 export type ChatQueueItem = {

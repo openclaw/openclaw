@@ -3,6 +3,93 @@ import type { ChatAttachment } from "../ui-types.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { generateUUID } from "../uuid.ts";
 
+export type UploadResult = {
+  id: string;
+  path: string;
+  fileName: string;
+  size: number;
+  mimeType?: string;
+};
+
+type UploadedFileAttachment = {
+  type: "file";
+  id: string;
+  path: string;
+  fileName: string;
+  size: number;
+  mimeType?: string;
+};
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob | null> {
+  if (!dataUrl.startsWith("data:")) {
+    return null;
+  }
+  const response = await fetch(dataUrl).catch(() => null);
+  if (!response?.ok) {
+    return null;
+  }
+  return await response.blob().catch(() => null);
+}
+
+/**
+ * Upload a file to the server via HTTP /uploads endpoint.
+ */
+export async function uploadFileToServer(
+  client: GatewayBrowserClient,
+  attachment: ChatAttachment,
+): Promise<UploadResult> {
+  const blob = await dataUrlToBlob(attachment.dataUrl);
+  if (!blob) {
+    throw new Error("Invalid data URL format");
+  }
+  const fileName = attachment.fileName || "file";
+  const uploadRequest = await client.resolveUploadRequest();
+  const { url, authorization } = uploadRequest;
+  if (!authorization) {
+    throw new Error("Uploads require gateway token/password auth");
+  }
+  const headers = new Headers({
+    Authorization: authorization,
+    "X-File-Name": fileName,
+  });
+  if (typeof uploadRequest.deviceId === "string" && uploadRequest.deviceId.trim()) {
+    headers.set("X-OpenClaw-Device-Id", uploadRequest.deviceId.trim());
+  }
+  if (attachment.mimeType?.trim()) {
+    headers.set("Content-Type", attachment.mimeType);
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: blob,
+  });
+  const payload = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    id?: string;
+    path?: string;
+    fileName?: string;
+    size?: number;
+    mimeType?: string;
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error || `Upload failed (${response.status})`);
+  }
+  const uploadedPath =
+    typeof payload.path === "string" && payload.path.trim() ? payload.path.trim() : "";
+  if (!uploadedPath) {
+    throw new Error("Upload failed: server did not return file path");
+  }
+  const result: UploadResult = {
+    id: payload.id ?? "",
+    path: uploadedPath,
+    fileName: payload.fileName ?? fileName,
+    size: payload.size ?? blob.size,
+    mimeType: payload.mimeType,
+  };
+  return result;
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -66,7 +153,7 @@ export async function sendChatMessage(
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  let msg = message.trim();
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
     return null;
@@ -74,19 +161,69 @@ export async function sendChatMessage(
 
   const now = Date.now();
 
+  // Separate image and file attachments
+  const imageAttachments: ChatAttachment[] = [];
+  const fileAttachments: ChatAttachment[] = [];
+
+  if (hasAttachments) {
+    for (const att of attachments) {
+      if (att.isFile || !att.mimeType?.startsWith("image/")) {
+        fileAttachments.push(att);
+      } else {
+        imageAttachments.push(att);
+      }
+    }
+  }
+
+  // Upload file attachments to server and keep both display notes and structured refs.
+  const uploadedFiles: UploadedFileAttachment[] = [];
+  const uploadedPaths: string[] = [];
+  for (const att of fileAttachments) {
+    try {
+      const result = await uploadFileToServer(state.client, att);
+      uploadedFiles.push({
+        type: "file",
+        id: result.id,
+        path: result.path,
+        fileName: result.fileName,
+        size: result.size,
+        mimeType: result.mimeType,
+      });
+      uploadedPaths.push(`[Uploaded: ${result.path}]`);
+    } catch (err) {
+      console.error("File upload failed:", err);
+      // Continue with other attachments
+    }
+  }
+
+  // If this message only had file attachments and all uploads failed, do not send an empty chat request.
+  if (
+    !msg &&
+    imageAttachments.length === 0 &&
+    fileAttachments.length > 0 &&
+    uploadedFiles.length === 0
+  ) {
+    state.lastError = "All file uploads failed";
+    return null;
+  }
+
+  // Append file paths to message
+  if (uploadedPaths.length > 0) {
+    const pathsText = uploadedPaths.join("\n");
+    msg = msg ? `${msg}\n\n${pathsText}` : pathsText;
+  }
+
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
-  if (hasAttachments) {
-    for (const att of attachments) {
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
-      });
-    }
+  for (const att of imageAttachments) {
+    contentBlocks.push({
+      type: "image",
+      source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+    });
   }
 
   state.chatMessages = [
@@ -105,22 +242,25 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
-  // Convert attachments to API format
-  const apiAttachments = hasAttachments
-    ? attachments
-        .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: "image",
-            mimeType: parsed.mimeType,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
+  // Convert image attachments to API format and include uploaded file references.
+  const apiImageAttachments =
+    imageAttachments.length > 0
+      ? imageAttachments
+          .map((att) => {
+            const parsed = dataUrlToBase64(att.dataUrl);
+            if (!parsed) {
+              return null;
+            }
+            return {
+              type: "image",
+              mimeType: parsed.mimeType,
+              content: parsed.content,
+            };
+          })
+          .filter((a): a is NonNullable<typeof a> => a !== null)
+      : undefined;
+  const apiAttachmentsMerged = [...(apiImageAttachments ?? []), ...uploadedFiles];
+  const apiAttachments = apiAttachmentsMerged.length > 0 ? apiAttachmentsMerged : undefined;
 
   try {
     await state.client.request("chat.send", {

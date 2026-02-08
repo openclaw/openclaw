@@ -320,6 +320,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         type?: string;
         mimeType?: string;
         fileName?: string;
+        path?: string;
+        id?: string;
+        size?: number;
         content?: unknown;
       }>;
       timeoutMs?: number;
@@ -327,25 +330,26 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const stopCommand = isChatStopCommandText(p.message);
     const normalizedAttachments =
-      p.attachments
-        ?.map((a) => ({
-          type: typeof a?.type === "string" ? a.type : undefined,
-          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
-          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
-          content:
-            typeof a?.content === "string"
-              ? a.content
-              : ArrayBuffer.isView(a?.content)
-                ? Buffer.from(
-                    a.content.buffer,
-                    a.content.byteOffset,
-                    a.content.byteLength,
-                  ).toString("base64")
-                : undefined,
-        }))
-        .filter((a) => a.content) ?? [];
+      p.attachments?.map((a) => ({
+        type: typeof a?.type === "string" ? a.type : undefined,
+        mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
+        fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
+        path: typeof a?.path === "string" ? a.path.trim() : undefined,
+        id: typeof a?.id === "string" ? a.id : undefined,
+        size: typeof a?.size === "number" && Number.isFinite(a.size) ? a.size : undefined,
+        content:
+          typeof a?.content === "string"
+            ? a.content
+            : ArrayBuffer.isView(a?.content)
+              ? Buffer.from(a.content.buffer, a.content.byteOffset, a.content.byteLength).toString(
+                  "base64",
+                )
+              : undefined,
+      })) ?? [];
+    const imageAttachments = normalizedAttachments.filter((a) => a.content);
+    const uploadedFileAttachments = normalizedAttachments.filter((a) => a.path);
     const rawMessage = p.message.trim();
-    if (!rawMessage && normalizedAttachments.length === 0) {
+    if (!rawMessage && imageAttachments.length === 0 && uploadedFileAttachments.length === 0) {
       respond(
         false,
         undefined,
@@ -355,9 +359,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let parsedMessage = p.message;
     let parsedImages: ChatImageContent[] = [];
-    if (normalizedAttachments.length > 0) {
+    if (imageAttachments.length > 0) {
       try {
-        const parsed = await parseMessageWithAttachments(p.message, normalizedAttachments, {
+        const parsed = await parseMessageWithAttachments(p.message, imageAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
         });
@@ -470,6 +474,25 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        MediaPath: uploadedFileAttachments[0]?.path,
+        MediaPaths:
+          uploadedFileAttachments.length > 0
+            ? uploadedFileAttachments
+                .map((entry) => entry.path)
+                .filter((value): value is string => typeof value === "string" && value.length > 0)
+            : undefined,
+        MediaUrl: uploadedFileAttachments[0]?.path,
+        MediaUrls:
+          uploadedFileAttachments.length > 0
+            ? uploadedFileAttachments
+                .map((entry) => entry.path)
+                .filter((value): value is string => typeof value === "string" && value.length > 0)
+            : undefined,
+        MediaType: uploadedFileAttachments[0]?.mimeType,
+        MediaTypes:
+          uploadedFileAttachments.length > 0
+            ? uploadedFileAttachments.map((entry) => entry.mimeType ?? "application/octet-stream")
+            : undefined,
       };
 
       const agentId = resolveSessionAgentId({

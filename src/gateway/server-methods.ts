@@ -21,6 +21,7 @@ import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import { updateHandlers } from "./server-methods/update.js";
+import { uploadHandlers } from "./server-methods/uploads.js";
 import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
@@ -55,6 +56,9 @@ const READ_METHODS = new Set([
   "status",
   "usage.status",
   "usage.cost",
+  "sessions.usage",
+  "sessions.usage.timeseries",
+  "sessions.usage.logs",
   "tts.status",
   "tts.providers",
   "models.list",
@@ -88,6 +92,7 @@ const WRITE_METHODS = new Set([
   "chat.send",
   "chat.abort",
   "browser.request",
+  "uploads.upload",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -188,6 +193,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
+  ...uploadHandlers,
 };
 
 export async function handleGatewayRequest(

@@ -59,6 +59,12 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayUploadRequest = {
+  url: string;
+  authorization?: string;
+  deviceId?: string;
+};
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -297,6 +303,43 @@ export class GatewayBrowserClient {
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  async resolveUploadRequest(): Promise<GatewayUploadRequest> {
+    const url = new URL(this.opts.url, window.location.href);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.pathname = "/uploads";
+    url.search = "";
+    url.hash = "";
+
+    const sharedAuth = this.opts.token ?? this.opts.password;
+    if (sharedAuth) {
+      return {
+        url: url.toString(),
+        authorization: `Bearer ${sharedAuth}`,
+      };
+    }
+
+    let token: string | undefined;
+    let deviceId: string | undefined;
+    if (typeof crypto !== "undefined" && crypto.subtle) {
+      const role = "operator";
+      const identity = await loadOrCreateDeviceIdentity().catch(() => null);
+      if (identity) {
+        deviceId = identity.deviceId;
+        const storedToken = loadDeviceAuthToken({
+          deviceId: identity.deviceId,
+          role,
+        })?.token;
+        token = storedToken;
+      }
+    }
+
+    return {
+      url: url.toString(),
+      authorization: token ? `Bearer ${token}` : undefined,
+      deviceId,
+    };
   }
 
   private queueConnect() {

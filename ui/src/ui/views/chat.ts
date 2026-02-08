@@ -129,26 +129,104 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 
   e.preventDefault();
-
+  const files: File[] = [];
   for (const item of imageItems) {
     const file = item.getAsFile();
-    if (!file) {
-      continue;
+    if (file) {
+      files.push(file);
     }
+  }
+  void appendFilesAsAttachments(files, props);
+}
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+      resolve(result);
+    });
+    reader.addEventListener("error", () =>
+      reject(reader.error ?? new Error("Failed to read file")),
+    );
+    reader.readAsDataURL(file);
+  });
+}
+
+async function appendFilesAsAttachments(files: Iterable<File>, props: ChatProps) {
+  if (!props.onAttachmentsChange) {
+    return;
+  }
+  const fileList = Array.from(files);
+  if (fileList.length === 0) {
+    return;
+  }
+  const settled = await Promise.allSettled(
+    fileList.map(async (file): Promise<ChatAttachment> => {
+      const dataUrl = await readFileAsDataUrl(file);
+      const isImage = file.type.startsWith("image/");
+      return {
         id: generateAttachmentId(),
         dataUrl,
-        mimeType: file.type,
+        mimeType: file.type || "application/octet-stream",
+        fileName: file.name,
+        fileSize: file.size,
+        isFile: !isImage,
       };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
+    }),
+  );
+  const additions = settled
+    .filter((item): item is PromiseFulfilledResult<ChatAttachment> => item.status === "fulfilled")
+    .map((item) => item.value);
+  if (additions.length === 0) {
+    return;
   }
+  const current = props.attachments ?? [];
+  props.onAttachmentsChange([...current, ...additions]);
+}
+
+function handleFileSelect(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || files.length === 0 || !props.onAttachmentsChange) {
+    return;
+  }
+
+  void appendFilesAsAttachments(files, props);
+
+  // Reset input so same file can be selected again
+  input.value = "";
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0 || !props.onAttachmentsChange) {
+    return;
+  }
+
+  void appendFilesAsAttachments(files, props);
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -159,8 +237,35 @@ function renderAttachmentPreview(props: ChatProps) {
 
   return html`
     <div class="chat-attachments">
-      ${attachments.map(
-        (att) => html`
+      ${attachments.map((att) => {
+        const isFile = att.isFile || !att.mimeType?.startsWith("image/");
+
+        if (isFile) {
+          // File attachment (non-image)
+          return html`
+            <div class="chat-attachment chat-attachment--file">
+              <div class="chat-attachment__file-icon">${icons.fileText}</div>
+              <div class="chat-attachment__file-info">
+                <span class="chat-attachment__file-name">${att.fileName || "File"}</span>
+                ${att.fileSize ? html`<span class="chat-attachment__file-size">${formatFileSize(att.fileSize)}</span>` : nothing}
+              </div>
+              <button
+                class="chat-attachment__remove"
+                type="button"
+                aria-label="Remove attachment"
+                @click=${() => {
+                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                  props.onAttachmentsChange?.(next);
+                }}
+              >
+                ${icons.x}
+              </button>
+            </div>
+          `;
+        }
+
+        // Image attachment
+        return html`
           <div class="chat-attachment">
             <img
               src=${att.dataUrl}
@@ -179,8 +284,8 @@ function renderAttachmentPreview(props: ChatProps) {
               ${icons.x}
             </button>
           </div>
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -367,9 +472,23 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div
+        class="chat-compose"
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+        @dragover=${handleDragOver}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <label class="chat-upload-btn" title="Upload file">
+            <input
+              type="file"
+              multiple
+              @change=${(e: Event) => handleFileSelect(e, props)}
+              hidden
+              ?disabled=${!props.connected}
+            />
+            ${icons.paperclip}
+          </label>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
