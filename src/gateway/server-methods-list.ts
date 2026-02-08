@@ -88,6 +88,8 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Legacy alias for chat.abort (#5239)
+  "abort",
 ];
 
 export function listGatewayMethods(): string[] {
