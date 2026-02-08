@@ -127,6 +127,7 @@ export const AgentDefaultsSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
+    typingTtlSeconds: z.number().int().positive().optional(),
     typingMode: z
       .union([
         z.literal("never"),

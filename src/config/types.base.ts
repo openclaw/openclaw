@@ -90,6 +90,8 @@ export type SessionConfig = {
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
   typingIntervalSeconds?: number;
+  /** Max duration (seconds) the typing indicator stays active before auto-stopping. Default: 120. */
+  typingTtlSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;

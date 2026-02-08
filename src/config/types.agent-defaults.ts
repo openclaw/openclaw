@@ -161,6 +161,8 @@ export type AgentDefaultsConfig = {
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   typingIntervalSeconds?: number;
+  /** Max duration (seconds) the typing indicator stays active before auto-stopping. Default: 120. */
+  typingTtlSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
