@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { GatewayBindMode } from "../../../config/types.gateway.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { randomToken } from "../../onboard-helpers.js";
@@ -11,7 +12,7 @@ export function applyNonInteractiveGatewayConfig(params: {
 }): {
   nextConfig: OpenClawConfig;
   port: number;
-  bind: string;
+  bind: GatewayBindMode;
   authMode: string;
   tailscaleMode: string;
   tailscaleResetOnExit: boolean;

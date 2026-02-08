@@ -5,6 +5,7 @@ import type {
   ResetScope,
 } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayBindMode } from "../config/types.gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
@@ -202,7 +203,8 @@ export async function runOnboardingWizard(
       bindRaw === "lan" ||
       bindRaw === "auto" ||
       bindRaw === "custom" ||
-      bindRaw === "tailnet"
+      bindRaw === "tailnet" ||
+      bindRaw === "dualstack"
         ? bindRaw
         : "loopback";
 
@@ -238,7 +240,7 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
+    const formatBind = (value: GatewayBindMode) => {
       if (value === "loopback") {
         return "Loopback (127.0.0.1)";
       }
@@ -250,6 +252,9 @@ export async function runOnboardingWizard(
       }
       if (value === "tailnet") {
         return "Tailnet (Tailscale IP)";
+      }
+      if (value === "dualstack") {
+        return "Dualstack (IPv4+IPv6)";
       }
       return "Auto";
     };

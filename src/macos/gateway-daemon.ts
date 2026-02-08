@@ -96,11 +96,12 @@ async function main() {
     bindRaw === "lan" ||
     bindRaw === "auto" ||
     bindRaw === "custom" ||
-    bindRaw === "tailnet"
+    bindRaw === "tailnet" ||
+    bindRaw === "dualstack"
       ? bindRaw
       : null;
   if (!bind) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", "custom", or "dualstack")');
     process.exit(1);
   }
 
