@@ -24,18 +24,18 @@
 
 ### 关键文件
 
-| 文件 | 用途 |
-|------|------|
-| `src/send.ts` | 文本/卡片/Markdown 消息发送 |
-| `src/media.ts` | 媒体上传/下载/发送（图片、文件、**音频**） |
-| `src/bot.ts` | 消息接收、解析、媒体类型分发 |
-| `src/client.ts` | Lark SDK 客户端创建/缓存 |
-| `src/reply-dispatcher.ts` | 回复分发（文本分块、卡片渲染） |
-| `src/channel.ts` | 频道注册/事件绑定 |
-| `src/targets.ts` | receive_id 类型解析（chat_id/open_id/user_id） |
-| `src/accounts.ts` | 多账号配置解析 |
-| `src/typing.ts` | 输入状态（reaction 模拟） |
-| `src/mention.ts` | @提及 构建 |
+| 文件                      | 用途                                           |
+| ------------------------- | ---------------------------------------------- |
+| `src/send.ts`             | 文本/卡片/Markdown 消息发送                    |
+| `src/media.ts`            | 媒体上传/下载/发送（图片、文件、**音频**）     |
+| `src/bot.ts`              | 消息接收、解析、媒体类型分发                   |
+| `src/client.ts`           | Lark SDK 客户端创建/缓存                       |
+| `src/reply-dispatcher.ts` | 回复分发（文本分块、卡片渲染）                 |
+| `src/channel.ts`          | 频道注册/事件绑定                              |
+| `src/targets.ts`          | receive_id 类型解析（chat_id/open_id/user_id） |
+| `src/accounts.ts`         | 多账号配置解析                                 |
+| `src/typing.ts`           | 输入状态（reaction 模拟）                      |
+| `src/mention.ts`          | @提及 构建                                     |
 
 ### 已完成: 音频消息发送支持
 
