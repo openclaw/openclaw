@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
+import {
+  type MediaKind,
+  MAX_STICKER_BYTES,
+  maxBytesForKind,
+  mediaKindFromMime,
+} from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
@@ -172,9 +177,13 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      // Preserve WebP files under sticker size limit (used as WhatsApp stickers).
+      const isWebpSticker =
+        params.contentType === "image/webp" && params.buffer.length <= MAX_STICKER_BYTES;
+      if (isGif || isWebpSticker || !optimizeImages) {
         if (params.buffer.length > cap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
+          const label = isGif ? "GIF" : isWebpSticker ? "Sticker" : "Media";
+          throw new Error(formatCapLimit(label, cap, params.buffer.length));
         }
         return {
           buffer: params.buffer,
