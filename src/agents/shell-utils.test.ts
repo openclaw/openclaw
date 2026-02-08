@@ -49,6 +49,50 @@ describe("getShellConfig", () => {
       const { shell } = getShellConfig();
       expect(shell.toLowerCase()).toContain("powershell");
     });
+  }
+
+  it("uses custom shell when override.shell is provided", () => {
+    const customShell = isWin
+      ? "d:\\Program Files\\Git\\bin\\bash.exe"
+      : "/usr/local/bin/custom-bash";
+    const { shell, args } = getShellConfig({ shell: customShell });
+    expect(shell).toBe(customShell);
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("auto-detects args for bash-like shells", () => {
+    const { args } = getShellConfig({ shell: "/usr/bin/bash" });
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("auto-detects args for powershell override", () => {
+    const { args } = getShellConfig({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" });
+    expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+  });
+
+  it("auto-detects args for pwsh override", () => {
+    const { args } = getShellConfig({ shell: "/usr/local/bin/pwsh" });
+    expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+  });
+
+  it("uses explicit shellArgs when provided", () => {
+    const customArgs = ["-l", "-c"];
+    const { shell, args } = getShellConfig({ shell: "/bin/bash", shellArgs: customArgs });
+    expect(shell).toBe("/bin/bash");
+    expect(args).toEqual(customArgs);
+  });
+
+  it("falls back to platform default when override.shell is undefined", () => {
+    const { shell } = getShellConfig({ shell: undefined });
+    if (isWin) {
+      expect(shell.toLowerCase()).toContain("powershell");
+    } else {
+      // Falls through to the normal logic
+      expect(typeof shell).toBe("string");
+    }
+  });
+
+  if (isWin) {
     return;
   }
 

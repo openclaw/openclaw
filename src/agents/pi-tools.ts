@@ -89,6 +89,8 @@ function isApplyPatchAllowedForModel(params: {
 function resolveExecConfig(cfg: OpenClawConfig | undefined) {
   const globalExec = cfg?.tools?.exec;
   return {
+    shell: globalExec?.shell,
+    shellArgs: globalExec?.shellArgs,
     host: globalExec?.host,
     security: globalExec?.security,
     ask: globalExec?.ask,
@@ -274,6 +276,8 @@ export function createOpenClawCodingTools(options?: {
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = createExecTool({
     ...execDefaults,
+    shell: options?.exec?.shell ?? execConfig.shell,
+    shellArgs: options?.exec?.shellArgs ?? execConfig.shellArgs,
     host: options?.exec?.host ?? execConfig.host,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
