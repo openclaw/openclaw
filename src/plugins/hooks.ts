@@ -21,6 +21,7 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -45,6 +46,7 @@ export type {
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -236,13 +238,45 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
+   * Runs in parallel and blocks until all hooks complete.
+   * Plugins can block or audit inbound messages.
    */
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+  ): Promise<PluginHookMessageReceivedResult | undefined> {
+    const hooks = getHooksForName(registry, "message_received");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running message_received (${hooks.length} handlers, parallel)`);
+
+    // Run all hooks in parallel (preserves existing behavior)
+    const promises = hooks.map(async (hook) => {
+      try {
+        return await (
+          hook.handler as (
+            event: PluginHookMessageReceivedEvent,
+            ctx: PluginHookMessageContext,
+          ) => Promise<PluginHookMessageReceivedResult>
+        )(event, ctx);
+      } catch (err) {
+        const msg = `[hooks] message_received handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+        return undefined;
+      }
+    });
+
+    const results = await Promise.all(promises);
+
+    // Merge results: if any hook cancelled, message is cancelled
+    const cancelled = results.some((r) => r?.cancel === true);
+    return cancelled ? { cancel: true } : undefined;
   }
 
   /**
