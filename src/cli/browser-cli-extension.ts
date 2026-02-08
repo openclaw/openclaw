@@ -12,14 +12,24 @@ import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
+/**
+ * Resolves the bundled Chrome extension directory.
+ * Tries multiple paths to handle both development and packaged builds.
+ * Returns candidate paths for error reporting if not found.
+ */
 export function resolveBundledExtensionRootDir(
   here = path.dirname(fileURLToPath(import.meta.url)),
-) {
+): { dir: string; candidates: string[] } {
+  // Possible paths where chrome-extension might be located
+  const candidates: string[] = [];
+
+  // 1. Try walking up from current directory (development mode)
   let current = here;
   while (true) {
     const candidate = path.join(current, "assets", "chrome-extension");
+    candidates.push(candidate);
     if (hasManifest(candidate)) {
-      return candidate;
+      return { dir: candidate, candidates };
     }
     const parent = path.dirname(current);
     if (parent === current) {
@@ -28,7 +38,37 @@ export function resolveBundledExtensionRootDir(
     current = parent;
   }
 
-  return path.resolve(here, "../../assets/chrome-extension");
+  // 2. Try relative to CLI directory (common packaged location)
+  const packagedDir = path.resolve(here, "../../assets/chrome-extension");
+  candidates.push(packagedDir);
+  if (hasManifest(packagedDir)) {
+    return { dir: packagedDir, candidates };
+  }
+
+  // 3. Try relative to dist directory (esbuild/webpack output)
+  const distDir = path.resolve(here, "../assets/chrome-extension");
+  candidates.push(distDir);
+  if (hasManifest(distDir)) {
+    return { dir: distDir, candidates };
+  }
+
+  // 4. Try alongside CLI file (flattened build)
+  const flatDir = path.resolve(here, "assets/chrome-extension");
+  candidates.push(flatDir);
+  if (hasManifest(flatDir)) {
+    return { dir: flatDir, candidates };
+  }
+
+  // 5. Try package root (npm install location)
+  const npmDir = path.resolve(here, "../../../../assets/chrome-extension");
+  candidates.push(npmDir);
+  if (hasManifest(npmDir)) {
+    return { dir: npmDir, candidates };
+  }
+
+  // If not found, return last checked packaged candidate (most likely location for non-dev)
+  // This matches the original fallback behavior for packaged installs
+  return { dir: packagedDir, candidates };
 }
 
 function installedExtensionRootDir() {
@@ -36,16 +76,39 @@ function installedExtensionRootDir() {
 }
 
 function hasManifest(dir: string) {
-  return fs.existsSync(path.join(dir, "manifest.json"));
+  try {
+    return fs.existsSync(path.join(dir, "manifest.json"));
+  } catch {
+    return false;
+  }
 }
 
 export async function installChromeExtension(opts?: {
   stateDir?: string;
   sourceDir?: string;
 }): Promise<{ path: string }> {
-  const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
-  if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
+  const result = opts?.sourceDir 
+    ? { dir: opts.sourceDir, candidates: [opts.sourceDir] }
+    : resolveBundledExtensionRootDir();
+  
+  if (!hasManifest(result.dir)) {
+    const searchedPaths = result.candidates
+      .map((p, i) => `  ${i + 1}. ${p}`)
+      .join("\n");
+    
+    throw new Error(
+      [
+        "Bundled Chrome extension is missing.",
+        "",
+        "Searched paths:",
+        searchedPaths,
+        "",
+        "Solutions:",
+        "1. Build OpenClaw: npm run build",
+        "2. Reinstall OpenClaw: npm install -g openclaw",
+        "3. Check OpenClaw installation: npm list -g openclaw",
+      ].join("\n"),
+    );
   }
 
   const stateDir = opts?.stateDir ?? STATE_DIR;
@@ -59,9 +122,9 @@ export async function installChromeExtension(opts?: {
     });
   }
 
-  await fs.promises.cp(src, dest, { recursive: true });
+  await fs.promises.cp(result.dir, dest, { recursive: true });
   if (!hasManifest(dest)) {
-    throw new Error("Chrome extension install failed (manifest.json missing). Try again.");
+    throw new Error("Chrome extension install failed (manifest.json missing in destination). Try again.");
   }
 
   return { path: dest };
@@ -98,9 +161,9 @@ export function registerBrowserExtensionCommands(
           [
             copied ? "Copied to clipboard." : "Copy to clipboard unavailable.",
             "Next:",
-            `- Chrome → chrome://extensions → enable “Developer mode”`,
-            `- “Load unpacked” → select: ${displayPath}`,
-            `- Pin “OpenClaw Browser Relay”, then click it on the tab (badge shows ON)`,
+            `- Chrome → chrome://extensions → enable "Developer mode"`,
+            `- "Load unpacked" → select: ${displayPath}`,
+            `- Pin "OpenClaw Browser Relay", then click it on the tab (badge shows ON)`,
             "",
             `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.openclaw.ai/tools/chrome-extension")}`,
           ].join("\n"),
