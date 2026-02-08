@@ -6,6 +6,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { AuthChoice } from "../onboard-types.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -21,12 +22,39 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { applyAuthChoice } from "../auth-choice.apply.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
 import { updateConfig } from "./shared.js";
+
+const BUILTIN_AUTH_CHOICES: AuthChoice[] = [
+  "openai-codex",
+  "openai-api-key",
+  "token",
+  "apiKey",
+  "github-copilot",
+  "gemini-api-key",
+  "openrouter-api-key",
+  "ai-gateway-api-key",
+  "moonshot-api-key",
+  "kimi-code-api-key",
+  "synthetic-api-key",
+  "venice-api-key",
+  "zai-api-key",
+  "xiaomi-api-key",
+  "google-antigravity",
+  "google-gemini-cli",
+  "minimax-portal",
+  "minimax-api",
+  "minimax-api-lightning",
+  "qwen-portal",
+  "copilot-proxy",
+  "opencode-zen",
+  "chutes",
+];
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   clackConfirm({
@@ -342,26 +370,65 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
+  const prompter = createClackPrompter();
+
+  const normalizedProvider = opts.provider ? normalizeProviderId(opts.provider) : undefined;
+  const builtinAuthChoice = normalizedProvider
+    ? (BUILTIN_AUTH_CHOICES.find((choice) => normalizeProviderId(choice) === normalizedProvider) as
+        | AuthChoice
+        | undefined)
+    : undefined;
+
+  if (builtinAuthChoice) {
+    const result = await applyAuthChoice({
+      authChoice: builtinAuthChoice,
+      config,
+      prompter,
+      runtime,
+      agentDir,
+      setDefaultModel: Boolean(opts.setDefault),
+    });
+
+    await updateConfig(() => result.config);
+    logConfigUpdated(runtime);
+    if (result.agentModelOverride) {
+      runtime.log(`Default model: ${result.agentModelOverride}`);
+    }
+    return;
+  }
+
   const providers = resolvePluginProviders({ config, workspaceDir });
-  if (providers.length === 0) {
+
+  if (opts.provider && providers.length > 0) {
+    const matched = resolveProviderMatch(providers, opts.provider);
+    if (!matched) {
+      const availableIds = [...BUILTIN_AUTH_CHOICES, ...providers.map((p) => p.id)].join(", ");
+      throw new Error(`Provider "${opts.provider}" not found. Available: ${availableIds}.`);
+    }
+  }
+
+  if (providers.length === 0 && !opts.provider) {
     throw new Error(
-      `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
+      `No provider plugins found. Use --provider <id> with a built-in auth choice ` +
+        `(${BUILTIN_AUTH_CHOICES.slice(0, 5).join(", ")}, ...) or install a plugin via ` +
+        `\`${formatCliCommand("openclaw plugins install")}\`.`,
     );
   }
 
-  const prompter = createClackPrompter();
   const selectedProvider =
     resolveProviderMatch(providers, opts.provider) ??
-    (await prompter
-      .select({
-        message: "Select a provider",
-        options: providers.map((provider) => ({
-          value: provider.id,
-          label: provider.label,
-          hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
-        })),
-      })
-      .then((id) => resolveProviderMatch(providers, String(id))));
+    (providers.length > 0
+      ? await prompter
+          .select({
+            message: "Select a provider",
+            options: providers.map((provider) => ({
+              value: provider.id,
+              label: provider.label,
+              hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
+            })),
+          })
+          .then((id) => resolveProviderMatch(providers, String(id)))
+      : null);
 
   if (!selectedProvider) {
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
