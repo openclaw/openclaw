@@ -48,6 +48,8 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  calculateTtsTimeout,
+  validateAudioBuffer,
 } = _test;
 
 describe("tts", () => {
@@ -556,6 +558,63 @@ describe("tts", () => {
 
       globalThis.fetch = originalFetch;
       process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+  });
+
+  describe("calculateTtsTimeout", () => {
+    it("returns minimum for short text", () => {
+      // MIN_TIMEOUT_MS (15s) + 50 chars * 30ms = 16.5s
+      expect(calculateTtsTimeout(50, 15_000)).toBe(16_500);
+    });
+
+    it("scales linearly for medium text", () => {
+      // MIN_TIMEOUT_MS (15s) + 1000 chars * 30ms = 45s
+      expect(calculateTtsTimeout(1000, 15_000)).toBe(45_000);
+    });
+
+    it("caps at maximum for very long text", () => {
+      // Would be 315s but capped at MAX_TIMEOUT_MS (120s)
+      expect(calculateTtsTimeout(10_000, 15_000)).toBe(120_000);
+    });
+
+    it("uses config timeout if higher than calculated", () => {
+      // Calculated would be 16.5s but config is 60s
+      expect(calculateTtsTimeout(50, 60_000)).toBe(60_000);
+    });
+  });
+
+  describe("validateAudioBuffer", () => {
+    it("accepts valid MP3 with ID3 header", () => {
+      // ID3 header: 0x49 0x44 0x33 (ID3)
+      const buffer = Buffer.from([0x49, 0x44, 0x33, ...new Array(10000).fill(0)]);
+      expect(() => validateAudioBuffer(buffer, 100, "mp3_44100_128")).not.toThrow();
+    });
+
+    it("accepts valid MP3 with MPEG frame sync", () => {
+      // MPEG frame sync: 0xFF 0xFB
+      const buffer = Buffer.from([0xff, 0xfb, ...new Array(10000).fill(0)]);
+      expect(() => validateAudioBuffer(buffer, 100, "mp3_44100_128")).not.toThrow();
+    });
+
+    it("accepts valid OGG/Opus with OggS header", () => {
+      // OggS magic: 0x4F 0x67 0x67 0x53
+      const buffer = Buffer.from([0x4f, 0x67, 0x67, 0x53, ...new Array(10000).fill(0)]);
+      expect(() => validateAudioBuffer(buffer, 100, "opus_48000_64")).not.toThrow();
+    });
+
+    it("rejects truncated audio", () => {
+      const buffer = Buffer.alloc(100);
+      expect(() => validateAudioBuffer(buffer, 1000, "mp3_44100_128")).toThrow(/too small/);
+    });
+
+    it("rejects invalid MP3 header", () => {
+      const buffer = Buffer.from([0x00, 0x00, 0x00, ...new Array(10000).fill(0)]);
+      expect(() => validateAudioBuffer(buffer, 100, "mp3_44100_128")).toThrow(/Invalid MP3 header/);
+    });
+
+    it("rejects invalid OGG header", () => {
+      const buffer = Buffer.from([0x00, 0x00, 0x00, 0x00, ...new Array(10000).fill(0)]);
+      expect(() => validateAudioBuffer(buffer, 100, "opus_48000_64")).toThrow(/Invalid OGG/);
     });
   });
 });

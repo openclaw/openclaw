@@ -32,10 +32,14 @@ import {
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
+import { retryAsync } from "../infra/retry.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const MIN_TIMEOUT_MS = 15_000; // Base timeout
+const MS_PER_CHAR = 30; // ~30ms per character for TTS generation
+const MAX_TIMEOUT_MS = 120_000; // 2 minute cap
+const MIN_AUDIO_BYTES = 1000; // Minimum valid audio size
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
@@ -80,6 +84,55 @@ const TELEPHONY_OUTPUT = {
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
+
+/**
+ * Calculate dynamic timeout based on text length.
+ * Longer text takes more time to generate audio.
+ */
+function calculateTtsTimeout(textLength: number, configTimeoutMs: number): number {
+  const calculated = MIN_TIMEOUT_MS + textLength * MS_PER_CHAR;
+  const capped = Math.min(calculated, MAX_TIMEOUT_MS);
+  // Use the higher of config timeout or calculated timeout
+  return Math.max(configTimeoutMs, capped);
+}
+
+/**
+ * Validate that audio buffer is complete and valid.
+ * Throws if audio appears truncated or invalid.
+ */
+function validateAudioBuffer(buffer: Buffer, textLength: number, format: string): void {
+  if (buffer.length < MIN_AUDIO_BYTES) {
+    throw new Error(
+      `TTS audio too small: ${buffer.length} bytes (expected at least ${MIN_AUDIO_BYTES} for ${textLength} chars)`,
+    );
+  }
+
+  // Validate audio header magic bytes
+  if (format.includes("mp3")) {
+    // MP3: ID3 tag (0x49 0x44 0x33) or MPEG frame sync (0xFF 0xFB/0xFA/0xF3)
+    const isId3 = buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33;
+    const isMpegSync =
+      buffer[0] === 0xff && (buffer[1] === 0xfb || buffer[1] === 0xfa || buffer[1] === 0xf3);
+    if (!isId3 && !isMpegSync) {
+      throw new Error(`Invalid MP3 header: ${buffer.subarray(0, 4).toString("hex")}`);
+    }
+  } else if (format.includes("opus") || format.includes("ogg")) {
+    // OGG: "OggS" magic (0x4F 0x67 0x67 0x53)
+    const isOgg =
+      buffer[0] === 0x4f && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53;
+    if (!isOgg) {
+      throw new Error(`Invalid OGG/Opus header: ${buffer.subarray(0, 4).toString("hex")}`);
+    }
+  }
+
+  // Warn if audio is smaller than expected (but don't fail - compression varies)
+  const expectedMinBytes = Math.max(MIN_AUDIO_BYTES, (textLength / 100) * 8000);
+  if (buffer.length < expectedMinBytes * 0.5) {
+    logVerbose(
+      `TTS: Warning - audio smaller than expected: ${buffer.length} bytes vs ~${Math.round(expectedMinBytes)} expected for ${textLength} chars`,
+    );
+  }
+}
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -298,7 +351,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
-    timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: raw.timeoutMs ?? MIN_TIMEOUT_MS,
   };
 }
 
@@ -1031,47 +1084,93 @@ async function elevenLabsTTS(params: {
   const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
   const normalizedSeed = normalizeSeed(seed);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // Calculate dynamic timeout based on text length
+  const effectiveTimeout = calculateTtsTimeout(text.length, timeoutMs);
+  const startTime = Date.now();
 
-  try {
-    const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
-    if (outputFormat) {
-      url.searchParams.set("output_format", outputFormat);
-    }
+  logVerbose(
+    `TTS: ElevenLabs request | text=${text.length}chars | timeout=${effectiveTimeout}ms (base=${timeoutMs}ms)`,
+  );
 
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+  // Wrap in retry logic for transient failures
+  return retryAsync(
+    async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
+
+      try {
+        const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
+        if (outputFormat) {
+          url.searchParams.set("output_format", outputFormat);
+        }
+
+        const response = await fetch(url.toString(), {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: modelId,
+            seed: normalizedSeed,
+            apply_text_normalization: normalizedNormalization,
+            language_code: normalizedLanguage,
+            voice_settings: {
+              stability: voiceSettings.stability,
+              similarity_boost: voiceSettings.similarityBoost,
+              style: voiceSettings.style,
+              use_speaker_boost: voiceSettings.useSpeakerBoost,
+              speed: voiceSettings.speed,
+            },
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`ElevenLabs API error (${response.status})`);
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const latencyMs = Date.now() - startTime;
+
+        // Validate the audio buffer before returning
+        validateAudioBuffer(buffer, text.length, outputFormat);
+
+        logVerbose(
+          `TTS: ElevenLabs success | text=${text.length}chars | audio=${buffer.length}bytes | latency=${latencyMs}ms`,
+        );
+
+        return buffer;
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+    {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 5000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const message = ((err as Error).message ?? "").toLowerCase();
+        // Don't retry auth or validation errors
+        if (message.includes("api error (401)")) return false;
+        if (message.includes("api error (403)")) return false;
+        if (message.includes("api error (422)")) return false;
+        if (message.includes("invalid voice")) return false;
+        if (message.includes("invalid mp3")) return false;
+        if (message.includes("invalid ogg")) return false;
+        // Retry timeouts, 5xx, network errors
+        return true;
       },
-      body: JSON.stringify({
-        text,
-        model_id: modelId,
-        seed: normalizedSeed,
-        apply_text_normalization: normalizedNormalization,
-        language_code: normalizedLanguage,
-        voice_settings: {
-          stability: voiceSettings.stability,
-          similarity_boost: voiceSettings.similarityBoost,
-          style: voiceSettings.style,
-          use_speaker_boost: voiceSettings.useSpeakerBoost,
-          speed: voiceSettings.speed,
-        },
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
-    }
-
-    return Buffer.from(await response.arrayBuffer());
-  } finally {
-    clearTimeout(timeout);
-  }
+      onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
+        logVerbose(
+          `TTS: ElevenLabs retry ${attempt}/${maxAttempts} after ${delayMs}ms | error=${(err as Error).message}`,
+        );
+      },
+    },
+  );
 }
 
 async function openaiTTS(params: {
@@ -1576,4 +1675,6 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  calculateTtsTimeout,
+  validateAudioBuffer,
 };
