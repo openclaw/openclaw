@@ -474,4 +474,75 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
     expect(message).toContain("blocked");
   });
+
+  it("handles network-level fetch failure in firecrawl fallback", async () => {
+    const mockFetch = vi.fn((input: RequestInfo) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev")) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      // Direct fetch fails with 403
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        headers: makeHeaders({ "content-type": "text/html" }),
+        text: async () => "blocked",
+      } as Response);
+    });
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    await expect(
+      tool?.execute?.("call", { url: "https://example.com/network-error" }),
+    ).rejects.toThrow(/Firecrawl fetch failed \(network error\)/);
+  });
+
+  it("handles invalid JSON response from firecrawl", async () => {
+    const mockFetch = vi.fn((input: RequestInfo) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError("Unexpected token");
+          },
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        headers: makeHeaders({ "content-type": "text/html" }),
+        text: async () => "blocked",
+      } as Response);
+    });
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    await expect(
+      tool?.execute?.("call", { url: "https://example.com/invalid-json" }),
+    ).rejects.toThrow(/Firecrawl fetch failed \(invalid response\)/);
+  });
 });
