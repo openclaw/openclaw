@@ -82,4 +82,82 @@ describe("startTelegramWebhook", () => {
     expect(handlerSpy).toHaveBeenCalled();
     abort.abort();
   });
+
+  it("defaults to loopback host (127.0.0.1) when host is not specified", async () => {
+    const abort = new AbortController();
+    const cfg = { bindings: [] };
+    const { server } = await startTelegramWebhook({
+      token: "tok",
+      accountId: "opie",
+      config: cfg,
+      port: 0,
+      abortSignal: abort.signal,
+    });
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("no addr");
+    }
+    // Default host should be loopback, not 0.0.0.0
+    expect(addr.address).toBe("127.0.0.1");
+    abort.abort();
+  });
+
+  it("defaults to 0.0.0.0 when publicUrl is external", async () => {
+    const abort = new AbortController();
+    const cfg = { bindings: [] };
+    const { server } = await startTelegramWebhook({
+      token: "tok",
+      accountId: "opie",
+      config: cfg,
+      port: 0,
+      abortSignal: abort.signal,
+      publicUrl: "https://my-server.example.com/telegram-webhook",
+    });
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("no addr");
+    }
+    // External publicUrl should bind to all interfaces
+    expect(addr.address).toBe("0.0.0.0");
+    abort.abort();
+  });
+
+  it("logs warning when no webhook secret is configured", async () => {
+    const logSpy = vi.fn();
+    const abort = new AbortController();
+    const cfg = { bindings: [] };
+    await startTelegramWebhook({
+      token: "tok",
+      accountId: "opie",
+      config: cfg,
+      port: 0,
+      abortSignal: abort.signal,
+      runtime: { log: logSpy },
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("webhook secret token is not configured"),
+    );
+    abort.abort();
+  });
+
+  it("does not log warning when webhook secret is provided", async () => {
+    const logSpy = vi.fn();
+    const abort = new AbortController();
+    const cfg = { bindings: [] };
+    await startTelegramWebhook({
+      token: "tok",
+      accountId: "opie",
+      config: cfg,
+      port: 0,
+      abortSignal: abort.signal,
+      secret: "my-secret-token",
+      runtime: { log: logSpy },
+    });
+    const secretWarnings = logSpy.mock.calls.filter(
+      ([msg]: [string]) =>
+        typeof msg === "string" && msg.includes("secret token is not configured"),
+    );
+    expect(secretWarnings).toHaveLength(0);
+    abort.abort();
+  });
 });
