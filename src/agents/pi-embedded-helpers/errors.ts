@@ -25,6 +25,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("exceeds model context window") ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow") ||
+    lower.includes("model token limit") ||
     (lower.includes("413") && lower.includes("too large"))
   );
 }

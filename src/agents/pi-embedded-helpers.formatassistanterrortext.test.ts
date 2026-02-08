@@ -23,6 +23,15 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+  it("returns context overflow for Kimi K2.5 'model token limit' error", () => {
+    // Kimi K2.5 returns this format when the prompt exceeds the model's context window.
+    // Without the fix, this falls through and shows a raw "LLM request rejected" message
+    // instead of triggering auto-compaction.
+    const msg = makeAssistantError(
+      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
   it("returns a friendly message for Anthropic role ordering", () => {
     const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
     expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");

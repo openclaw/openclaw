@@ -40,6 +40,20 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Kimi K2.5 'model token limit' error", () => {
+    // Kimi K2.5 returns this format when the prompt exceeds the context window.
+    // Without this fix, auto-compaction is NOT triggered because
+    // isContextOverflowError doesn't recognize the "model token limit" pattern.
+    const samples = [
+      "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "Your request exceeded model token limit",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores unrelated errors", () => {
     expect(isContextOverflowError("rate limit exceeded")).toBe(false);
     expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
