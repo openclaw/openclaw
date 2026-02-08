@@ -291,6 +291,131 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
+export const handleTotalUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/total_usage" && !normalized.startsWith("/total_usage ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /total_usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const args =
+    normalized === "/total_usage"
+      ? []
+      : normalized.slice("/total_usage".length).trim().split(/\s+/);
+
+  if (args.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "📊 *Choose usage summary range*\n━━━━━━━━━━━━━━\nView total token usage and cost across all sessions:",
+        channelData: {
+          telegram: {
+            buttons: [
+              [
+                { text: "⚡️ Last 5 hours", callback_data: "/total_usage 5h" },
+                { text: "🕒 Last 24 hours", callback_data: "/total_usage 24h" },
+              ],
+              [
+                { text: "📅 Last 7 days", callback_data: "/total_usage 7d" },
+                { text: "📅 Last 30 days", callback_data: "/total_usage 30d" },
+              ],
+              [
+                { text: "🤖 By model (30d)", callback_data: "/total_usage by-model" },
+                { text: "🌐 All time (365d)", callback_data: "/total_usage all" },
+              ],
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  let rangeStr = args[0];
+  let isByModel = args.includes("by-model") || args.includes("model");
+
+  if (rangeStr === "by-model" || rangeStr === "model") {
+    rangeStr = "30d";
+    isByModel = true;
+  }
+
+  let durationMs = 30 * 24 * 60 * 60 * 1000;
+  let label = "Last 30 days";
+
+  if (rangeStr === "all") {
+    durationMs = 365 * 24 * 60 * 60 * 1000;
+    label = "All time";
+  } else {
+    const match = rangeStr.match(/^(\d+)([hd])?$/i);
+    if (match) {
+      const val = parseInt(match[1], 10);
+      const unit = (match[2] || "d").toLowerCase();
+      if (unit === "h") {
+        durationMs = val * 60 * 60 * 1000;
+        label = `Last ${val} hour${val === 1 ? "" : "s"}`;
+      } else {
+        durationMs = val * 24 * 60 * 60 * 1000;
+        label = `Last ${val} day${val === 1 ? "" : "s"}`;
+      }
+    }
+  }
+
+  const nowMs = Date.now();
+  const startMs = nowMs - durationMs;
+  const summary = await loadCostUsageSummary({ startMs, endMs: nowMs, config: params.cfg });
+
+  if (isByModel) {
+    const modelLines = summary.models
+      .map((modelSummary) => {
+        const cost = formatUsd(modelSummary.totalCost);
+        const tokens = formatTokenCount(modelSummary.totalTokens);
+        return `🤖 *${modelSummary.model}*\n   ├ Usage: \`${tokens}\` tokens\n   └ Cost: \`${cost}\` (${modelSummary.sessionCount} session${modelSummary.sessionCount === 1 ? "" : "s"})`;
+      })
+      .slice(0, 15)
+      .join("\n\n");
+
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `📊 *Usage breakdown by model*\n📅 Range: \`${label}\`\n━━━━━━━━━━━━━━\n\n${modelLines || "⚠️ No usage records"}\n\n━━━━━━━━━━━━━━\n💰 *Total cost*: \`${formatUsd(summary.totals.totalCost)}\``,
+      },
+    };
+  }
+
+  const totalCost = formatUsd(summary.totals.totalCost);
+  const totalTokens = formatTokenCount(summary.totals.totalTokens);
+  const cacheTokens = formatTokenCount(summary.totals.cacheRead);
+  const cacheRate =
+    summary.totals.totalTokens > 0
+      ? ((summary.totals.cacheRead / summary.totals.totalTokens) * 100).toFixed(1)
+      : "0";
+  const topModels = summary.models.slice(0, 5);
+  const maxModelNameLen = Math.max(...topModels.map((modelSummary) => modelSummary.model.length), 10);
+  const modelDistributionLines = topModels
+    .map((modelSummary) => {
+      const percent = ((modelSummary.totalTokens / summary.totals.totalTokens) * 100).toFixed(1);
+      const tokens = formatTokenCount(modelSummary.totalTokens);
+      const namePart = modelSummary.model.padEnd(maxModelNameLen, " ");
+      const tokenPart = tokens.padStart(7, " ");
+      return `• \`${namePart}\`  \`${tokenPart}\` (\`${percent.padStart(5, " ")}%\`)`;
+    })
+    .join("\n");
+
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `📊 *Usage summary (${label})*\n━━━━━━━━━━━━━━\n\n💰 *Estimated total cost*: \`${totalCost}\`\n💎 *Total token usage*: \`${totalTokens}\` \n♻️ *Cache read tokens*: \`${cacheTokens}\` (\`${cacheRate}%\`)\n\n🤖 *Model distribution (Top 5)*:\n${modelDistributionLines || "⚠️ No records"}`,
+    },
+  };
+};
+
 export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
