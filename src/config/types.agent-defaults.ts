@@ -25,6 +25,15 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+export type RateLimitStrategyConfig = {
+  /** Strategy when rate limit is hit: switch to fallback, wait and retry, or ask user. */
+  strategy?: "switch" | "wait" | "ask";
+  /** Max seconds to wait before falling back to switch strategy (default: 60). */
+  maxWaitSeconds?: number;
+  /** Backup model to use when strategy is "switch" (uses configured fallbacks if not set). */
+  backupModel?: string;
+};
+
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
@@ -241,6 +250,8 @@ export type AgentDefaultsConfig = {
     /** Auto-prune sandbox containers. */
     prune?: SandboxPruneSettings;
   };
+  /** Rate limit handling strategy. */
+  rateLimitStrategy?: RateLimitStrategyConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

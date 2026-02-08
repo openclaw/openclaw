@@ -541,4 +541,92 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("uses backupModel on rate limit with switch strategy", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          rateLimitStrategy: {
+            strategy: "switch",
+            backupModel: "deepseek/deepseek-chat",
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        // Simulate 429 rate limit error
+        throw Object.assign(new Error("Rate limited"), { status: 429 });
+      }
+      if (provider === "deepseek" && model === "deepseek-chat") {
+        return "ok";
+      }
+      throw new Error(`unexpected: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Should try primary, then backupModel (not the fallback)
+    expect(calls).toEqual([
+      { provider: "openai", model: "gpt-4.1-mini" },
+      { provider: "deepseek", model: "deepseek-chat" },
+    ]);
+  });
+
+  it("uses backupModel on billing error (402)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          rateLimitStrategy: {
+            strategy: "wait", // Even with wait strategy, billing errors should switch
+            backupModel: "ollama/llama3.3",
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        // Simulate billing error
+        throw Object.assign(new Error("Payment required"), { status: 402 });
+      }
+      if (provider === "ollama" && model === "llama3.3") {
+        return "ok";
+      }
+      throw new Error(`unexpected: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Should try primary, then backupModel (billing always switches)
+    expect(calls).toEqual([
+      { provider: "openai", model: "gpt-4.1-mini" },
+      { provider: "ollama", model: "llama3.3" },
+    ]);
+  });
 });

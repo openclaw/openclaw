@@ -295,6 +295,9 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
+  "agents.defaults.rateLimitStrategy.strategy": "Rate Limit Strategy",
+  "agents.defaults.rateLimitStrategy.maxWaitSeconds": "Rate Limit Max Wait (seconds)",
+  "agents.defaults.rateLimitStrategy.backupModel": "Rate Limit Backup Model",
   "agents.defaults.cliBackends": "CLI Backends",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
@@ -660,6 +663,12 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.rateLimitStrategy.strategy":
+    'What to do when rate limited: "switch" (try fallback model), "wait" (wait for reset), or "ask" (prompt user).',
+  "agents.defaults.rateLimitStrategy.maxWaitSeconds":
+    "Maximum seconds to wait before falling back to switch strategy (default: 60, max: 300).",
+  "agents.defaults.rateLimitStrategy.backupModel":
+    "Specific backup model to switch to (uses configured fallbacks if not set).",
   "commands.native":
     "Register native commands with channels that support it (Discord/Slack/Telegram).",
   "commands.nativeSkills":

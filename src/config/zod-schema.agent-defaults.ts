@@ -170,6 +170,17 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    rateLimitStrategy: z
+      .object({
+        /** Strategy when rate limit is hit: switch to fallback, wait and retry, or ask user. */
+        strategy: z.union([z.literal("switch"), z.literal("wait"), z.literal("ask")]).optional(),
+        /** Max seconds to wait before falling back to switch strategy (default: 60). */
+        maxWaitSeconds: z.number().int().positive().max(300).optional(),
+        /** Backup model to use when strategy is "switch" (uses configured fallbacks if not set). */
+        backupModel: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
