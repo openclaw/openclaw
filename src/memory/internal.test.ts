@@ -74,7 +74,7 @@ describe("listMemoryFiles", () => {
     expect(files).toHaveLength(1);
   });
 
-  it("ignores symlinked files and directories", async () => {
+  it("follows symlinked files and directories", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     const extraDir = path.join(tmpDir, "extra");
     await fs.mkdir(extraDir, { recursive: true });
@@ -105,8 +105,8 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [extraDir, linkDir]);
     expect(files.some((file) => file.endsWith("note.md"))).toBe(true);
     if (symlinksOk) {
-      expect(files.some((file) => file.endsWith("linked.md"))).toBe(false);
-      expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
+      expect(files.some((file) => file.endsWith("linked.md"))).toBe(true);
+      expect(files.some((file) => file.endsWith("nested.md"))).toBe(true);
     }
   });
 });

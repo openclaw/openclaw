@@ -54,15 +54,39 @@ export function isMemoryPath(relPath: string): boolean {
   return normalized.startsWith("memory/");
 }
 
-async function walkDir(dir: string, files: string[]) {
+async function walkDir(dir: string, files: string[], visitedRealDirs = new Set<string>()) {
+  // Prevent symlink cycles (e.g. notes -> memory/notes -> notes)
+  try {
+    const real = await fs.realpath(dir);
+    if (visitedRealDirs.has(real)) {
+      return;
+    }
+    visitedRealDirs.add(real);
+  } catch {
+    // ignore
+  }
+
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
+
+    // Follow symlink targets (PARA "symlink trick")
     if (entry.isSymbolicLink()) {
+      try {
+        const st = await fs.stat(full);
+        if (st.isDirectory()) {
+          await walkDir(full, files, visitedRealDirs);
+        } else if (st.isFile() && entry.name.endsWith(".md")) {
+          files.push(full);
+        }
+      } catch {
+        // ignore broken symlinks
+      }
       continue;
     }
+
     if (entry.isDirectory()) {
-      await walkDir(full, files);
+      await walkDir(full, files, visitedRealDirs);
       continue;
     }
     if (!entry.isFile()) {
@@ -112,6 +136,15 @@ export async function listMemoryFiles(
       try {
         const stat = await fs.lstat(inputPath);
         if (stat.isSymbolicLink()) {
+          // Follow symlinked extra paths (directories or single markdown files)
+          try {
+            const st = await fs.stat(inputPath);
+            if (st.isDirectory()) {
+              await walkDir(inputPath, result);
+            } else if (st.isFile() && inputPath.endsWith(".md")) {
+              result.push(inputPath);
+            }
+          } catch {}
           continue;
         }
         if (stat.isDirectory()) {
