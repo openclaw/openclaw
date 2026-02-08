@@ -17,6 +17,32 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
+- **Cartesia Sonic 3** (primary or fallback provider; 40ms time-to-first-audio)
+
+### Cartesia Sonic 3
+
+[Cartesia Sonic 3](https://cartesia.ai/sonic) is a fast, emotive TTS model with 40ms TTFA.
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "cartesia",
+      cartesia: {
+        // apiKey: "..." // or set CARTESIA_API_KEY env var
+        voiceId: "694f9389-aac1-45b6-b726-9d9369183238",
+        modelId: "sonic-3", // or "sonic-turbo" for lower latency
+        language: "it", // 40+ languages, auto-detect if omitted
+        speed: "normal", // slowest | slow | normal | fast | fastest
+      },
+    },
+  },
+}
+```
+
+**Supported languages:** en, fr, de, es, pt, zh, ja, hi, it, ko, nl, pl, ru, sv, tr, and 25+ more.
+
+**Note:** For Telegram voice notes, Cartesia PCM output is automatically converted to Opus via ffmpeg. Ensure `ffmpeg` is installed on your system.
 
 ### Edge TTS notes
 

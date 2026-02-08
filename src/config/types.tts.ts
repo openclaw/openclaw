@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cartesia";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,14 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Cartesia Sonic configuration. */
+  cartesia?: {
+    apiKey?: string;
+    voiceId?: string;
+    modelId?: string;
+    language?: string;
+    speed?: "slowest" | "slow" | "normal" | "fast" | "fastest";
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

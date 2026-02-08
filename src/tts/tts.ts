@@ -1,4 +1,5 @@
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
+import { execFile as execFileCb } from "child_process";
 import { EdgeTTS } from "node-edge-tts";
 import {
   existsSync,
@@ -12,6 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFileCb);
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -49,6 +53,10 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_CARTESIA_BASE_URL = "https://api.cartesia.ai";
+const DEFAULT_CARTESIA_VOICE_ID = "694f9389-aac1-45b6-b726-9d9369183238"; // Sonic default
+const DEFAULT_CARTESIA_MODEL_ID = "sonic-3";
+const DEFAULT_CARTESIA_API_VERSION = "2025-04-16";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -63,6 +71,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  cartesia: { container: "raw" as const, encoding: "pcm_s16le" as const, sample_rate: 48000 },
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -70,6 +79,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  cartesia: { container: "mp3" as const, encoding: "mp3" as const, sample_rate: 44100 },
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -77,6 +87,10 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  cartesia: {
+    format: { container: "raw" as const, encoding: "pcm_s16le" as const, sample_rate: 16000 },
+    sampleRate: 16000,
+  },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -121,6 +135,13 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  cartesia: {
+    apiKey?: string;
+    voiceId: string;
+    modelId: string;
+    language?: string;
+    speed?: string;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -295,6 +316,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    cartesia: {
+      apiKey: raw.cartesia?.apiKey,
+      voiceId: raw.cartesia?.voiceId ?? DEFAULT_CARTESIA_VOICE_ID,
+      modelId: raw.cartesia?.modelId ?? DEFAULT_CARTESIA_MODEL_ID,
+      language: raw.cartesia?.language,
+      speed: raw.cartesia?.speed,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -498,10 +526,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "cartesia") {
+    return config.cartesia.apiKey || process.env.CARTESIA_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "cartesia"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -633,7 +664,12 @@ function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "cartesia"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -1158,6 +1194,97 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+/**
+ * Convert raw PCM (s16le) audio to Opus via ffmpeg.
+ * Required for Telegram voice notes when using Cartesia (no native Opus output).
+ */
+async function pcmToOpus(pcmBuffer: Buffer, sampleRate: number): Promise<Buffer> {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "tts-pcm-"));
+  const pcmPath = path.join(tempDir, "input.pcm");
+  const opusPath = path.join(tempDir, "output.opus");
+
+  try {
+    writeFileSync(pcmPath, pcmBuffer);
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-f",
+        "s16le",
+        "-ar",
+        String(sampleRate),
+        "-ac",
+        "1",
+        "-i",
+        pcmPath,
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-y",
+        opusPath,
+      ],
+      { timeout: 10_000 },
+    );
+    return readFileSync(opusPath);
+  } finally {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+}
+
+async function cartesiaTTS(params: {
+  text: string;
+  apiKey: string;
+  voiceId: string;
+  modelId: string;
+  language?: string;
+  speed?: string;
+  outputFormat: { container: string; encoding: string; sample_rate: number };
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, voiceId, modelId, language, speed, outputFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      model_id: modelId,
+      transcript: text,
+      voice: { mode: "id", id: voiceId },
+      output_format: outputFormat,
+    };
+    if (language) {
+      body.language = language;
+    }
+    if (speed) {
+      body.speed = speed;
+    }
+
+    const response = await fetch(`${DEFAULT_CARTESIA_BASE_URL}/tts/bytes`, {
+      method: "POST",
+      headers: {
+        "X-API-Key": apiKey,
+        "Cartesia-Version": DEFAULT_CARTESIA_API_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cartesia API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1285,6 +1412,22 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "cartesia") {
+        audioBuffer = await cartesiaTTS({
+          text: params.text,
+          apiKey,
+          voiceId: config.cartesia.voiceId,
+          modelId: config.cartesia.modelId,
+          language: config.cartesia.language,
+          speed: config.cartesia.speed,
+          outputFormat: output.cartesia,
+          timeoutMs: config.timeoutMs,
+        });
+
+        // Cartesia returns PCM for Telegram — convert to Opus via ffmpeg
+        if (channelId === "telegram" && output.cartesia.container === "raw") {
+          audioBuffer = await pcmToOpus(audioBuffer, output.cartesia.sample_rate);
+        }
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1310,7 +1453,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "cartesia"
+              ? JSON.stringify(output.cartesia)
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -1385,6 +1533,29 @@ export async function textToSpeechTelephony(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "cartesia") {
+        const output = TELEPHONY_OUTPUT.cartesia;
+        const audioBuffer = await cartesiaTTS({
+          text: params.text,
+          apiKey,
+          voiceId: config.cartesia.voiceId,
+          modelId: config.cartesia.modelId,
+          language: config.cartesia.language,
+          speed: config.cartesia.speed,
+          outputFormat: output.format,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: JSON.stringify(output.format),
           sampleRate: output.sampleRate,
         };
       }
