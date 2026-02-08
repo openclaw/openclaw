@@ -23,6 +23,29 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("sanitizes direct context-overflow errors", () => {
+    expect(
+      sanitizeUserFacingText(
+        "Context overflow: prompt too large for the model. Try again with less input or a larger-context model.",
+      ),
+    ).toContain("Context overflow: prompt too large for the model.");
+    expect(sanitizeUserFacingText("Request size exceeds model context window")).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
+  it("does not rewrite conversational mentions of context overflow", () => {
+    const text =
+      "nah it failed, hit a context overflow. the prompt was too large for the model. want me to retry it with a different approach?";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not rewrite technical summaries that mention context overflow", () => {
+    const text =
+      "Problem: When a subagent reads a very large file, it can exceed the model context window. Auto-compaction cannot help in that case.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
