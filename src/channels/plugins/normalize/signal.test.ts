@@ -28,4 +28,16 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
   });
+
+  it("preserves case for Base64-encoded group IDs", () => {
+    expect(
+      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
+    ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
+  });
+
+  it("preserves case for group IDs with signal: prefix", () => {
+    expect(normalizeSignalMessagingTarget("signal:group:AbCdEfGh+/123=")).toBe(
+      "group:AbCdEfGh+/123=",
+    );
+  });
 });
