@@ -3,6 +3,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
+  isToolOnlyMessage,
 } from "./message-normalizer.ts";
 
 describe("message-normalizer", () => {
@@ -174,6 +175,113 @@ describe("message-normalizer", () => {
     it("returns false for non-string role", () => {
       expect(isToolResultMessage({ role: 123 })).toBe(false);
       expect(isToolResultMessage({ role: null })).toBe(false);
+    });
+  });
+
+  describe("isToolOnlyMessage", () => {
+    it("returns true for toolresult role", () => {
+      expect(isToolOnlyMessage({ role: "toolresult", content: "output" })).toBe(true);
+      expect(isToolOnlyMessage({ role: "tool_result", content: "output" })).toBe(true);
+    });
+
+    it("returns true for messages with toolCallId", () => {
+      expect(isToolOnlyMessage({ role: "assistant", toolCallId: "call-1", content: "done" })).toBe(
+        true,
+      );
+      expect(
+        isToolOnlyMessage({ role: "assistant", tool_call_id: "call-2", content: "done" }),
+      ).toBe(true);
+    });
+
+    it("returns true for assistant messages with only toolcall content", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [{ type: "toolcall", name: "exec", arguments: { command: "ls" } }],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns true for assistant messages with only tool_use content", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [{ type: "tool_use", name: "bash", args: { command: "ls" } }],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns true for messages with toolcall + toolresult content", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [
+            { type: "toolcall", name: "exec", arguments: {} },
+            { type: "toolresult", name: "exec", text: "output" },
+          ],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns true for messages with toolcall + empty text", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [
+            { type: "text", text: "" },
+            { type: "tool_call", name: "read", arguments: {} },
+          ],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns true for messages with thinking + toolcall content", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "let me check..." },
+            { type: "tool_use", name: "exec", args: {} },
+          ],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns false for assistant messages with text + toolcall", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [
+            { type: "text", text: "Here are the results:" },
+            { type: "tool_use", name: "exec", args: {} },
+          ],
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for plain text messages", () => {
+      expect(isToolOnlyMessage({ role: "assistant", content: "Hello!" })).toBe(false);
+      expect(isToolOnlyMessage({ role: "user", content: "Hi" })).toBe(false);
+    });
+
+    it("returns false for messages with image content", () => {
+      expect(
+        isToolOnlyMessage({
+          role: "assistant",
+          content: [
+            { type: "image", source: { type: "base64", data: "..." } },
+            { type: "tool_use", name: "exec", args: {} },
+          ],
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for empty content array", () => {
+      expect(isToolOnlyMessage({ role: "assistant", content: [] })).toBe(false);
+    });
+
+    it("returns false for missing content", () => {
+      expect(isToolOnlyMessage({ role: "assistant" })).toBe(false);
     });
   });
 });
