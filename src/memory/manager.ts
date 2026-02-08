@@ -38,7 +38,7 @@ import {
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { bm25RankToScore, buildFtsQuery, mergeHybridResults, segmentCjk } from "./hybrid.js";
 import {
   buildFileEntry,
   chunkMarkdown,
@@ -343,7 +343,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter();
+    const sourceFilter = this.buildSourceFilter("f");
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
@@ -2387,7 +2387,7 @@ export class MemoryIndexManager implements MemorySearchManager {
               ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            chunk.text,
+            segmentCjk(chunk.text),
             id,
             entry.path,
             options.source,

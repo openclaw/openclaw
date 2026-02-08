@@ -1,11 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { bm25RankToScore, buildFtsQuery, mergeHybridResults, segmentCjk } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
     expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
     expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
     expect(buildFtsQuery("   ")).toBeNull();
+  });
+
+  it("buildFtsQuery handles CJK characters", () => {
+    // Each CJK character becomes its own quoted token
+    expect(buildFtsQuery("你好")).toBe('"你" AND "好"');
+    expect(buildFtsQuery("搜索引擎")).toBe('"搜" AND "索" AND "引" AND "擎"');
+  });
+
+  it("buildFtsQuery handles mixed CJK and ASCII", () => {
+    expect(buildFtsQuery("hello 世界")).toBe('"hello" AND "世" AND "界"');
+    expect(buildFtsQuery("sqlite 测试")).toBe('"sqlite" AND "测" AND "试"');
+  });
+
+  it("buildFtsQuery returns null for CJK punctuation only", () => {
+    // CJK punctuation (，。！) should not produce tokens
+    expect(buildFtsQuery("，。！")).toBeNull();
+  });
+
+  it("segmentCjk adds spaces around CJK characters", () => {
+    expect(segmentCjk("全文搜索")).toBe("全 文 搜 索");
+    expect(segmentCjk("hello world")).toBe("hello world");
+    expect(segmentCjk("hello世界test")).toBe("hello 世 界 test");
+    expect(segmentCjk("")).toBe("");
+  });
+
+  it("segmentCjk handles Japanese kana", () => {
+    expect(segmentCjk("テスト")).toBe("テ ス ト");
+    expect(segmentCjk("ひらがな")).toBe("ひ ら が な");
   });
 
   it("bm25RankToScore is monotonic and clamped", () => {
