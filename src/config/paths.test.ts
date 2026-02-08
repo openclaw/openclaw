@@ -73,7 +73,9 @@ describe("state + config path candidates", () => {
   it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const resolvedHome = path.resolve(home);
-    const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
+    const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home, {
+      skipLegacyIfNewExists: false,
+    });
     const expected = [
       path.join(resolvedHome, ".openclaw", "openclaw.json"),
       path.join(resolvedHome, ".openclaw", "clawdbot.json"),
@@ -93,6 +95,77 @@ describe("state + config path candidates", () => {
       path.join(resolvedHome, ".moltbot", "moltbot.json"),
     ];
     expect(candidates).toEqual(expected);
+  });
+
+  it("skips legacy filenames when openclaw.json exists in the same dir", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skip-legacy-"));
+    try {
+      const openclawDir = path.join(root, ".openclaw");
+      await fs.mkdir(openclawDir, { recursive: true });
+      await fs.writeFile(path.join(openclawDir, "openclaw.json"), "{}", "utf-8");
+
+      const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => root);
+      // .openclaw dir has openclaw.json → no legacy filenames for that dir
+      expect(candidates).toContain(path.join(openclawDir, "openclaw.json"));
+      expect(candidates).not.toContain(path.join(openclawDir, "clawdbot.json"));
+      expect(candidates).not.toContain(path.join(openclawDir, "moltbot.json"));
+      expect(candidates).not.toContain(path.join(openclawDir, "moldbot.json"));
+
+      // Legacy dirs don't have openclaw.json → legacy filenames still present
+      const clawdbotDir = path.join(root, ".clawdbot");
+      expect(candidates).toContain(path.join(clawdbotDir, "clawdbot.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes legacy filenames when openclaw.json does not exist", () => {
+    const home = "/nonexistent/home";
+    const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
+    // Since the dirs don't exist on disk, fs.existsSync returns false → legacy included
+    expect(candidates).toContain(path.join(home, ".openclaw", "clawdbot.json"));
+    expect(candidates).toContain(path.join(home, ".clawdbot", "clawdbot.json"));
+  });
+
+  it("skips legacy filenames in OPENCLAW_STATE_DIR when openclaw.json exists there", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-statedir-legacy-"));
+    try {
+      await fs.writeFile(path.join(root, "openclaw.json"), "{}", "utf-8");
+      await fs.writeFile(path.join(root, "clawdbot.json"), "{}", "utf-8");
+
+      const env = { OPENCLAW_STATE_DIR: root } as unknown as NodeJS.ProcessEnv;
+      const candidates = resolveDefaultConfigCandidates(env, () => "/fake-home");
+
+      // Custom state dir has openclaw.json → no legacy filenames
+      expect(candidates).toContain(path.join(root, "openclaw.json"));
+      expect(candidates).not.toContain(path.join(root, "clawdbot.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles symlink scenario: .clawdbot -> .openclaw", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-symlink-"));
+    try {
+      const openclawDir = path.join(root, ".openclaw");
+      const clawdbotDir = path.join(root, ".clawdbot");
+      await fs.mkdir(openclawDir, { recursive: true });
+      await fs.writeFile(path.join(openclawDir, "openclaw.json"), "{}", "utf-8");
+      // Stale legacy config in the same dir (would be visible via symlink)
+      await fs.writeFile(path.join(openclawDir, "clawdbot.json"), "{}", "utf-8");
+      // Create symlink like migration does
+      await fs.symlink(openclawDir, clawdbotDir);
+
+      const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => root);
+
+      // Both .openclaw and .clawdbot (via symlink) see openclaw.json → no legacy filenames
+      expect(candidates).toContain(path.join(openclawDir, "openclaw.json"));
+      expect(candidates).not.toContain(path.join(openclawDir, "clawdbot.json"));
+      expect(candidates).toContain(path.join(clawdbotDir, "openclaw.json"));
+      expect(candidates).not.toContain(path.join(clawdbotDir, "clawdbot.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("prefers ~/.openclaw when it exists and legacy dir is missing", async () => {
