@@ -47,6 +47,30 @@ import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../s
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
+  /**
+   * Format quoted message context similar to Telegram's implementation.
+   * Returns a formatted string to append to the message body.
+   */
+  function formatQuotedMessageContext(quote: {
+    id?: number | null;
+    author?: string | null;
+    authorNumber?: string | null;
+    authorUuid?: string | null;
+    text?: string | null;
+  }): string {
+    if (!quote) {
+      return "";
+    }
+
+    // Prefer phone number, fall back to UUID, then author
+    const authorLabel =
+      quote.authorNumber?.trim() || quote.authorUuid?.trim() || quote.author?.trim() || "Unknown";
+    const messageId = quote.id ? String(quote.id) : undefined;
+    const quoteText = quote.text?.trim() || "<no text>";
+
+    return `\n\n[Replying to ${authorLabel}${messageId ? ` id:${messageId}` : ""}]\n${quoteText}\n[/Replying]`;
+  }
+
   type SignalInboundEntry = {
     senderName: string;
     senderDisplay: string;
@@ -60,6 +84,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     messageId?: string;
     mediaPath?: string;
     mediaType?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
     commandAuthorized: boolean;
   };
 
@@ -144,6 +170,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      MediaPaths: entry.mediaPaths,
+      MediaTypes: entry.mediaTypes,
+      MediaUrls: entry.mediaPaths,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
@@ -264,7 +293,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!entry.bodyText.trim()) {
         return false;
       }
-      if (entry.mediaPath || entry.mediaType) {
+      if (entry.mediaPath || entry.mediaType || entry.mediaPaths?.length) {
         return false;
       }
       return !hasControlCommand(entry.bodyText, deps.cfg);
@@ -290,6 +319,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         bodyText: combinedText,
         mediaPath: undefined,
         mediaType: undefined,
+        mediaPaths: undefined,
+        mediaTypes: undefined,
       });
     },
     onError: (err) => {
@@ -501,38 +532,100 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    const mediaPaths: string[] = [];
+    const mediaTypes: string[] = [];
     let placeholder = "";
-    const firstAttachment = dataMessage.attachments?.[0];
-    if (firstAttachment?.id && !deps.ignoreAttachments) {
-      try {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: firstAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
+
+    const attachments = dataMessage.attachments ?? [];
+    if (attachments.length > 0 && !deps.ignoreAttachments) {
+      // Fetch all attachments in parallel for speed
+      const validAttachments = attachments.filter((a) => a?.id);
+
+      // Send "processing images" message for multiple attachments
+      // Guard: only send if we have a valid target (groupId must be truthy for groups)
+      if (validAttachments.length > 1 && (!isGroup || groupId)) {
+        const target = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
+        try {
+          await sendMessageSignal(target, `Processing ${validAttachments.length} images...`, {
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            maxBytes: deps.mediaMaxBytes,
+            accountId: deps.accountId,
+          });
+        } catch {
+          // Ignore errors sending processing message
         }
-      } catch (err) {
-        deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+      }
+      const fetchResults = await Promise.all(
+        validAttachments.map(async (attachment) => {
+          try {
+            const fetched = await deps.fetchAttachment({
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              attachment,
+              sender: senderRecipient,
+              groupId,
+              maxBytes: deps.mediaMaxBytes,
+            });
+            if (fetched) {
+              return {
+                path: fetched.path,
+                contentType:
+                  fetched.contentType ?? attachment.contentType ?? "application/octet-stream",
+              };
+            }
+          } catch (err) {
+            deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+          }
+          return null;
+        }),
+      );
+      for (const result of fetchResults) {
+        if (result) {
+          mediaPaths.push(result.path);
+          mediaTypes.push(result.contentType);
+        }
+      }
+      // Set first attachment for backwards compatibility
+      if (mediaPaths.length > 0) {
+        mediaPath = mediaPaths[0];
+        mediaType = mediaTypes[0];
       }
     }
 
     const kind = mediaKindFromMime(mediaType ?? undefined);
     if (kind) {
       placeholder = `<media:${kind}>`;
-    } else if (dataMessage.attachments?.length) {
+      // Add placeholders for additional attachments
+      if (mediaPaths.length > 1) {
+        for (let i = 1; i < mediaPaths.length; i++) {
+          const additionalKind = mediaKindFromMime(mediaTypes[i] ?? undefined);
+          placeholder += ` <media:${additionalKind ?? "attachment"}>`;
+        }
+      }
+    } else if (mediaPaths.length) {
       placeholder = "<media:attachment>";
+      if (mediaPaths.length > 1) {
+        placeholder += ` +${mediaPaths.length - 1} more`;
+      }
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    // Format quoted message context
+    const quoteSuffix = dataMessage.quote ? formatQuotedMessageContext(dataMessage.quote) : "";
+
+    // Build body text with quote context
+    let bodyText = messageText || placeholder || "";
+    if (!bodyText && dataMessage.quote?.text?.trim()) {
+      // If no message text but there's a quote (quote-only reply), use quote text
+      bodyText = dataMessage.quote.text.trim();
+    }
+
     if (!bodyText) {
       return;
     }
+
+    // Append quoted message context to body
+    bodyText = bodyText + quoteSuffix;
 
     const receiptTimestamp =
       typeof envelope.timestamp === "number"
@@ -575,6 +668,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageId,
       mediaPath,
       mediaType,
+      mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
     });
   };
