@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "chatterbox";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,19 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Chatterbox TTS configuration (self-hosted, GPU-accelerated). */
+  chatterbox?: {
+    /** Explicitly enable Chatterbox TTS. */
+    enabled?: boolean;
+    /** Chatterbox server base URL (default: http://localhost:8100). */
+    baseUrl?: string;
+    /** Voice ID for voice cloning (optional). */
+    voiceId?: string;
+    /** Emotion exaggeration level (0.0-1.0, default: 0.5). */
+    exaggeration?: number;
+    /** CFG weight for synthesis (0.0-1.0, default: 0.5). */
+    cfgWeight?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

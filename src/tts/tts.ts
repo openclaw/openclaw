@@ -50,6 +50,10 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_CHATTERBOX_BASE_URL = "http://localhost:8100";
+const DEFAULT_CHATTERBOX_EXAGGERATION = 0.5;
+const DEFAULT_CHATTERBOX_CFG_WEIGHT = 0.5;
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -121,6 +125,13 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  chatterbox: {
+    enabled: boolean;
+    baseUrl: string;
+    voiceId?: string;
+    exaggeration: number;
+    cfgWeight: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -295,6 +306,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    chatterbox: {
+      enabled: raw.chatterbox?.enabled ?? false,
+      baseUrl: raw.chatterbox?.baseUrl?.trim() || DEFAULT_CHATTERBOX_BASE_URL,
+      voiceId: raw.chatterbox?.voiceId?.trim() || undefined,
+      exaggeration: raw.chatterbox?.exaggeration ?? DEFAULT_CHATTERBOX_EXAGGERATION,
+      cfgWeight: raw.chatterbox?.cfgWeight ?? DEFAULT_CHATTERBOX_CFG_WEIGHT,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -501,7 +519,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "chatterbox"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -510,6 +528,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "chatterbox") {
+    return config.chatterbox.enabled;
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -1158,6 +1179,49 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+/**
+ * Chatterbox TTS - self-hosted, GPU-accelerated TTS using Resemble AI's Chatterbox model.
+ * Requires a running Chatterbox server (see: https://github.com/resemble-ai/chatterbox).
+ */
+async function chatterboxTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["chatterbox"];
+  outputFormat: "mp3" | "wav";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, config, outputFormat, timeoutMs } = params;
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/synthesize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        voice: config.voiceId || undefined,
+        exaggeration: config.exaggeration,
+        cfg_weight: config.cfgWeight,
+        format: outputFormat,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Chatterbox API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1252,6 +1316,37 @@ export async function textToSpeech(params: {
           provider,
           outputFormat: edgeResult.outputFormat,
           voiceCompatible,
+        };
+      }
+
+      // Chatterbox TTS (self-hosted, no API key required)
+      if (provider === "chatterbox") {
+        if (!config.chatterbox.enabled) {
+          lastError = "chatterbox: disabled";
+          continue;
+        }
+
+        const outputFormat = channelId === "telegram" ? "mp3" : "mp3";
+        const audioBuffer = await chatterboxTTS({
+          text: params.text,
+          config: config.chatterbox,
+          outputFormat,
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.mp3`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: "mp3",
+          voiceCompatible: false,
         };
       }
 

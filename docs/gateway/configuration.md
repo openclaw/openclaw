@@ -1628,6 +1628,14 @@ voice notes; other channels send MP3 audio.
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      // Chatterbox: self-hosted, GPU-accelerated TTS
+      chatterbox: {
+        enabled: true,
+        baseUrl: "http://localhost:8100",
+        voiceId: "optional_voice_id", // for voice cloning
+        exaggeration: 0.5, // emotion level (0.0-1.0)
+        cfgWeight: 0.5, // synthesis weight (0.0-1.0)
+      },
     },
   },
 }
@@ -1648,6 +1656,10 @@ Notes:
 - `elevenlabs.baseUrl` overrides the ElevenLabs API base URL.
 - `elevenlabs.voiceSettings` supports `stability`/`similarityBoost`/`style` (0..1),
   `useSpeakerBoost`, and `speed` (0.5..2.0).
+- `chatterbox.enabled` must be `true` to use Chatterbox (no API key needed).
+- `chatterbox.baseUrl` points to your Chatterbox TTS server (default: `http://localhost:8100`).
+- `chatterbox.exaggeration` controls emotion expressiveness (0.0 = neutral, 1.0 = expressive).
+- Chatterbox requires a self-hosted server with GPU. See: https://github.com/resemble-ai/chatterbox
 
 ### `talk`
 
