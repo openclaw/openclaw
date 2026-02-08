@@ -70,6 +70,17 @@ function lintExternalChat(text: string): Finding[] {
   }
 
   // Hard fails (often render badly / violate channel guardrails)
+
+  // Safety: internal sentinel tokens should never leak into externally delivered messages.
+  // If you need to mention them, rephrase (e.g. “the agent returned an empty reply”).
+  if (/\bNO_REPLY\b/.test(normalized) || /\bHEARTBEAT_OK\b/.test(normalized)) {
+    add(
+      findings,
+      "error",
+      "Message contains an internal sentinel token (NO_REPLY/HEARTBEAT_OK). Remove it before sending externally.",
+    );
+  }
+
   if (normalized.includes("```")) {
     add(findings, "error", "Avoid fenced code blocks (``` ... ```) on chat surfaces.");
   }
