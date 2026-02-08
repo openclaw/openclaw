@@ -437,7 +437,7 @@ export function createKookMessageHandler(params: CreateHandlerParams): KookMessa
                 allowed: channelUsersAuthorizerAllowed,
               },
             ],
-            modeWhenAccessGroupsOff: "configured-or-allow",
+            modeWhenAccessGroupsOff: "configured",
           })
         : undefined;
 

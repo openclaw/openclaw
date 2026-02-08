@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
+  ReplyToMode,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
@@ -82,6 +83,8 @@ export type KookAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /** Reply formatting mode for KOOK outbound messages. */
+  replyToMode?: ReplyToMode;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

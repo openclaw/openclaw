@@ -88,7 +88,7 @@ export async function monitorKookProvider(opts: MonitorKookOpts): Promise<void> 
   while (!opts.abortSignal?.aborted) {
     let ws: WebSocket | null = null;
     let currentSn = 0;
-    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
     let heartbeatTimeout: NodeJS.Timeout | null = null;
     let settleClosed: (() => void) | null = null;
     const closed = new Promise<void>((resolve) => {
@@ -99,9 +99,9 @@ export async function monitorKookProvider(opts: MonitorKookOpts): Promise<void> 
       settleClosed = null;
     };
     const clearHeartbeatTimers = () => {
-      if (heartbeatInterval) {
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = null;
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = null;
       }
       if (heartbeatTimeout) {
         clearTimeout(heartbeatTimeout);
@@ -144,12 +144,12 @@ export async function monitorKookProvider(opts: MonitorKookOpts): Promise<void> 
 
       // Heartbeat function
       const startHeartbeat = () => {
-        if (heartbeatInterval) {
-          clearInterval(heartbeatInterval);
-        }
-
-        heartbeatInterval = setInterval(
-          () => {
+        const scheduleNextHeartbeat = () => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          const intervalMs = 30000 + Math.random() * 10000 - 5000; // 30s +/- 5s
+          heartbeatTimer = setTimeout(() => {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
               return;
             }
@@ -165,9 +165,15 @@ export async function monitorKookProvider(opts: MonitorKookOpts): Promise<void> 
               runtime.error?.(danger("[kook] heartbeat timeout"));
               cleanup();
             }, 6000);
-          },
-          30000 + Math.random() * 10000 - 5000, // 30s ± 5s
-        );
+            scheduleNextHeartbeat();
+          }, intervalMs);
+        };
+
+        if (heartbeatTimer) {
+          clearTimeout(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        scheduleNextHeartbeat();
       };
 
       // Handle messages
@@ -218,11 +224,14 @@ export async function monitorKookProvider(opts: MonitorKookOpts): Promise<void> 
             case 0: {
               // EVENT - Message event with sn
               if (signal.sn !== undefined) {
-                // Update current sn for this event
+                // Guard against out-of-order or duplicate events.
+                if (signal.sn <= currentSn) {
+                  warn(
+                    `[kook] drop stale event sn=${signal.sn}, currentSn=${currentSn}, type=${signal.d.type}`,
+                  );
+                  break;
+                }
                 currentSn = signal.sn;
-
-                // TODO: Implement message ordering with buffer for out-of-order messages
-                // For now, process immediately
                 await messageHandler(signal.d);
               } else {
                 // Some events may not have sn, process immediately

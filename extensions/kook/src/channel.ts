@@ -173,9 +173,15 @@ export const kookPlugin: ChannelPlugin<ResolvedKookAccount> = {
     targetResolver: {
       looksLikeId: (input: string, normalized?: string) => {
         // Accept bare IDs, or channel:/user: prefixed IDs
-        if (/^\d+$/.test(input)) return true;
-        if (normalized && /^(channel:|user:)/.test(normalized)) return true;
-        if (/^(channel:|user:)/.test(input)) return true;
+        if (/^\d+$/.test(input)) {
+          return true;
+        }
+        if (normalized && /^(channel:|user:)/.test(normalized)) {
+          return true;
+        }
+        if (/^(channel:|user:)/.test(input)) {
+          return true;
+        }
         return false;
       },
       hint: "<channelId|user:ID|channel:ID>",

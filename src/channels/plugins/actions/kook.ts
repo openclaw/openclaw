@@ -1,7 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate, readStringParam } from "../../../agents/tools/common.js";
 import { handleKookAction } from "../../../agents/tools/kook-actions.js";
-import { listEnabledKookAccounts, listKookAccountIds } from "../../../kook/accounts.js";
+import { listEnabledKookAccounts } from "../../../kook/accounts.js";
 
 const providerId = "kook";
 
@@ -60,6 +60,13 @@ export const kookMessageActions: ChannelMessageActionAdapter = {
     // Message send (default: enabled)
     if (gate("messages", true)) {
       actions.add("send");
+      actions.add("read");
+      actions.add("edit");
+      actions.add("delete");
+    }
+    if (gate("reactions", true)) {
+      actions.add("react");
+      actions.add("reactions");
     }
 
     // User Actions (read-only, default: enabled) - kebab-case for message tool compatibility
@@ -152,11 +159,101 @@ export const kookMessageActions: ChannelMessageActionAdapter = {
     return null;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
+    const resolveChannelId = () => {
+      const value = readStringParam(params, "channelId") ?? readStringParam(params, "to");
+      if (!value) {
+        throw new Error("channelId or to is required.");
+      }
+      return value.startsWith("channel:") ? value.slice("channel:".length) : value;
+    };
+
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
       const message = readStringParam(params, "message", { required: true, allowEmpty: true });
       return await handleKookAction(
         { action: "sendMessage", to, content: message, accountId: accountId ?? undefined },
+        cfg,
+      );
+    }
+    if (action === "read") {
+      const limitRaw = params.limit;
+      const limit =
+        typeof limitRaw === "number"
+          ? limitRaw
+          : typeof limitRaw === "string" && limitRaw.trim()
+            ? Number(limitRaw)
+            : undefined;
+      return await handleKookAction(
+        {
+          action: "readMessages",
+          channelId: resolveChannelId(),
+          limit: Number.isFinite(limit) ? limit : undefined,
+          msgId: readStringParam(params, "msgId") ?? readStringParam(params, "before"),
+          flag:
+            readStringParam(params, "flag") ??
+            (readStringParam(params, "before")
+              ? "before"
+              : readStringParam(params, "after")
+                ? "after"
+                : undefined),
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+    if (action === "edit") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const content = readStringParam(params, "message", { required: true, allowEmpty: true });
+      return await handleKookAction(
+        {
+          action: "editMessage",
+          channelId: resolveChannelId(),
+          messageId,
+          content,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+    if (action === "delete" || action === "unsend") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      return await handleKookAction(
+        {
+          action: "deleteMessage",
+          channelId: resolveChannelId(),
+          messageId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+    if (action === "react") {
+      const remove = typeof params.remove === "boolean" ? params.remove : false;
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const emoji = readStringParam(params, "emoji", { required: true });
+      return await handleKookAction(
+        {
+          action: remove ? "removeReaction" : "react",
+          channelId: resolveChannelId(),
+          messageId,
+          emoji,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+    if (action === "reactions") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const emoji = readStringParam(params, "emoji", { required: true });
+      return await handleKookAction(
+        {
+          action: "reactions",
+          channelId: resolveChannelId(),
+          messageId,
+          emoji,
+          limit: readStringParam(params, "limit") ?? undefined,
+          accountId: accountId ?? undefined,
+        },
         cfg,
       );
     }

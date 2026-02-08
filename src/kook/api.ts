@@ -31,10 +31,18 @@ export class KookApiError extends Error {
  * Classify HTTP status code to error type
  */
 function classifyErrorType(status: number): KookApiErrorType {
-  if (status === 401 || status === 403) return "auth";
-  if (status === 404) return "notFound";
-  if (status === 429) return "rateLimit";
-  if (status >= 500) return "server";
+  if (status === 401 || status === 403) {
+    return "auth";
+  }
+  if (status === 404) {
+    return "notFound";
+  }
+  if (status === 429) {
+    return "rateLimit";
+  }
+  if (status >= 500) {
+    return "server";
+  }
   return "unknown";
 }
 
@@ -71,9 +79,13 @@ export async function fetchKook<T = unknown>(
   if (json.code !== 0) {
     // Classify API error codes
     let errorType: KookApiErrorType = "unknown";
-    if (json.code >= 40100 && json.code < 40200) errorType = "auth";
-    else if (json.code === 429) errorType = "rateLimit";
-    else if (json.code >= 50000) errorType = "server";
+    if (json.code >= 40100 && json.code < 40200) {
+      errorType = "auth";
+    } else if (json.code === 429) {
+      errorType = "rateLimit";
+    } else if (json.code >= 50000) {
+      errorType = "server";
+    }
 
     throw new KookApiError(
       `KOOK API error: code=${json.code}, message=${json.message}`,

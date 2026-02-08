@@ -119,7 +119,7 @@ export async function handleKookGuildAction(
     }
 
     case "getGuildUsers": {
-      if (!isActionEnabled("getGuildUsers") || !isActionEnabled("guildInfo")) {
+      if (!isActionEnabled("guildInfo")) {
         throw new Error("KOOK getGuildUsers action is disabled.");
       }
       const guildId = readStringParam(params, "guildId", { required: true });
