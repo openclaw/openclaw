@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
-async function getFreePort(): Promise<number> {
+/**
+ * Get a free port and hold it until release() is called.
+ * This prevents port race conditions when running tests in parallel.
+ */
+async function getFreePort(): Promise<{ port: number; release: () => Promise<void> }> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -14,15 +18,24 @@ async function getFreePort(): Promise<number> {
         return;
       }
       const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
+      // Keep server open - return a release function for cleanup
+      resolve({
+        port,
+        release: () => new Promise((res) => server.close(() => res())),
+      });
     });
   });
 }
 
-describe("loginChutes", () => {
+// Use describe.sequential for port-dependent tests to avoid race conditions
+// when other parallel tests might grab the same port after release
+describe.sequential("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
-    const port = await getFreePort();
+    const { port, release } = await getFreePort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
+    // Release port reservation just before loginChutes needs it
+    // Sequential execution ensures no other test grabs this port
+    await release();
 
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
