@@ -221,5 +221,12 @@ export function resolveModel(
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  const normalized = normalizeModelCompat(model);
+  // Ensure input field is always present to prevent pi-ai crashes when
+  // model.input.includes() is called on models from custom providers.
+  // See: https://github.com/openclaw/openclaw/issues/8372
+  if (!normalized.input || !Array.isArray(normalized.input)) {
+    normalized.input = ["text"];
+  }
+  return { model: normalized, authStorage, modelRegistry };
 }
