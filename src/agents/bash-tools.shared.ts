@@ -19,6 +19,7 @@ export type BashSandboxConfig = {
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
+  agentEnvVars?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
   containerWorkdir: string;
 }) {
@@ -27,6 +28,9 @@ export function buildSandboxEnv(params: {
     HOME: params.containerWorkdir,
   };
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
+    env[key] = value;
+  }
+  for (const [key, value] of Object.entries(params.agentEnvVars ?? {})) {
     env[key] = value;
   }
   for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
