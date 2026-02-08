@@ -65,17 +65,28 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs = 30_000,
 ): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
   return await new Promise((resolve) => {
     let done = false;
     let total = 0;
     const chunks: Buffer[] = [];
+
+    const timeout = setTimeout(() => {
+      if (!done) {
+        done = true;
+        req.destroy();
+        resolve({ ok: false, error: "Request body read timeout" });
+      }
+    }, timeoutMs);
+
     req.on("data", (chunk: Buffer) => {
       if (done) {
         return;
       }
       total += chunk.length;
       if (total > maxBytes) {
+        clearTimeout(timeout);
         done = true;
         resolve({ ok: false, error: "payload too large" });
         req.destroy();
@@ -87,6 +98,7 @@ export async function readJsonBody(
       if (done) {
         return;
       }
+      clearTimeout(timeout);
       done = true;
       const raw = Buffer.concat(chunks).toString("utf-8").trim();
       if (!raw) {
@@ -104,6 +116,7 @@ export async function readJsonBody(
       if (done) {
         return;
       }
+      clearTimeout(timeout);
       done = true;
       resolve({ ok: false, error: String(err) });
     });

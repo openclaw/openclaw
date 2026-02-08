@@ -16,6 +16,7 @@ import {
 } from "./launchd-plist.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { safeWrite, safeWriteLine } from "./safe-write.js";
 
 const execFileAsync = promisify(execFile);
 const toPosixPath = (value: string) => value.replace(/\\/g, "/");
@@ -313,9 +314,9 @@ export async function uninstallLegacyLaunchAgents({
     const dest = path.join(trashDir, `${agent.label}.plist`);
     try {
       await fs.rename(agent.plistPath, dest);
-      stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
+      safeWriteLine(stdout, formatLine("Moved legacy LaunchAgent to Trash", dest));
     } catch {
-      stdout.write(`Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`);
+      safeWriteLine(stdout, `Legacy LaunchAgent remains at ${agent.plistPath} (could not move)`);
     }
   }
 
@@ -338,7 +339,7 @@ export async function uninstallLaunchAgent({
   try {
     await fs.access(plistPath);
   } catch {
-    stdout.write(`LaunchAgent not found at ${plistPath}\n`);
+    safeWriteLine(stdout, `LaunchAgent not found at ${plistPath}`);
     return;
   }
 
@@ -348,9 +349,9 @@ export async function uninstallLaunchAgent({
   try {
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
-    stdout.write(`${formatLine("Moved LaunchAgent to Trash", dest)}\n`);
+    safeWriteLine(stdout, formatLine("Moved LaunchAgent to Trash", dest));
   } catch {
-    stdout.write(`LaunchAgent remains at ${plistPath} (could not move)\n`);
+    safeWriteLine(stdout, `LaunchAgent remains at ${plistPath} (could not move)`);
   }
 }
 
@@ -376,7 +377,7 @@ export async function stopLaunchAgent({
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  safeWriteLine(stdout, formatLine("Stopped LaunchAgent", `${domain}/${label}`));
 }
 
 export async function installLaunchAgent({
@@ -441,9 +442,9 @@ export async function installLaunchAgent({
   await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed LaunchAgent", plistPath)}\n`);
-  stdout.write(`${formatLine("Logs", stdoutPath)}\n`);
+  safeWrite(stdout, "\n");
+  safeWriteLine(stdout, formatLine("Installed LaunchAgent", plistPath));
+  safeWriteLine(stdout, formatLine("Logs", stdoutPath));
   return { plistPath };
 }
 
@@ -460,5 +461,5 @@ export async function restartLaunchAgent({
   if (res.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+  safeWriteLine(stdout, formatLine("Restarted LaunchAgent", `${domain}/${label}`));
 }
