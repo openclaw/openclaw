@@ -352,6 +352,13 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  // API routes should never fall through to the SPA fallback – return a proper
+  // JSON 404 so callers don't receive HTML when they expect JSON.
+  if (uiPath === "/api" || uiPath.startsWith("/api/")) {
+    sendJson(res, 404, { error: "Not found" });
+    return true;
+  }
+
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
