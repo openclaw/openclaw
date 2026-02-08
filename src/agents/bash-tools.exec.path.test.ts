@@ -82,7 +82,15 @@ describe("exec PATH login shell merge", () => {
     const result = await tool.execute("call1", { command: "echo $PATH" });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
+    // The spawned shell may prepend system paths via /etc/zshenv (e.g. path_helper
+    // on macOS adds /opt/homebrew/bin), so verify the expected entries appear in
+    // the correct relative order rather than requiring an exact match.
+    const customIdx = entries.indexOf("/custom/bin");
+    const optIdx = entries.indexOf("/opt/bin");
+    const usrIdx = entries.indexOf("/usr/bin");
+    expect(customIdx).toBeGreaterThanOrEqual(0);
+    expect(optIdx).toBeGreaterThan(customIdx);
+    expect(usrIdx).toBeGreaterThan(optIdx);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
   });
 
