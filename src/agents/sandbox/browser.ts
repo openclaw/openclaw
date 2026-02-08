@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
+import { registerBridgeAuthToken, unregisterBridgeAuthToken } from "../../browser/client-fetch.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
@@ -155,20 +157,24 @@ export async function ensureSandboxBrowser(params: {
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
   if (existing && !shouldReuse) {
+    unregisterBridgeAuthToken(existing.bridge.baseUrl);
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
 
-  const bridge = (() => {
+  const reusedBridge = (() => {
     if (shouldReuse && existing) {
-      return existing.bridge;
+      return { bridge: existing.bridge, authToken: existing.authToken };
     }
     return null;
   })();
 
-  const ensureBridge = async () => {
-    if (bridge) {
-      return bridge;
+  const ensureBridge = async (): Promise<{
+    bridge: Awaited<ReturnType<typeof startBrowserBridgeServer>>;
+    authToken: string;
+  }> => {
+    if (reusedBridge) {
+      return { bridge: reusedBridge.bridge, authToken: reusedBridge.authToken ?? "" };
     }
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
@@ -189,22 +195,27 @@ export async function ensureSandboxBrowser(params: {
         }
       : undefined;
 
-    return await startBrowserBridgeServer({
+    const authToken = crypto.randomUUID();
+    const b = await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      authToken,
       onEnsureAttachTarget,
     });
+    registerBridgeAuthToken(b.baseUrl, authToken);
+    return { bridge: b, authToken };
   };
 
-  const resolvedBridge = await ensureBridge();
+  const { bridge: resolvedBridge, authToken: resolvedAuthToken } = await ensureBridge();
   if (!shouldReuse) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,
+      authToken: resolvedAuthToken,
     });
   }
 
@@ -226,6 +237,7 @@ export async function ensureSandboxBrowser(params: {
 
   return {
     bridgeUrl: resolvedBridge.baseUrl,
+    bridgeAuthToken: resolvedAuthToken || undefined,
     noVncUrl,
     containerName,
   };
