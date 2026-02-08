@@ -577,11 +577,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `1982d09 docs(STATUS): add UCP Phase 1 to development overview — architecture, integrations, doc index, next steps (02-08)`
 - `e58291c docs(I031): UCP Phase 1 implementation record — task-by-task details, schema mapping, deployment verification (02-08)`
 - `dfec940 feat(ucp): Phase 1 — UCP Discovery + Product Catalog integration (02-08)`
 - `e89b750 docs: T021 Worker E2E test — DERMAEL mask full pipeline verification (02-07)`
 - `eece16c docs: T020 Phase A+B deploy verification (6/6 PASS) + STATUS update (02-07)`
-- `d152c4c docs: I030 M01 server integration (Phase B) + STATUS update (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
