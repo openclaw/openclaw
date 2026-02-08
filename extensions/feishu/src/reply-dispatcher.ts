@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk";
 import type { MentionTarget } from "./mention.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -109,11 +110,40 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onReplyStart: typingCallbacks.onReplyStart,
       deliver: async (payload: ReplyPayload) => {
         params.runtime.log?.(
-          `feishu[${account.accountId}] deliver called: text=${payload.text?.slice(0, 100)}`,
+          `feishu[${account.accountId}] deliver called: text=${payload.text?.slice(0, 100)}, mediaUrl=${payload.mediaUrl ? "yes" : "no"}`,
         );
+
+        // Handle media (TTS audio, images, etc.) via sendMediaFeishu
+        const mediaUrl = payload.mediaUrl;
+        if (mediaUrl) {
+          try {
+            params.runtime.log?.(
+              `feishu[${account.accountId}] deliver: sending media to ${chatId}: ${mediaUrl}`,
+            );
+            await sendMediaFeishu({
+              cfg,
+              to: chatId,
+              mediaUrl,
+              replyToMessageId,
+              accountId,
+            });
+          } catch (err) {
+            params.runtime.error?.(
+              `feishu[${account.accountId}] deliver: sendMedia failed: ${String(err)}`,
+            );
+            // Re-throw if this is a media-only reply (no text), so the
+            // dispatcher can signal failure upstream instead of silently dropping it.
+            if (!payload.text?.trim()) {
+              throw err;
+            }
+          }
+        }
+
         const text = payload.text ?? "";
         if (!text.trim()) {
-          params.runtime.log?.(`feishu[${account.accountId}] deliver: empty text, skipping`);
+          if (!mediaUrl) {
+            params.runtime.log?.(`feishu[${account.accountId}] deliver: empty text, skipping`);
+          }
           return;
         }
 
