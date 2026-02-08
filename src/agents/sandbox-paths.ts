@@ -22,6 +22,24 @@ function expandPath(filePath: string): string {
   return normalized;
 }
 
+function mapContainerPathToHost(filePath: string, root: string): string {
+  // Default container workdir is /workspace
+  const containerWorkdir = "/workspace";
+  
+  // If path starts with /workspace, map it to the host root
+  if (filePath.startsWith(containerWorkdir + "/")) {
+    const relative = filePath.slice(containerWorkdir.length + 1);
+    return path.join(root, relative);
+  }
+  
+  if (filePath === containerWorkdir) {
+    return root;
+  }
+  
+  return filePath;
+}
+
+
 function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
   if (path.isAbsolute(expanded)) {
@@ -34,7 +52,9 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   resolved: string;
   relative: string;
 } {
-  const resolved = resolveToCwd(params.filePath, params.cwd);
+  // Map container-internal paths to host filesystem paths
+  const mappedPath = mapContainerPathToHost(params.filePath, params.root);
+  const resolved = resolveToCwd(mappedPath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
