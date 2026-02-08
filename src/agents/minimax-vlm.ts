@@ -1,3 +1,5 @@
+import { isChinaRegion } from "../infra/region-utils.js";
+
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
@@ -9,11 +11,12 @@ function coerceApiHost(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = params.env ?? process.env;
+  const defaultHost = isChinaRegion() ? "https://api.minimaxi.com" : "https://api.minimax.io";
   const raw =
     params.apiHost?.trim() ||
     env.MINIMAX_API_HOST?.trim() ||
     params.modelBaseUrl?.trim() ||
-    "https://api.minimax.io";
+    defaultHost;
 
   try {
     const url = new URL(raw);
@@ -24,7 +27,7 @@ function coerceApiHost(params: {
     const url = new URL(`https://${raw}`);
     return url.origin;
   } catch {
-    return "https://api.minimax.io";
+    return defaultHost;
   }
 }
 
