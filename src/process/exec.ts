@@ -82,6 +82,19 @@ export async function runCommandWithTimeout(
   argv: string[],
   optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
+  // Validate argv to prevent spawn EINVAL errors on Windows
+  if (!Array.isArray(argv) || argv.length === 0) {
+    throw new Error("argv must be a non-empty array");
+  }
+  if (!argv[0] || typeof argv[0] !== "string" || argv[0].trim() === "") {
+    throw new Error("argv[0] (command) must be a non-empty string");
+  }
+  // Filter out any null/undefined arguments with type guard to maintain string[] type
+  const cleanArgv = argv.filter((arg): arg is string => typeof arg === "string" && arg != null);
+  if (cleanArgv.length === 0) {
+    throw new Error("argv must contain at least one valid argument");
+  }
+
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, env } = options;
@@ -89,12 +102,12 @@ export async function runCommandWithTimeout(
   const hasInput = input !== undefined;
 
   const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
+    const cmd = path.basename(cleanArgv[0] ?? "");
     if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
       return true;
     }
     if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
+      const script = cleanArgv[1] ?? "";
       return script.includes("npm-cli.js");
     }
     return false;
@@ -111,11 +124,19 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
+
+  // On Windows, we need shell: true for .cmd/.bat files to work properly
+  // This is especially important for npm/pnpm/yarn commands
+  const needsShell =
+    process.platform === "win32" &&
+    [".cmd", ".bat"].includes(path.extname(resolveCommand(cleanArgv[0])).toLowerCase());
+
+  const child = spawn(resolveCommand(cleanArgv[0]), cleanArgv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+    shell: needsShell,
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
