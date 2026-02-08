@@ -179,8 +179,8 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   if (isBrandNewWorkspace) {
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
     await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
