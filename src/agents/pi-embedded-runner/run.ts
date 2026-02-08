@@ -333,7 +333,7 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (candidate && isProfileInCooldown(authStore, candidate, modelId)) {
             nextIndex += 1;
             continue;
           }
@@ -359,7 +359,7 @@ export async function runEmbeddedPiAgent(
           if (
             candidate &&
             candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
+            isProfileInCooldown(authStore, candidate, modelId)
           ) {
             profileIndex += 1;
             continue;
@@ -656,6 +656,7 @@ export async function runEmbeddedPiAgent(
                 store: authStore,
                 profileId: lastProfileId,
                 reason: promptFailoverReason,
+                modelId,
                 cfg: params.config,
                 agentDir: params.agentDir,
               });
@@ -744,6 +745,7 @@ export async function runEmbeddedPiAgent(
                 store: authStore,
                 profileId: lastProfileId,
                 reason,
+                modelId,
                 cfg: params.config,
                 agentDir: params.agentDir,
               });
@@ -831,6 +833,7 @@ export async function runEmbeddedPiAgent(
             await markAuthProfileUsed({
               store: authStore,
               profileId: lastProfileId,
+              modelId,
               agentDir: params.agentDir,
             });
           }
