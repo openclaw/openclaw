@@ -6,6 +6,7 @@ import { applyTemplate } from "./auto-reply/templating.js";
 import { monitorWebChannel } from "./channel-web.js";
 import { createDefaultDeps } from "./cli/deps.js";
 import { promptYesNo } from "./cli/prompt.js";
+import { tryUnlockVault } from "./cli/vault-unlock.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
 import {
@@ -32,6 +33,11 @@ import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.j
 import { enableConsoleCapture } from "./logging.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
+
+// Attempt unlock early
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
+  await tryUnlockVault();
+}
 
 loadDotEnv({ quiet: true });
 normalizeEnv();
