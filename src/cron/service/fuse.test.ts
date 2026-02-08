@@ -297,6 +297,7 @@ describe("fuse circuit breaker", () => {
       expect.objectContaining({
         headers: {
           "User-Agent": "openclaw-gateway",
+          "Cache-Control": "max-age=300",
         },
       }),
     );
@@ -384,6 +385,7 @@ describe("fuse circuit breaker", () => {
       expect.objectContaining({
         headers: {
           "User-Agent": "openclaw-gateway",
+          "Cache-Control": "max-age=300",
         },
       }),
     );

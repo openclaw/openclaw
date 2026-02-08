@@ -16,7 +16,7 @@ import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 
 const FUSE_URL = "https://raw.githubusercontent.com/openclaw/openclaw/refs/heads/main/FUSE.txt";
-const FUSE_FETCH_TIMEOUT_MS = 5000;
+const FUSE_FETCH_TIMEOUT_MS = 30 * 1000; // 30 seconds
 const UPGRADE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const RESTART_DELAY_MS = 2000; // 2 seconds
 
@@ -212,6 +212,7 @@ export async function checkCircuitBreaker(
     const response = await fetchURL(fuseUrl, {
       headers: {
         "User-Agent": "openclaw-gateway",
+        "Cache-Control": "max-age=300", // 5 minute cache hint for CDN
       },
       signal: controller.signal,
     });
