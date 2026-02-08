@@ -457,7 +457,27 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
   return cached.value;
 }
 
+const WHOIS_CACHE_MAX_SIZE = 1000;
+
 function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
+  // Prune expired entries and enforce max size
+  if (whoisCache.size >= WHOIS_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    // First pass: remove expired entries
+    for (const [key, entry] of whoisCache) {
+      if (entry.expiresAt <= now) {
+        whoisCache.delete(key);
+      }
+    }
+    // Second pass: if still over limit, evict oldest by insertion order (FIFO)
+    while (whoisCache.size >= WHOIS_CACHE_MAX_SIZE) {
+      const oldestKey = whoisCache.keys().next().value;
+      if (!oldestKey) {
+        break;
+      }
+      whoisCache.delete(oldestKey);
+    }
+  }
   whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
 }
 
