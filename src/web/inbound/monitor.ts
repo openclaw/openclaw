@@ -3,6 +3,11 @@ import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
+import {
+  buildConfirmingAckReply,
+  buildConfirmingNotification,
+} from "../../confirming/confirming-messages.js";
+import { createPendingResponse } from "../../confirming/confirming-store.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { getChildLogger } from "../../logging/logger.js";
@@ -199,6 +204,9 @@ export async function monitorWebInbox(options: {
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
 
+      // Extract message body early for pairing notifications
+      const earlyBody = extractText(msg.message ?? undefined);
+
       const access = await checkInboundAccessControl({
         accountId: options.accountId,
         from,
@@ -211,6 +219,7 @@ export async function monitorWebInbox(options: {
         connectedAtMs,
         sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
         remoteJid,
+        messageBody: earlyBody ?? undefined,
       });
       if (!access.allowed) {
         continue;
@@ -282,10 +291,69 @@ export async function monitorWebInbox(options: {
           logVerbose(`Presence update failed: ${String(err)}`);
         }
       };
+
+      // In confirming mode, intercept replies and send to owner for approval
+      let confirmingReplySent = false;
       const reply = async (text: string) => {
-        await sock.sendMessage(chatJid, { text });
+        if (access.confirmingMode && access.confirmingConfig?.ownerChat && !confirmingReplySent) {
+          confirmingReplySent = true;
+          const senderDisplay = from;
+          const pushNameDisplay = (msg.pushName ?? "").trim() || undefined;
+
+          // Create pending response in store
+          const { code, created } = await createPendingResponse({
+            channel: "whatsapp",
+            senderId: senderDisplay,
+            senderName: pushNameDisplay,
+            replyTo: chatJid,
+            originalMessage: earlyBody ?? "",
+            suggestedResponse: text,
+            accountId: access.resolvedAccountId,
+          });
+
+          if (created && code) {
+            // Send notification to owner
+            const includeMessage = access.confirmingConfig.includeMessage !== false;
+            const notification = buildConfirmingNotification({
+              code,
+              senderId: senderDisplay,
+              senderName: pushNameDisplay,
+              originalMessage: earlyBody ?? "",
+              suggestedResponse: text,
+              includeMessage,
+            });
+            try {
+              await sock.sendMessage(access.confirmingConfig.ownerChat, { text: notification });
+              logVerbose(
+                `Confirming notification sent to owner ${access.confirmingConfig.ownerChat}`,
+              );
+            } catch (err) {
+              logVerbose(`Failed to send confirming notification: ${String(err)}`);
+            }
+
+            // Send ack to sender
+            try {
+              await sock.sendMessage(chatJid, { text: buildConfirmingAckReply() });
+              logVerbose(`Confirming ack sent to ${chatJid}`);
+            } catch (err) {
+              logVerbose(`Failed to send confirming ack: ${String(err)}`);
+            }
+          } else {
+            logVerbose(`Failed to create pending response for ${senderDisplay}`);
+            // Fall back to direct reply
+            await sock.sendMessage(chatJid, { text });
+          }
+        } else {
+          await sock.sendMessage(chatJid, { text });
+        }
       };
+
       const sendMedia = async (payload: AnyMessageContent) => {
+        // In confirming mode, block media sends (only text approval supported for now)
+        if (access.confirmingMode && access.confirmingConfig?.ownerChat) {
+          logVerbose(`Confirming mode: blocking media send to ${chatJid}`);
+          return;
+        }
         await sock.sendMessage(chatJid, payload);
       };
       const timestamp = messageTimestampMs;

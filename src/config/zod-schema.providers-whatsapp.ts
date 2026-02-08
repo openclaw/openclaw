@@ -3,6 +3,7 @@ import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
+  ConfirmingConfigSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -10,6 +11,26 @@ import {
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
+const WhatsAppPairingConfigSchema = z
+  .object({
+    /** Notify the owner when a new pairing request is received. Default: false. */
+    notifyOwner: z.boolean().optional().default(false),
+    /** Chat JID to send pairing notifications to (e.g., "554788703000@s.whatsapp.net"). */
+    ownerChat: z.string().optional(),
+    /** Include the original message content in the notification. Default: true. */
+    includeMessage: z.boolean().optional().default(true),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.notifyOwner && !value.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownerChat"],
+        message: "ownerChat is required when notifyOwner is true",
+      });
+    }
+  });
 
 export const WhatsAppAccountSchema = z
   .object({
@@ -24,6 +45,8 @@ export const WhatsAppAccountSchema = z
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
+    pairing: WhatsAppPairingConfigSchema.optional(),
+    confirming: ConfirmingConfigSchema.optional(),
     selfChatMode: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
@@ -62,18 +85,25 @@ export const WhatsAppAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") {
-      return;
+    // Validate dmPolicy="open" requires allowFrom to include "*"
+    if (value.dmPolicy === "open") {
+      const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+      if (!allow.includes("*")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["allowFrom"],
+          message: 'channels.whatsapp.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
+        });
+      }
     }
-    const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) {
-      return;
+    // Validate dmPolicy="confirming" requires confirming.ownerChat
+    if (value.dmPolicy === "confirming" && !value.confirming?.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirming", "ownerChat"],
+        message: 'dmPolicy="confirming" requires confirming.ownerChat to be set',
+      });
     }
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["allowFrom"],
-      message: 'channels.whatsapp.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
-    });
   });
 
 export const WhatsAppConfigSchema = z
@@ -84,6 +114,8 @@ export const WhatsAppConfigSchema = z
     configWrites: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
+    pairing: WhatsAppPairingConfigSchema.optional(),
+    confirming: ConfirmingConfigSchema.optional(),
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
     selfChatMode: z.boolean().optional(),
@@ -132,17 +164,24 @@ export const WhatsAppConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") {
-      return;
+    // Validate dmPolicy="open" requires allowFrom to include "*"
+    if (value.dmPolicy === "open") {
+      const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+      if (!allow.includes("*")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["allowFrom"],
+          message:
+            'channels.whatsapp.dmPolicy="open" requires channels.whatsapp.allowFrom to include "*"',
+        });
+      }
     }
-    const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) {
-      return;
+    // Validate dmPolicy="confirming" requires confirming.ownerChat
+    if (value.dmPolicy === "confirming" && !value.confirming?.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirming", "ownerChat"],
+        message: 'dmPolicy="confirming" requires confirming.ownerChat to be set',
+      });
     }
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["allowFrom"],
-      message:
-        'channels.whatsapp.dmPolicy="open" requires channels.whatsapp.allowFrom to include "*"',
-    });
   });

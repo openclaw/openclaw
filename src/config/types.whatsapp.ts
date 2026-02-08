@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ConfirmingConfig,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -12,6 +13,24 @@ export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+};
+
+export type WhatsAppPairingConfig = {
+  /**
+   * Notify the owner when a new pairing request is received.
+   * Default: false.
+   */
+  notifyOwner?: boolean;
+  /**
+   * Chat JID to send pairing notifications to (e.g., "554788703000@s.whatsapp.net").
+   * Required when notifyOwner is true.
+   */
+  ownerChat?: string;
+  /**
+   * Include the original message content in the notification.
+   * Default: true.
+   */
+  includeMessage?: boolean;
 };
 
 export type WhatsAppConfig = {
@@ -40,6 +59,10 @@ export type WhatsAppConfig = {
   responsePrefix?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** Pairing mode configuration (owner notifications). */
+  pairing?: WhatsAppPairingConfig;
+  /** Confirming mode configuration (owner-approved responses). */
+  confirming?: ConfirmingConfig;
   /**
    * Same-phone setup (bot uses your personal WhatsApp number).
    */
@@ -123,6 +146,10 @@ export type WhatsAppAccountConfig = {
   authDir?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** Pairing mode configuration (owner notifications). */
+  pairing?: WhatsAppPairingConfig;
+  /** Confirming mode configuration (owner-approved responses). */
+  confirming?: ConfirmingConfig;
   /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   allowFrom?: string[];
