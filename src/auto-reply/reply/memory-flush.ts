@@ -8,16 +8,31 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
-  "Pre-compaction memory flush.",
-  "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
-  `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
-].join(" ");
+  "** COMPACTION IMMINENT ** - Save your work NOW.",
+  "",
+  "Write to memory/YYYY-MM-DD.md (create memory/ if needed):",
+  "1. ACTIVE TASKS: What are you currently working on? Status of each.",
+  "2. RECENT REQUESTS: Last 2-3 things the user asked for.",
+  "3. IN-PROGRESS WORK: Any batch operations, their progress (e.g., '5/17 complete').",
+  "4. BLOCKERS: Anything stuck or waiting.",
+  "5. PENDING COMMITMENTS: Promises made that need follow-up.",
+  "",
+  "This context will be LOST after compaction. The summary alone won't preserve task state.",
+  `After writing, start with ${SILENT_REPLY_TOKEN}.`,
+].join("\n");
 
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
-  "Pre-compaction memory flush turn.",
-  "The session is near auto-compaction; capture durable memories to disk.",
-  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
-].join(" ");
+  "[CRITICAL] PRE-COMPACTION MEMORY FLUSH",
+  "",
+  "Your context is about to be compacted. The summarizer will NOT preserve:",
+  "- Active task state and progress",
+  "- Batch operation status",
+  "- What you were in the middle of doing",
+  "",
+  "You MUST write this to memory files NOW or it will be lost.",
+  "This is not optional - active work that isn't saved will be forgotten.",
+  `After saving, start with ${SILENT_REPLY_TOKEN}.`,
+].join("\n");
 
 export type MemoryFlushSettings = {
   enabled: boolean;
