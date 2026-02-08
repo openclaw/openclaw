@@ -32,7 +32,7 @@ const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
     return await lancedbImportPromise;
   } catch (err) {
     // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`);
+    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
   }
 };
 

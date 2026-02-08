@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Added
 
+- Gateway: add `agents.create`, `agents.update`, `agents.delete` RPC methods for web UI agent management. (#11045) Thanks @advaitpaliwal.
 - Cron: run history deep-links to session chat from the dashboard. (#10776) Thanks @tyler6204.
 - Cron: per-run session keys in run log entries and default labels for cron sessions. (#10776) Thanks @tyler6204.
 - Cron: legacy payload field compatibility (`deliver`, `channel`, `to`, `bestEffortDeliver`) in schema. (#10776) Thanks @tyler6204.
