@@ -213,17 +213,20 @@ describe("state + config path candidates", () => {
   });
 
   it("resolveConfigPath respects CLAWDBOT_CONFIG_PATH as legacy fallback", () => {
-    const env = { CLAWDBOT_CONFIG_PATH: "/tmp/legacy/clawdbot.json" } as NodeJS.ProcessEnv;
+    const legacyPath = path.join(os.tmpdir(), "legacy", "clawdbot.json");
+    const env = { CLAWDBOT_CONFIG_PATH: legacyPath } as NodeJS.ProcessEnv;
     const resolved = resolveConfigPath(env);
-    expect(resolved).toBe("/tmp/legacy/clawdbot.json");
+    expect(resolved).toBe(legacyPath);
   });
 
   it("resolveConfigPath prefers OPENCLAW_CONFIG_PATH over CLAWDBOT_CONFIG_PATH", () => {
+    const newPath = path.join(os.tmpdir(), "new", "openclaw.json");
+    const legacyPath = path.join(os.tmpdir(), "legacy", "clawdbot.json");
     const env = {
-      OPENCLAW_CONFIG_PATH: "/tmp/new/openclaw.json",
-      CLAWDBOT_CONFIG_PATH: "/tmp/legacy/clawdbot.json",
+      OPENCLAW_CONFIG_PATH: newPath,
+      CLAWDBOT_CONFIG_PATH: legacyPath,
     } as NodeJS.ProcessEnv;
     const resolved = resolveConfigPath(env);
-    expect(resolved).toBe("/tmp/new/openclaw.json");
+    expect(resolved).toBe(newPath);
   });
 });
