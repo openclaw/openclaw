@@ -63,6 +63,36 @@ describe("runClaudeCliAgent", () => {
     expect(argv).toContain("hi");
   });
 
+  it("sends prompts with null bytes via stdin", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({ message: "ok", session_id: "sid-3" }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    const prompt = "hello\u0000world";
+
+    await runClaudeCliAgent({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt,
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-3",
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    const argv = runCommandWithTimeoutMock.mock.calls[0]?.[0] as string[];
+    const options = runCommandWithTimeoutMock.mock.calls[0]?.[1] as {
+      input?: string;
+    };
+    expect(argv).not.toContain(prompt);
+    expect(options.input).toBe(prompt);
+  });
+
   it("uses --resume when a claude session id is provided", async () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: JSON.stringify({ message: "ok", session_id: "sid-2" }),
