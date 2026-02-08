@@ -166,8 +166,8 @@ export async function dispatchReplyFromConfig(params: {
     const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
     const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
 
-    void hookRunner
-      .runMessageReceived(
+     try {
+      const hookResult = await hookRunner.runMessageReceived(
         {
           from: ctx.From ?? "",
           content,
@@ -191,10 +191,24 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           conversationId,
         },
-      )
-      .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
-      });
+      );
+
+      if (hookResult?.block) {
+        logVerbose(
+          `dispatch-from-config: message blocked by hook. ` +
+          `From: ${ctx.From ?? "unknown"}, Reason: ${hookResult.blockReason ?? "unspecified"}`
+        );
+
+        if (hookResult.notifyUser) {
+          dispatcher.sendFinalReply({ text: hookResult.notifyUser });
+        }
+
+        recordProcessed("skipped", { reason: "blocked_by_message_received_hook" });
+        return { queuedFinal: Boolean(hookResult.notifyUser), counts: dispatcher.getQueuedCounts() };
+      }
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+    }
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
