@@ -319,6 +319,20 @@ function normalizePathPrepend(entries?: string[]) {
   return normalized;
 }
 
+/** Resolve the actual key used for the PATH variable in the given env object.
+ *  On Windows the key is typically "Path" (mixed case). */
+function resolvePathKey(env: Record<string, string>): string {
+  if ("PATH" in env) {
+    return "PATH";
+  }
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") {
+      return key;
+    }
+  }
+  return "PATH";
+}
+
 function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   if (prepend.length === 0) {
     return existing;
@@ -347,12 +361,13 @@ function applyPathPrepend(
   if (prepend.length === 0) {
     return;
   }
-  if (options?.requireExisting && !env.PATH) {
+  const pathKey = resolvePathKey(env);
+  if (options?.requireExisting && !env[pathKey]) {
     return;
   }
-  const merged = mergePathPrepend(env.PATH, prepend);
+  const merged = mergePathPrepend(env[pathKey], prepend);
   if (merged) {
-    env.PATH = merged;
+    env[pathKey] = merged;
   }
 }
 
@@ -367,9 +382,10 @@ function applyShellPath(env: Record<string, string>, shellPath?: string | null) 
   if (entries.length === 0) {
     return;
   }
-  const merged = mergePathPrepend(env.PATH, entries);
+  const pathKey = resolvePathKey(env);
+  const merged = mergePathPrepend(env[pathKey], entries);
   if (merged) {
-    env.PATH = merged;
+    env[pathKey] = merged;
   }
 }
 
@@ -983,7 +999,10 @@ export function createExecTool(
           })
         : mergedEnv;
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      const paramsHasPath = params.env
+        ? Object.keys(params.env).some((k) => k.toUpperCase() === "PATH")
+        : false;
+      if (!sandbox && host === "gateway" && !paramsHasPath) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
