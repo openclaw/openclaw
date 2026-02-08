@@ -21,6 +21,8 @@ export type HomeTabParams = {
   channelIds?: string[];
   /** Bot user ID for mention formatting. */
   botUserId?: string;
+  /** Owner's IANA timezone (e.g. "America/Los_Angeles"). Defaults to UTC. */
+  ownerTimezone?: string;
 };
 
 /**
@@ -74,7 +76,27 @@ export function buildDefaultHomeView(params: HomeTabParams = {}): View {
     statusFields.push({ type: "mrkdwn", text: `*Model:*\n${params.model}` });
   }
   if (params.uptimeMs != null) {
-    statusFields.push({ type: "mrkdwn", text: `*Uptime:*\n${formatUptime(params.uptimeMs)}` });
+    const startedAt = new Date(Date.now() - params.uptimeMs);
+    const tz = params.ownerTimezone || "UTC";
+    let startedStr: string;
+    try {
+      startedStr = startedAt.toLocaleString("en-US", {
+        timeZone: tz,
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+    } catch {
+      startedStr = startedAt.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    }
+    const tzShort = tz === "UTC" ? "UTC" : tz.split("/").pop()?.replace(/_/g, " ") || tz;
+    statusFields.push({
+      type: "mrkdwn",
+      text: `*Uptime:*\n${formatUptime(params.uptimeMs)}\n_since ${startedStr} ${tzShort}_`,
+    });
   }
   blocks.push({ type: "section", fields: statusFields });
 
