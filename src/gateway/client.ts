@@ -110,6 +110,7 @@ export class GatewayClient {
     // Allow node screen snapshots and other large responses.
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      handshakeTimeout: 10_000, // Fail fast if connection can't be established
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
