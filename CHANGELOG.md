@@ -769,6 +769,7 @@ Docs: https://docs.openclaw.ai
 - Paths: add `OPENCLAW_HOME` for overriding the home directory used by internal path resolution. (#12091) Thanks @sebslight.
 - Onboarding: add Custom Provider flow for OpenAI and Anthropic-compatible endpoints. (#11106) Thanks @MackDing.
 - Hooks: route webhook agent runs to specific `agentId`s, add `hooks.allowedAgentIds` controls, and fall back to default agent when unknown IDs are provided. (#13672) Thanks @BillChirico.
+- Compaction: add `agents.defaults.model.compact` to specify a dedicated model for compaction summarization. Falls back to primary on failure. Fixes silent auto-compaction failures with CLI-based providers that return 400 on summarization.
 
 ### Fixes
 

@@ -17,6 +17,7 @@ export const AgentDefaultsSchema = z
     model: z
       .object({
         primary: z.string().optional(),
+        compact: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
       })
       .strict()
