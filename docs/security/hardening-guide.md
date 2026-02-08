@@ -234,6 +234,6 @@ npx clawhatch scan --share
 
 ## Further Reading
 
-- [OpenClaw Threat Model](./THREAT-MODEL-ATLAS.md)
+- [OpenClaw Threat Model](/security/threat-model-atlas)
 - [Trust & Vulnerability Reporting](https://trust.openclaw.ai)
 - [State of AI Agent Security 2026](https://clawhatch.com/blog/state-of-ai-agent-security-2026) — Public audit of GitHub-hosted OpenClaw configurations
