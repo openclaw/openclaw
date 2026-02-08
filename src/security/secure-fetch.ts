@@ -38,10 +38,11 @@ function shouldBypassProxy(url: string): boolean {
     if (hostname === "localhost" || hostname === "::1" || isLoopbackIPv4(hostname)) {
       return true;
     }
-    // Also bypass requests TO the proxy itself to avoid infinite loop
+    // Also bypass requests TO the proxy itself to avoid infinite loop.
+    // Compare origins (scheme+host+port) so default ports (80/443) are normalized.
     if (PROXY_URL) {
       const proxyParsed = new URL(PROXY_URL);
-      if (parsed.hostname === proxyParsed.hostname && parsed.port === proxyParsed.port) {
+      if (parsed.origin === proxyParsed.origin) {
         return true;
       }
     }

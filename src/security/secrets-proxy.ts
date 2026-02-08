@@ -243,15 +243,16 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
       const method = (req.method || "GET").toUpperCase();
       const hasBody = !BODYLESS_METHODS.has(method);
 
-      // Determine if body is text-based (safe for placeholder replacement)
+      // Determine if body is text-based (safe for placeholder replacement).
+      // Only treat explicitly text-typed bodies as text; missing Content-Type
+      // is forwarded as raw binary to avoid corrupting non-text payloads.
       const contentType = (req.headers["content-type"] || "").toLowerCase();
       const isTextBody =
         contentType.includes("application/json") ||
         contentType.includes("text/") ||
         contentType.includes("application/xml") ||
         contentType.includes("application/x-www-form-urlencoded") ||
-        contentType.includes("application/javascript") ||
-        contentType === ""; // Assume text if no content-type (common for simple requests)
+        contentType.includes("application/javascript");
 
       // P0 Fix: Only read and process body for methods that should have one
       let modifiedBody: Buffer | string | undefined;
