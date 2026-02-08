@@ -360,6 +360,53 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+function isWithinDir(targetPath: string, rootDir: string): boolean {
+  const relative = path.relative(path.resolve(rootDir), path.resolve(targetPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isLegacyTreeSymlinkMirror(currentDir: string, targetDir: string): boolean {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(currentDir, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(entryPath);
+    } catch {
+      return false;
+    }
+    if (stat.isSymbolicLink()) {
+      const resolvedTarget = resolveSymlinkTarget(entryPath);
+      if (!resolvedTarget) {
+        return false;
+      }
+      if (!isWithinDir(resolvedTarget, targetDir)) {
+        return false;
+      }
+      continue;
+    }
+    if (stat.isDirectory()) {
+      if (!isLegacyTreeSymlinkMirror(entryPath, targetDir)) {
+        return false;
+      }
+      continue;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean {
+  return isLegacyTreeSymlinkMirror(legacyDir, targetDir);
+}
+
 export async function autoMigrateLegacyStateDir(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -443,6 +490,9 @@ export async function autoMigrateLegacyStateDir(params: {
   }
 
   if (isDirPath(targetDir)) {
+    if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
