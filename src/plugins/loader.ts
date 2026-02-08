@@ -180,6 +180,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const cached = registryCache.get(cacheKey);
     if (cached) {
       setActivePluginRegistry(cached, cacheKey);
+      initializeGlobalHookRunner(cached);
       return cached;
     }
   }
