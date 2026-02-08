@@ -72,8 +72,8 @@ export function normalizeMentionText(text: string): string {
   return (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "").toLowerCase();
 }
 
-export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
-  if (mentionRegexes.length === 0) {
+export function matchesMentionPatterns(text: string, mentionRegexes?: RegExp[]): boolean {
+  if (!mentionRegexes || mentionRegexes.length === 0) {
     return false;
   }
   const cleaned = normalizeMentionText(text ?? "");
@@ -91,20 +91,21 @@ export type ExplicitMentionSignal = {
 
 export function matchesMentionWithExplicit(params: {
   text: string;
-  mentionRegexes: RegExp[];
+  mentionRegexes?: RegExp[];
   explicit?: ExplicitMentionSignal;
 }): boolean {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
   const explicitAvailable = params.explicit?.canResolveExplicit === true;
   const hasAnyMention = params.explicit?.hasAnyMention === true;
+  const regexes = params.mentionRegexes ?? [];
   if (hasAnyMention && explicitAvailable) {
-    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+    return explicit || regexes.some((re) => re.test(cleaned));
   }
   if (!cleaned) {
     return explicit;
   }
-  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+  return explicit || regexes.some((re) => re.test(cleaned));
 }
 
 export function stripStructuralPrefixes(text: string): string {
