@@ -137,6 +137,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "schedule",
+    description: "Local schedule helpers",
+    register: async (program) => {
+      const mod = await import("../schedule-cli.js");
+      mod.registerScheduleCli(program);
+    },
+  },
+  {
     name: "dns",
     description: "DNS helpers",
     register: async (program) => {
