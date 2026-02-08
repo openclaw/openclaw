@@ -68,4 +68,8 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly message for rate limit errors", () => {
+    const msg = makeAssistantError("429 rate limit reached");
+    expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
+  });
 });
