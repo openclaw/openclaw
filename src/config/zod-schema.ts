@@ -512,6 +512,59 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    secrets: z
+      .object({
+        provider: z
+          .union([
+            z.literal("gcp"),
+            z.literal("aws"),
+            z.literal("env"),
+            z.literal("keyring"),
+            z.literal("1password"),
+            z.literal("doppler"),
+            z.literal("bitwarden"),
+            z.literal("vault"),
+          ])
+          .optional(),
+        gcp: z
+          .object({
+            project: z.string().min(1, "GCP project ID cannot be empty"),
+          })
+          .strict()
+          .optional(),
+        aws: z
+          .object({
+            region: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        doppler: z
+          .object({
+            project: z.string().optional(),
+            config: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        vault: z
+          .object({
+            address: z.string().optional(),
+            namespace: z.string().optional(),
+            mountPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        keyring: z
+          .object({
+            keychainPath: z.string().optional(),
+            keychainPassword: z.string().optional(),
+            account: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        mapping: z.record(z.string(), z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
