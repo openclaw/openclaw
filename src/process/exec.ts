@@ -1,9 +1,9 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
-import { logDebug, logError } from "../logger.js";
-import { resolveCommandStdio } from "./spawn-utils.js";
+import { logDebug, logError, logWarn } from "../logger.js";
+import { formatSpawnError, resolveCommandStdio, spawnWithFallback } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -110,13 +110,29 @@ export async function runCommandWithTimeout(
     }
   }
 
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
+  const stdio = resolveCommandStdio({ hasInput, preferInherit: true, ignoreOutput: false });
+  const spawnOptions = {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
+  };
+
+  // Use spawnWithFallback for EBADF resilience
+  const { child, fallbackLabel } = await spawnWithFallback({
+    argv: [resolveCommand(argv[0]), ...argv.slice(1)],
+    options: spawnOptions,
+    fallbacks: [{ label: "no-detach", options: { ...spawnOptions, detached: false } }],
+    onFallback: (err, fallback) => {
+      const errText = formatSpawnError(err);
+      logWarn(`exec: spawn failed (${errText}); retrying with ${fallback.label}.`);
+    },
   });
+
+  if (fallbackLabel) {
+    logWarn(`exec: using fallback "${fallbackLabel}" for command "${argv[0]}".`);
+  }
+
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
     let stdout = "";
