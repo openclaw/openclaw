@@ -20,12 +20,24 @@ export type ToolErrorSummary = {
   error?: string;
 };
 
+export type ToolExecutionHistoryEntry = {
+  toolName: string;
+  argsHash: string;
+  timestamp: number;
+  success: boolean;
+};
+
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, string | undefined>;
+  toolArgsById: Map<string, unknown>;
   toolSummaryById: Set<string>;
   lastToolError?: ToolErrorSummary;
+  
+  // Loop detection state
+  toolExecutionHistory: ToolExecutionHistoryEntry[];
+  blockedToolActions: Set<string>;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;

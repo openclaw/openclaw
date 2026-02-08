@@ -35,8 +35,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts: [],
     toolMetas: [],
     toolMetaById: new Map(),
+    toolArgsById: new Map(),
     toolSummaryById: new Set(),
     lastToolError: undefined,
+    toolExecutionHistory: [],
+    blockedToolActions: new Set(),
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on",
@@ -73,6 +76,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
+  const toolArgsById = state.toolArgsById;
   const toolSummaryById = state.toolSummaryById;
   const messagingToolSentTexts = state.messagingToolSentTexts;
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
@@ -496,8 +500,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
+    toolArgsById.clear();
     toolSummaryById.clear();
     state.lastToolError = undefined;
+    state.toolExecutionHistory.length = 0;
+    state.blockedToolActions.clear();
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
