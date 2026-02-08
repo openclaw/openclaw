@@ -20,6 +20,8 @@ export type AnnounceQueueItem = {
   sessionKey: string;
   origin?: DeliveryContext;
   originKey?: string;
+  /** High priority items bypass stale-age dropping. */
+  highPriority?: boolean;
 };
 
 export type AnnounceQueueSettings = {
@@ -27,6 +29,7 @@ export type AnnounceQueueSettings = {
   debounceMs?: number;
   cap?: number;
   dropPolicy?: QueueDropPolicy;
+  maxAgeMs?: number;
 };
 
 type AnnounceQueueState = {
@@ -40,9 +43,20 @@ type AnnounceQueueState = {
   droppedCount: number;
   summaryLines: string[];
   send: (item: AnnounceQueueItem) => Promise<void>;
+  maxAgeMs: number;
 };
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
+
+function isStaleItem(queue: AnnounceQueueState, item: AnnounceQueueItem, now = Date.now()) {
+  if (item.highPriority) {
+    return false;
+  }
+  if (!Number.isFinite(queue.maxAgeMs) || queue.maxAgeMs <= 0) {
+    return false;
+  }
+  return now - item.enqueuedAt > queue.maxAgeMs;
+}
 
 function getAnnounceQueue(
   key: string,
@@ -61,6 +75,10 @@ function getAnnounceQueue(
         ? Math.floor(settings.cap)
         : existing.cap;
     existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    existing.maxAgeMs =
+      typeof settings.maxAgeMs === "number" && Number.isFinite(settings.maxAgeMs)
+        ? Math.max(0, Math.floor(settings.maxAgeMs))
+        : existing.maxAgeMs;
     existing.send = send;
     return existing;
   }
@@ -75,9 +93,21 @@ function getAnnounceQueue(
     droppedCount: 0,
     summaryLines: [],
     send,
+    maxAgeMs:
+      typeof settings.maxAgeMs === "number" && Number.isFinite(settings.maxAgeMs)
+        ? Math.max(0, Math.floor(settings.maxAgeMs))
+        : 10 * 60 * 1000,
   };
   ANNOUNCE_QUEUES.set(key, created);
   return created;
+}
+
+async function sendIfFresh(queue: AnnounceQueueState, key: string, item: AnnounceQueueItem) {
+  if (isStaleItem(queue, item)) {
+    defaultRuntime.warn?.(`announce stale dropped for ${key}`);
+    return;
+  }
+  await queue.send(item);
 }
 
 function scheduleAnnounceDrain(key: string) {
@@ -97,7 +127,7 @@ function scheduleAnnounceDrain(key: string) {
             if (!next) {
               break;
             }
-            await queue.send(next);
+            await sendIfFresh(queue, key, next);
             continue;
           }
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
@@ -115,7 +145,7 @@ function scheduleAnnounceDrain(key: string) {
             if (!next) {
               break;
             }
-            await queue.send(next);
+            await sendIfFresh(queue, key, next);
             continue;
           }
           const items = queue.items.splice(0, queue.items.length);
@@ -130,7 +160,7 @@ function scheduleAnnounceDrain(key: string) {
           if (!last) {
             break;
           }
-          await queue.send({ ...last, prompt });
+          await sendIfFresh(queue, key, { ...last, prompt });
           continue;
         }
 
@@ -140,7 +170,7 @@ function scheduleAnnounceDrain(key: string) {
           if (!next) {
             break;
           }
-          await queue.send({ ...next, prompt: summaryPrompt });
+          await sendIfFresh(queue, key, { ...next, prompt: summaryPrompt });
           continue;
         }
 
@@ -148,7 +178,7 @@ function scheduleAnnounceDrain(key: string) {
         if (!next) {
           break;
         }
-        await queue.send(next);
+        await sendIfFresh(queue, key, next);
       }
     } catch (err) {
       defaultRuntime.error?.(`announce queue drain failed for ${key}: ${String(err)}`);
