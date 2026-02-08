@@ -271,6 +271,7 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  isHeartbeat?: boolean;
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -343,7 +344,7 @@ export async function createModelSelectionState(params: {
     sessionKey,
     parentSessionKey,
   });
-  if (storedOverride?.model) {
+  if (!params.isHeartbeat && storedOverride?.model) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
