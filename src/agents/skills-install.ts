@@ -145,15 +145,19 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
 }
 
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+  // Use --prefix CONFIG_DIR instead of -g so installs work in Docker/non-root (no EACCES on /usr/local).
+  const prefix = CONFIG_DIR;
   switch (prefs.nodeManager) {
     case "pnpm":
-      return ["pnpm", "add", "-g", packageName];
+      return ["pnpm", "add", "--prefix", prefix, packageName];
     case "yarn":
-      return ["yarn", "global", "add", packageName];
+      // yarn has no --prefix for add; use npm so prefix works in containers
+      return ["npm", "install", "--prefix", prefix, packageName];
     case "bun":
-      return ["bun", "add", "-g", packageName];
+      // bun -g has no --prefix; use npm so prefix works in containers
+      return ["npm", "install", "--prefix", prefix, packageName];
     default:
-      return ["npm", "install", "-g", packageName];
+      return ["npm", "install", "--prefix", prefix, packageName];
   }
 }
 
