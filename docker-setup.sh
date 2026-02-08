@@ -56,7 +56,6 @@ COMPOSE_ARGS=()
 write_extra_compose() {
   local home_volume="$1"
   shift
-  local -a mounts=("$@")
   local mount
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -71,7 +70,7 @@ YAML
     printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
-  for mount in "${mounts[@]}"; do
+  for mount in "$@"; do
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
@@ -86,7 +85,7 @@ YAML
     printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
-  for mount in "${mounts[@]}"; do
+  for mount in "$@"; do
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
@@ -111,7 +110,12 @@ if [[ -n "$EXTRA_MOUNTS" ]]; then
 fi
 
 if [[ -n "$HOME_VOLUME_NAME" || ${#VALID_MOUNTS[@]} -gt 0 ]]; then
-  write_extra_compose "$HOME_VOLUME_NAME" "${VALID_MOUNTS[@]}"
+  # Bash 3.2 + nounset treats "${array[@]}" on an empty array as unbound.
+  if [[ ${#VALID_MOUNTS[@]} -gt 0 ]]; then
+    write_extra_compose "$HOME_VOLUME_NAME" "${VALID_MOUNTS[@]}"
+  else
+    write_extra_compose "$HOME_VOLUME_NAME"
+  fi
   COMPOSE_FILES+=("$EXTRA_COMPOSE_FILE")
 fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
