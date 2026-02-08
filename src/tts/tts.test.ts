@@ -52,6 +52,7 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  formatTtsError,
 } = _test;
 
 describe("tts", () => {
@@ -411,6 +412,64 @@ describe("tts", () => {
           expect(provider).toBe("edge");
         },
       );
+    });
+
+    it("uses explicitly configured provider even when API key is missing", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const cfg = {
+            ...baseCfg,
+            messages: {
+              tts: {
+                provider: "openai",
+              },
+            },
+          };
+          const config = resolveTtsConfig(cfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-explicit.json");
+          expect(provider).toBe("openai");
+        },
+      );
+    });
+  });
+
+  describe("formatTtsError", () => {
+    it("formats error with message correctly", () => {
+      const error = new Error("Connection refused");
+      const result = formatTtsError("openai", error);
+      expect(result).toBe("openai: Connection refused");
+    });
+
+    it("handles error with undefined message", () => {
+      const error = { name: "CustomError" } as Error;
+      const result = formatTtsError("edge", error);
+      expect(result).not.toContain("undefined");
+      expect(result).toContain("edge");
+    });
+
+    it("handles error with empty message", () => {
+      const error = new Error("");
+      const result = formatTtsError("elevenlabs", error);
+      expect(result).not.toBe("elevenlabs: ");
+      expect(result).toContain("elevenlabs");
+    });
+
+    it("includes error name when message is unavailable", () => {
+      const error = { name: "NetworkError" } as Error;
+      const result = formatTtsError("openai", error);
+      expect(result).toContain("NetworkError");
+    });
+
+    it("handles AbortError specially", () => {
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      const result = formatTtsError("openai", error);
+      expect(result).toBe("openai: request timed out");
     });
   });
 
