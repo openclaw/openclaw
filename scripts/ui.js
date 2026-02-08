@@ -51,7 +51,7 @@ function resolveRunner() {
 }
 
 function run(cmd, args) {
-  const child = spawn(cmd, args, {
+  const child = spawn(`"${cmd}"`, args, {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
@@ -66,7 +66,7 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
-  const result = spawnSync(cmd, args, {
+  const result = spawnSync(`"${cmd}"`, args, {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
