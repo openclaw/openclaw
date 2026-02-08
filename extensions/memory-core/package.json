@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-core",
-  "version": "2026.2.4",
+  "version": "2026.2.6-3",
   "description": "OpenClaw core memory search plugin",
   "type": "module",
   "devDependencies": {

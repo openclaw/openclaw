@@ -296,23 +296,48 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Read request body as string.
+   * Read request body as string with timeout protection.
    */
-  private readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> {
+  private readBody(
+    req: http.IncomingMessage,
+    maxBytes: number,
+    timeoutMs = 30_000,
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (fn: () => void) => {
+        if (done) {
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        fn();
+      };
+
+      const timer = setTimeout(() => {
+        finish(() => {
+          const err = new Error("Request body timeout");
+          req.destroy(err);
+          reject(err);
+        });
+      }, timeoutMs);
+
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       req.on("data", (chunk: Buffer) => {
         totalBytes += chunk.length;
         if (totalBytes > maxBytes) {
-          req.destroy();
-          reject(new Error("PayloadTooLarge"));
+          finish(() => {
+            req.destroy();
+            reject(new Error("PayloadTooLarge"));
+          });
           return;
         }
         chunks.push(chunk);
       });
-      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-      req.on("error", reject);
+      req.on("end", () => finish(() => resolve(Buffer.concat(chunks).toString("utf-8"))));
+      req.on("error", (err) => finish(() => reject(err)));
+      req.on("close", () => finish(() => reject(new Error("Connection closed"))));
     });
   }
 

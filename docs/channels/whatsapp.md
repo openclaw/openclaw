@@ -205,11 +205,13 @@ The wizard uses it to set your **allowlist/owner** so your own DMs are permitted
 
 - `Body` is the current message body with envelope.
 - Quoted reply context is **always appended**:
+
   ```
   [Replying to +1555 id:ABC123]
   <quoted text or <media:...>>
   [/Replying]
   ```
+
 - Reply metadata also set:
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = quoted body or media placeholder

@@ -2,10 +2,34 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
+  # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
+  # Lint and format always run. Fail-safe: if detection fails, run everything.
+  docs-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Detect docs-only changes
+        id: check
+        uses: ./.github/actions/detect-docs-only
+
   install-check:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -66,6 +90,8 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
   checks:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -75,17 +101,11 @@ jobs:
             task: tsgo
             command: pnpm tsgo
           - runtime: node
-            task: lint
-            command: pnpm build && pnpm lint
-          - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: protocol
             command: pnpm protocol:check
-          - runtime: node
-            task: format
-            command: pnpm format
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run
@@ -156,52 +176,17 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  secrets:
+  # Lint and format always run, even on docs-only changes.
+  checks-lint:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install detect-secrets
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install detect-secrets==1.5.0
-
-      - name: Detect secrets
-        run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
-            echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
-            exit 1
-          fi
-
-  checks-windows:
-    runs-on: blacksmith-4vcpu-windows-2025
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
-      CLAWDBOT_TEST_WORKERS: 1
-    defaults:
-      run:
-        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runtime: node
-            task: build & lint
+          - task: lint
             command: pnpm build && pnpm lint
-          - runtime: node
-            task: test
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
+          - task: format
+            command: pnpm format
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -266,18 +251,153 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      - name: Run ${{ matrix.task }}
         run: ${{ matrix.command }}
 
-  checks-macos:
-    if: github.event_name == 'pull_request'
-    runs-on: macos-latest
+  secrets:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install detect-secrets
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install detect-secrets==1.5.0
+
+      - name: Detect secrets
+        run: |
+          if ! detect-secrets scan --baseline .secrets.baseline; then
+            echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
+            exit 1
+          fi
+
+  checks-windows:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: blacksmith-4vcpu-windows-2025
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Keep total concurrency predictable on the 4 vCPU runner:
+      # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
+      OPENCLAW_TEST_WORKERS: 2
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: pnpm test
+          - runtime: node
+            task: build & lint
+            command: pnpm build && pnpm lint
+          - runtime: node
+            task: test
+            command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: protocol
+            command: pnpm protocol:check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Try to exclude workspace from Windows Defender (best-effort)
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            # Defender sometimes intercepts process spawning (vitest workers). If this fails
+            # (eg hardened images), keep going and rely on worker limiting above.
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          check-latest: true
+
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Runtime versions
+        run: |
+          node -v
+          npm -v
+          bun -v
+          pnpm -v
+
+      - name: Capture node path
+        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        run: ${{ matrix.command }}
+
+  # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
+  # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
+  # running 4 separate jobs per PR (as before) starved the queue. One job
+  # per PR allows 5 PRs to run macOS checks simultaneously.
+  macos:
+    needs: [docs-scope]
+    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -297,6 +417,7 @@ jobs:
           done
           exit 1
 
+      # --- Node/pnpm setup (for TS tests) ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -336,71 +457,20 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
-      - name: Run ${{ matrix.task }}
+      # --- Run all checks sequentially (fast gates first) ---
+      - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: ${{ matrix.command }}
+        run: pnpm test
 
-  macos-app:
-    if: github.event_name == 'pull_request'
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - task: lint
-            command: |
-              swiftlint --config .swiftlint.yml
-              swiftformat --lint apps/macos/Sources --config .swiftformat
-          - task: build
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift build --package-path apps/macos --configuration release; then
-                  exit 0
-                fi
-                echo "swift build failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
-          - task: test
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
-                  exit 0
-                fi
-                echo "swift test failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Checkout submodules (retry)
-        run: |
-          set -euo pipefail
-          git submodule sync --recursive
-          for attempt in 1 2 3 4 5; do
-            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-              exit 0
-            fi
-            echo "Submodule update failed (attempt $attempt/5). Retrying…"
-            sleep $((attempt * 10))
-          done
-          exit 1
-
+      # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: |
-          brew install xcodegen swiftlint swiftformat
+        run: brew install xcodegen swiftlint swiftformat
 
       - name: Show toolchain
         run: |
@@ -408,8 +478,35 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Run ${{ matrix.task }}
-        run: ${{ matrix.command }}
+      - name: Swift lint
+        run: |
+          swiftlint --config .swiftlint.yml
+          swiftformat --lint apps/macos/Sources --config .swiftformat
+
+      - name: Swift build (release)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
+
+      - name: Swift test
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
+
   ios:
     if: false # ignore iOS in CI for now
     runs-on: macos-latest
@@ -584,6 +681,8 @@ jobs:
           PY
 
   android:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false

@@ -2013,6 +2013,78 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("allows group messages for per-group groupPolicy open override (global groupPolicy allowlist)", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123456789": {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["123456789"]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 999999, username: "random" },
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks control commands from unauthorized senders in per-group open groups", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123456789": {
+              groupPolicy: "open",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["123456789"]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 999999, username: "random" },
+        text: "/status",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
   it("allows control commands with TG-prefixed groupAllowFrom entries", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;

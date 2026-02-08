@@ -32,12 +32,13 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
+  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
   const mode =
-    rawMode === "announce"
+    normalizedMode === "announce"
       ? "announce"
-      : rawMode === "none"
+      : normalizedMode === "none"
         ? "none"
-        : rawMode === "deliver"
+        : normalizedMode === "deliver"
           ? "announce"
           : undefined;
 
@@ -51,7 +52,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const channel = deliveryChannel ?? payloadChannel ?? "last";
   const to = deliveryTo ?? payloadTo;
   if (hasDelivery) {
-    const resolvedMode = mode ?? "none";
+    const resolvedMode = mode ?? "announce";
     return {
       mode: resolvedMode,
       channel,

@@ -1,8 +1,11 @@
 /**
  * OpenCode Zen model catalog with dynamic fetching, caching, and static fallback.
  *
- * OpenCode Zen is a $200/month subscription that provides proxy access to multiple
- * AI models (Claude, GPT, Gemini, etc.) through a single API endpoint.
+ * OpenCode Zen is a pay-as-you-go token-based API that provides access to curated
+ * models optimized for coding agents. It uses per-request billing with auto top-up.
+ *
+ * Note: OpenCode Black ($20/$100/$200/month subscriptions) is a separate product
+ * with flat-rate usage tiers. This module handles Zen, not Black.
  *
  * API endpoint: https://opencode.ai/zen/v1
  * Auth URL: https://opencode.ai/auth
@@ -21,7 +24,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Model aliases for convenient shortcuts.
- * Users can use "opus" instead of "claude-opus-4-5", etc.
+ * Users can use "opus" instead of "claude-opus-4-6", etc.
  */
 export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   // Claude
@@ -145,7 +148,7 @@ const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.1-codex": 400000,
-  "claude-opus-4-6": 200000,
+  "claude-opus-4-6": 1000000,
   "claude-opus-4-5": 200000,
   "gemini-3-pro": 1048576,
   "gpt-5.1-codex-mini": 400000,
@@ -162,7 +165,7 @@ function getDefaultContextWindow(modelId: string): number {
 
 const MODEL_MAX_TOKENS: Record<string, number> = {
   "gpt-5.1-codex": 128000,
-  "claude-opus-4-6": 64000,
+  "claude-opus-4-6": 128000,
   "claude-opus-4-5": 64000,
   "gemini-3-pro": 65536,
   "gpt-5.1-codex-mini": 128000,
