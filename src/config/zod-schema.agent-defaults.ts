@@ -153,6 +153,7 @@ export const AgentDefaultsSchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        announceDeliveryTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

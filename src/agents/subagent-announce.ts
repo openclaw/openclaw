@@ -24,6 +24,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { resolveSubagentAnnounceDeliveryTimeoutMs } from "./timeout.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatTokenCount(value?: number) {
@@ -116,6 +117,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  const announceDeliveryTimeoutMs = resolveSubagentAnnounceDeliveryTimeoutMs(loadConfig());
   await callGateway({
     method: "agent",
     params: {
@@ -129,7 +131,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       idempotencyKey: crypto.randomUUID(),
     },
     expectFinal: true,
-    timeoutMs: 60_000,
+    timeoutMs: announceDeliveryTimeoutMs,
   });
 }
 
@@ -520,6 +522,7 @@ export async function runSubagentAnnounceFlow(params: {
       const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
       directOrigin = deliveryContextFromSession(entry);
     }
+    const announceDeliveryTimeoutMs = resolveSubagentAnnounceDeliveryTimeoutMs(loadConfig());
     await callGateway({
       method: "agent",
       params: {
@@ -536,7 +539,7 @@ export async function runSubagentAnnounceFlow(params: {
         idempotencyKey: crypto.randomUUID(),
       },
       expectFinal: true,
-      timeoutMs: 60_000,
+      timeoutMs: announceDeliveryTimeoutMs,
     });
 
     didAnnounce = true;
