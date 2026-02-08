@@ -12,6 +12,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { loadPluginManifest } from "./manifest.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -166,7 +167,12 @@ async function installPluginFromPackageDir(params: {
   }
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
-  const pluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
+  // Prefer plugin manifest ID over package name (fixes #2796)
+  // Normalize manifest ID same as package name (trim, remove scope prefix)
+  const pluginManifest = loadPluginManifest(params.packageDir);
+  const rawManifestId = pluginManifest.ok ? pluginManifest.manifest.id : undefined;
+  const manifestId = rawManifestId ? unscopedPackageName(rawManifestId) : undefined;
+  const pluginId = manifestId || (pkgName ? unscopedPackageName(pkgName) : "plugin");
   const pluginIdError = validatePluginId(pluginId);
   if (pluginIdError) {
     return { ok: false, error: pluginIdError };
