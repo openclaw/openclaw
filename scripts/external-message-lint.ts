@@ -161,6 +161,17 @@ const add = (level: IssueLevel, code: string, message: string) => {
 };
 
 // Hard errors (policy/format breakers)
+
+// Safety: internal sentinel tokens should never leak into external outbound messages.
+// If you really need to discuss them, rephrase (e.g. “the agent returned an empty reply”).
+if (/\bNO_REPLY\b/.test(text) || /\bHEARTBEAT_OK\b/.test(text)) {
+  add(
+    "error",
+    "internal-sentinel",
+    "Message contains an internal sentinel token (NO_REPLY/HEARTBEAT_OK). Remove it before sending externally.",
+  );
+}
+
 if (lines.some((l) => l.startsWith("#"))) {
   add(
     "error",
