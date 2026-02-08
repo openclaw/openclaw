@@ -148,31 +148,11 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Runtime versions
         run: |
@@ -203,24 +183,6 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Consume the shared dist artifact to ensure it is present and structurally valid.
-  dist-smoke:
-    needs: [docs-scope, changed-scope, build-artifacts]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Verify dist artifact
-        run: |
-          set -euo pipefail
-          test -s dist/index.js
-          test -s dist/plugin-sdk/index.js
-
   install-check:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
@@ -250,31 +212,11 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Runtime versions
         run: |
@@ -340,31 +282,11 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -430,31 +352,11 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -510,7 +412,7 @@ jobs:
           fi
 
   checks-windows:
-    needs: [docs-scope, changed-scope]
+    needs: [docs-scope, changed-scope, build-artifacts]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-4vcpu-windows-2025
     env:
@@ -572,37 +474,31 @@ jobs:
           done
           exit 1
 
+      - name: Download dist artifact (lint lane)
+        if: matrix.task == 'lint'
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Verify dist artifact (lint lane)
+        if: matrix.task == 'lint'
+        run: |
+          set -euo pipefail
+          test -s dist/index.js
+          test -s dist/plugin-sdk/index.js
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -666,31 +562,11 @@ jobs:
           node-version: 22.x
           check-latest: true
 
-      - name: Setup pnpm (corepack retry)
-        run: |
-          set -euo pipefail
-          corepack enable
-          for attempt in 1 2 3; do
-            if corepack prepare pnpm@10.23.0 --activate; then
-              pnpm -v
-              exit 0
-            fi
-            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
-            sleep $((attempt * 10))
-          done
-          exit 1
-
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store cache
-        uses: actions/cache@v4
+      - name: Setup pnpm + cache store
+        uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-node22-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-node22-
+          pnpm-version: "10.23.0"
+          cache-key-suffix: "node22"
 
       - name: Runtime versions
         run: |
