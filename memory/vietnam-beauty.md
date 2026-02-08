@@ -630,6 +630,14 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - 커밋: `f154d8e`, `66e1098`, `11ffce1`, `f1c5b68`
 - 문서: D023 (Merchant Center 가이드), I033 (구현 기록)
 
+### UCP Admin Phase A 구현 (2026-02-08)
+- 3개 서브에이전트 병렬 실행으로 구현
+- **백엔드**: UCP 통계 API + 이벤트 API + Feed 헬스체크 API + Railway 배포
+- **프론트엔드 주문**: 타입 + API + 훅 + 주문 페이지 + 상세 패널 + 상태 배지 + 타임라인
+- **프론트엔드 대시보드**: UCP 위젯 + 사이드바 메뉴 추가 (7→9개)
+- 커밋 13개, 전부 push 완료
+- Admin 메뉴: 🛒 UCP 주문 + 📡 UCP Feed 추가
+
 ### 지니 액션 필요 (Merchant Center)
 - [ ] Google Merchant Center 계정 생성 (베트남 시장)
 - [ ] 상품 피드 URL 등록: `https://maibeauty-api-production.up.railway.app/ucp/v1/feed/products.xml`
@@ -640,11 +648,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `3a54d85 feat(web): add UCP Feed type definitions (02-08)`
 - `b750ec1 feat(web): add UCP orders barrel export (02-08)`
 - `0798e8e feat(web): add UCP orders page (02-08)`
 - `8a09c0f feat(web): add UCP order detail sheet (02-08)`
 - `b766ce9 feat(web): add UCP widget to dashboard page (02-08)`
-- `2056b28 feat(api): add feed health check endpoint (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-08*
