@@ -42,8 +42,6 @@ export const spoolEventSchema = z
   })
   .strict();
 
-export type SpoolEventSchemaType = z.infer<typeof spoolEventSchema>;
-
 export const SPOOL_PRIORITY_VALUES = ["low", "normal", "high", "critical"] as const;
 
 export const spoolEventCreateSchema = z
@@ -56,39 +54,39 @@ export const spoolEventCreateSchema = z
   })
   .strict();
 
-export type SpoolEventCreateSchemaType = z.infer<typeof spoolEventCreateSchema>;
-
-export function validateSpoolEventCreate(
+// Generic validation helper - internal use
+function validateWith<T>(
+  schema: z.ZodSchema<T>,
   data: unknown,
-): { valid: true; create: SpoolEventCreateSchemaType } | { valid: false; error: string } {
-  const result = spoolEventCreateSchema.safeParse(data);
+): { valid: true; data: T } | { valid: false; error: string } {
+  const result = schema.safeParse(data);
   if (result.success) {
-    return { valid: true, create: result.data };
+    return { valid: true, data: result.data };
   }
   const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
   return { valid: false, error: issues };
+}
+
+// Public validation API - preserves named return fields for compatibility
+export function validateSpoolEventCreate(
+  data: unknown,
+):
+  | { valid: true; create: z.infer<typeof spoolEventCreateSchema> }
+  | { valid: false; error: string } {
+  const r = validateWith(spoolEventCreateSchema, data);
+  return r.valid ? { valid: true, create: r.data } : r;
 }
 
 export function validateSpoolEvent(
   data: unknown,
-): { valid: true; event: SpoolEventSchemaType } | { valid: false; error: string } {
-  const result = spoolEventSchema.safeParse(data);
-  if (result.success) {
-    return { valid: true, event: result.data };
-  }
-  const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-  return { valid: false, error: issues };
+): { valid: true; event: z.infer<typeof spoolEventSchema> } | { valid: false; error: string } {
+  const r = validateWith(spoolEventSchema, data);
+  return r.valid ? { valid: true, event: r.data } : r;
 }
-
-export type SpoolPayloadSchemaType = z.infer<typeof spoolPayloadSchema>;
 
 export function validateSpoolPayload(
   data: unknown,
-): { valid: true; payload: SpoolPayloadSchemaType } | { valid: false; error: string } {
-  const result = spoolPayloadSchema.safeParse(data);
-  if (result.success) {
-    return { valid: true, payload: result.data };
-  }
-  const issues = result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-  return { valid: false, error: issues };
+): { valid: true; payload: z.infer<typeof spoolPayloadSchema> } | { valid: false; error: string } {
+  const r = validateWith(spoolPayloadSchema, data);
+  return r.valid ? { valid: true, payload: r.data } : r;
 }
