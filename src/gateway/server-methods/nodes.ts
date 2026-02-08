@@ -1,6 +1,10 @@
 import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  rejectDevicePairing,
+} from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -119,8 +123,42 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listNodePairing();
-      respond(true, list, undefined);
+      const [nodeList, deviceList] = await Promise.all([listNodePairing(), listDevicePairing()]);
+
+      // Include device-level pending requests for nodes that aren't already
+      // in the node pending list or already paired in the device store.
+      // The gateway's WS connect handler creates pending entries in the
+      // device store (device-pairing.ts) when an unknown node connects,
+      // but the node.pair.* tools only check the node store
+      // (node-pairing.ts). This bridges the gap.
+      const nodeIdsSeen = new Set(nodeList.pending.map((p) => p.nodeId));
+      const pairedDeviceIds = new Set(deviceList.paired.map((p) => p.deviceId));
+      const deviceNodePending = deviceList.pending
+        .filter(
+          (dp) =>
+            isNodeEntry({ role: dp.role, roles: dp.roles }) &&
+            !nodeIdsSeen.has(dp.deviceId) &&
+            !pairedDeviceIds.has(dp.deviceId),
+        )
+        .map((dp) => ({
+          requestId: dp.requestId,
+          nodeId: dp.deviceId,
+          displayName: dp.displayName,
+          platform: dp.platform,
+          caps: undefined as string[] | undefined,
+          commands: undefined as string[] | undefined,
+          remoteIp: dp.remoteIp,
+          silent: dp.silent,
+          isRepair: dp.isRepair,
+          ts: dp.ts,
+          _source: "device" as const,
+        }));
+
+      const mergedPending = [...nodeList.pending, ...deviceNodePending].toSorted(
+        (a, b) => b.ts - a.ts,
+      );
+
+      respond(true, { pending: mergedPending, paired: nodeList.paired }, undefined);
     });
   },
   "node.pair.approve": async ({ params, respond, context }) => {
@@ -134,22 +172,72 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      // Try node store first, then fall back to device store.
+      // The gateway's WS connect handler creates pending entries in the
+      // device store when an unknown node connects, so we need to check
+      // both stores for the requestId.
       const approved = await approveNodePairing(requestId);
-      if (!approved) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+      if (approved) {
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId,
+            nodeId: approved.node.nodeId,
+            decision: "approved",
+            ts: Date.now(),
+          },
+          { dropIfSlow: true },
+        );
+        respond(true, approved, undefined);
         return;
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: approved.node.nodeId,
-          decision: "approved",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
-      respond(true, approved, undefined);
+
+      // Fall back to device store — the WS connect handler may have
+      // created the pending request there instead of the node store.
+      const deviceApproved = await approveDevicePairing(requestId);
+      if (deviceApproved) {
+        const resolvedTs = Date.now();
+        context.logGateway.info(
+          `node pairing approved via device store device=${deviceApproved.device.deviceId} role=${deviceApproved.device.role ?? "unknown"}`,
+        );
+        // Broadcast both events so consumers listening for either
+        // node.pair.resolved or device.pair.resolved are notified.
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId,
+            nodeId: deviceApproved.device.deviceId,
+            decision: "approved",
+            ts: resolvedTs,
+          },
+          { dropIfSlow: true },
+        );
+        context.broadcast(
+          "device.pair.resolved",
+          {
+            requestId,
+            deviceId: deviceApproved.device.deviceId,
+            decision: "approved",
+            ts: resolvedTs,
+          },
+          { dropIfSlow: true },
+        );
+        respond(
+          true,
+          {
+            requestId,
+            node: {
+              nodeId: deviceApproved.device.deviceId,
+              displayName: deviceApproved.device.displayName,
+              platform: deviceApproved.device.platform,
+            },
+          },
+          undefined,
+        );
+        return;
+      }
+
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
     });
   },
   "node.pair.reject": async ({ params, respond, context }) => {
@@ -163,22 +251,52 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      // Try node store first, then fall back to device store.
       const rejected = await rejectNodePairing(requestId);
-      if (!rejected) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+      if (rejected) {
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId,
+            nodeId: rejected.nodeId,
+            decision: "rejected",
+            ts: Date.now(),
+          },
+          { dropIfSlow: true },
+        );
+        respond(true, rejected, undefined);
         return;
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: rejected.nodeId,
-          decision: "rejected",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
-      respond(true, rejected, undefined);
+
+      const deviceRejected = await rejectDevicePairing(requestId);
+      if (deviceRejected) {
+        const resolvedTs = Date.now();
+        // Broadcast both events for the same reason as approve.
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId,
+            nodeId: deviceRejected.deviceId,
+            decision: "rejected",
+            ts: resolvedTs,
+          },
+          { dropIfSlow: true },
+        );
+        context.broadcast(
+          "device.pair.resolved",
+          {
+            requestId,
+            deviceId: deviceRejected.deviceId,
+            decision: "rejected",
+            ts: resolvedTs,
+          },
+          { dropIfSlow: true },
+        );
+        respond(true, { requestId, nodeId: deviceRejected.deviceId }, undefined);
+        return;
+      }
+
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
     });
   },
   "node.pair.verify": async ({ params, respond }) => {
