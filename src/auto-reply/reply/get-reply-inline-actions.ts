@@ -8,6 +8,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import { normalizeToolName } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { logVerbose } from "../../globals.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
@@ -182,7 +183,8 @@ export async function handleInlineActions(params: {
         config: cfg,
       });
 
-      const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
+      const normalizedDispatchName = normalizeToolName(dispatch.toolName);
+      const tool = tools.find((candidate) => candidate.name === normalizedDispatchName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };

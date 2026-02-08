@@ -57,6 +57,39 @@ describe("POST /tools/invoke", () => {
     await server.close();
   });
 
+  it("normalizes tool name with whitespace and casing", async () => {
+    testState.agentsConfig = {
+      list: [
+        {
+          id: "main",
+          tools: {
+            allow: ["agents_list"],
+          },
+        },
+      ],
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+    });
+    const token = resolveGatewayToken();
+
+    // Tool name with leading/trailing whitespace and mixed casing should resolve.
+    const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tool: " Agents_List ", action: "json", args: {}, sessionKey: "main" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+
+    await server.close();
+  });
+
   it("supports tools.alsoAllow as additive allowlist (profile stage)", async () => {
     // No explicit tool allowlist; rely on profile + alsoAllow.
     testState.agentsConfig = {

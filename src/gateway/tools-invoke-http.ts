@@ -133,7 +133,7 @@ export async function handleToolsInvokeHttpRequest(
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
 
-  const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
+  const toolName = typeof body.tool === "string" ? normalizeToolName(body.tool) : "";
   if (!toolName) {
     sendInvalidRequest(res, "tools.invoke requires body.tool");
     return true;
