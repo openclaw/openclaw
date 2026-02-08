@@ -349,3 +349,16 @@ export async function ensureSandboxContainer(params: {
   });
   return containerName;
 }
+
+/**
+ * Get the host address that Docker containers can use to reach services on the host machine.
+ * Returns the appropriate address based on the platform:
+ * - Linux: 172.17.0.1 (default Docker bridge gateway)
+ * - Mac/Windows: host.docker.internal (Docker Desktop feature)
+ */
+export function getDockerBridgeHost(): string {
+  if (process.platform === "linux") {
+    return "172.17.0.1";
+  }
+  return "host.docker.internal";
+}

@@ -12,6 +12,7 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  getDockerBridgeHost,
   readDockerPort,
 } from "./docker.js";
 import { updateBrowserRegistry } from "./registry.js";
@@ -196,6 +197,8 @@ export async function ensureSandboxBrowser(params: {
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
+      host: "0.0.0.0",
+      advertiseHost: getDockerBridgeHost(),
       onEnsureAttachTarget,
     });
   };

@@ -22,10 +22,12 @@ export async function startBrowserBridgeServer(params: {
   host?: string;
   port?: number;
   authToken?: string;
+  advertiseHost?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   const port = params.port ?? 0;
+  const advertiseHost = params.advertiseHost ?? host;
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -65,7 +67,7 @@ export async function startBrowserBridgeServer(params: {
   state.port = resolvedPort;
   state.resolved.controlPort = resolvedPort;
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const baseUrl = `http://${advertiseHost}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
