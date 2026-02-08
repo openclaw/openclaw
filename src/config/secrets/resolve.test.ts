@@ -287,11 +287,11 @@ describe("detectUnresolvedSecretRefs", () => {
     expect(detectUnresolvedSecretRefs({ foo: "bar" })).toEqual([]);
   });
 
-  it("detects $secret{...} patterns in config", () => {
+  it("detects $secret{...} patterns in config with full paths", () => {
     const config = { token: "$secret{MY_TOKEN}", nested: { key: "$secret{OTHER}" } };
     const refs = detectUnresolvedSecretRefs(config);
-    expect(refs).toContain("$secret{MY_TOKEN}");
-    expect(refs).toContain("$secret{OTHER}");
+    expect(refs).toContain("$secret{MY_TOKEN} at token");
+    expect(refs).toContain("$secret{OTHER} at nested.key");
   });
 
   it("ignores $$secret{...} escape sequences", () => {
@@ -309,7 +309,7 @@ describe("detectUnresolvedSecretRefs", () => {
       remote: { apiKey: "$secret{REAL_REF}" },
     };
     const refs = detectUnresolvedSecretRefs(config);
-    expect(refs).toEqual(["$secret{REAL_REF}"]);
+    expect(refs).toEqual(["$secret{REAL_REF} at remote.apiKey"]);
   });
 
   it("handles $$$secret{NAME} triple-dollar as escape (no ref)", () => {
@@ -332,7 +332,33 @@ describe("sync loadConfig detection", () => {
     };
     const refs = detectUnresolvedSecretRefs(config);
     // Should find the ref in models but NOT in the secrets block
-    expect(refs).toEqual(["$secret{KEY}"]);
+    expect(refs).toEqual(["$secret{KEY} at models.providers.openai.apiKey"]);
+  });
+
+  it("includes array indices in paths", () => {
+    const config = { items: ["plain", "$secret{ARR_SECRET}"] };
+    const refs = detectUnresolvedSecretRefs(config);
+    expect(refs).toEqual(["$secret{ARR_SECRET} at items[1]"]);
+  });
+});
+
+describe("createProvider validation", () => {
+  it("throws SecretsProviderError when gcp provider is missing project", async () => {
+    // Dynamically import to get the internal createProvider via resolveConfigSecrets
+    const config = {
+      channels: { slack: { botToken: "$secret{TOKEN}" } },
+      secrets: { provider: "gcp" },
+    };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
+    await expect(resolveConfigSecrets(config)).rejects.toThrow("gcp.project");
+  });
+
+  it("throws SecretsProviderError when gcp.project is empty", async () => {
+    const config = {
+      channels: { slack: { botToken: "$secret{TOKEN}" } },
+      secrets: { provider: "gcp", gcp: { project: "" } },
+    };
+    await expect(resolveConfigSecrets(config)).rejects.toThrow(SecretsProviderError);
   });
 });
 

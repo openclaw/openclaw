@@ -290,31 +290,32 @@ export function detectUnresolvedSecretRefs(
   walk(config, "");
   return refs;
 
-  function walk(value: unknown, parentKey: string): void {
+  function walk(value: unknown, path: string): void {
     if (typeof value === "string") {
       if (!value.includes("$secret{")) {
         return;
       }
       for (const token of tokenizeSecretString(value)) {
         if (token.type === "ref") {
-          refs.push(`$secret{${token.name}}`);
+          const location = path ? ` at ${path}` : "";
+          refs.push(`$secret{${token.name}}${location}`);
         }
       }
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) {
-        walk(item, parentKey);
+      for (let i = 0; i < value.length; i++) {
+        walk(value[i], path ? `${path}[${i}]` : `[${i}]`);
       }
       return;
     }
     if (isPlainObject(value)) {
       for (const [key, val] of Object.entries(value)) {
         // Skip the secrets config block at root level (same as collectSecretRefs)
-        if (parentKey === "" && skipKeys.has(key)) {
+        if (path === "" && skipKeys.has(key)) {
           continue;
         }
-        walk(val, key);
+        walk(val, path ? `${path}.${key}` : key);
       }
     }
   }
