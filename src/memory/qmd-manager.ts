@@ -262,23 +262,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-<<<<<<< HEAD
     const collectionFilterArgs = this.buildCollectionFilterArgs();
     if (collectionFilterArgs.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
     const args = ["query", trimmed, "--json", "-n", String(limit), ...collectionFilterArgs];
-=======
-    const args = [
-      "query",
-      trimmed,
-      "--json",
-      "-n",
-      String(limit),
-      ...this.buildCollectionFilterArgs(),
-    ];
->>>>>>> 7eece6dd7 (Memory/QMD: scope queries to managed collections)
     let stdout: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });

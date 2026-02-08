@@ -443,7 +443,6 @@ describe("QmdMemoryManager", () => {
     if (!manager) {
       throw new Error("manager missing");
     }
-<<<<<<< HEAD
     const maxResults = resolved.qmd?.limits.maxResults;
     if (!maxResults) {
       throw new Error("qmd maxResults missing");
@@ -488,14 +487,6 @@ describe("QmdMemoryManager", () => {
     const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
     expect(results).toEqual([]);
     expect(spawnMock.mock.calls.some((call) => call[1]?.[0] === "query")).toBe(false);
-=======
-
-    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
-    const queryCall = spawnMock.mock.calls.find((call) => call[1]?.[0] === "query");
-    expect(queryCall?.[1]).toEqual(
-      expect.arrayContaining(["query", "test", "-c", "workspace", "-c", "notes"]),
-    );
->>>>>>> 7eece6dd7 (Memory/QMD: scope queries to managed collections)
     await manager.close();
   });
 
