@@ -215,6 +215,63 @@ export type OpenClawPluginChannelRegistration = {
   dock?: ChannelDock;
 };
 
+// =============================================================================
+// Search Provider Plugins
+// =============================================================================
+
+export type SearchProviderResult =
+  | {
+      query: string;
+      provider: string;
+      results?: Array<{
+        title: string;
+        url: string;
+        description?: string;
+        published?: string;
+      }>;
+      content?: string; // For AI-synthesized answers (like Perplexity)
+      citations?: string[];
+      tookMs?: number;
+      cached?: boolean;
+    }
+  | {
+      error: string;
+      message: string;
+      provider: string;
+    };
+
+export type SearchProviderContext = {
+  config: OpenClawConfig;
+  timeoutSeconds: number;
+  cacheTtlMs: number;
+  pluginConfig?: unknown;
+};
+
+export type SearchProviderPlugin = {
+  id: string;
+  label: string;
+  description?: string;
+  configSchema?: Record<string, unknown>; // JSON Schema for provider-specific config
+  /**
+   * The plugin entry id that registered this provider.
+   * Set automatically during registration; used to look up plugin config.
+   * For built-in providers, this is undefined and falls back to provider id.
+   */
+  pluginId?: string;
+  search: (
+    params: {
+      query: string;
+      count: number;
+      country?: string;
+      search_lang?: string;
+      ui_lang?: string;
+      freshness?: string;
+      providerConfig?: Record<string, unknown>;
+    },
+    ctx: SearchProviderContext,
+  ) => Promise<SearchProviderResult>;
+};
+
 export type OpenClawPluginDefinition = {
   id?: string;
   name?: string;
@@ -256,6 +313,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerSearchProvider: (provider: SearchProviderPlugin) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.

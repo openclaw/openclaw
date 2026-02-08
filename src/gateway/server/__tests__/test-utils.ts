@@ -8,6 +8,7 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
     typedHooks: [],
     channels: [],
     providers: [],
+    searchProviders: [],
     gatewayHandlers: {},
     httpHandlers: [],
     httpRoutes: [],

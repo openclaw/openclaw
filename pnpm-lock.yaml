@@ -347,6 +347,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/kagi-search: {}
+
   extensions/line:
     devDependencies:
       openclaw:

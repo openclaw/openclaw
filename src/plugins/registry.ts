@@ -29,6 +29,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+import { registerSearchProvider as registerGlobalSearchProvider } from "../agents/tools/search-providers.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
@@ -75,6 +76,12 @@ export type PluginProviderRegistration = {
   source: string;
 };
 
+export type PluginSearchProviderRegistration = {
+  pluginId: string;
+  provider: import("./types.js").SearchProviderPlugin;
+  source: string;
+};
+
 export type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
@@ -110,6 +117,7 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  searchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -128,6 +136,7 @@ export type PluginRegistry = {
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
   providers: PluginProviderRegistration[];
+  searchProviders: PluginSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpHandlers: PluginHttpRegistration[];
   httpRoutes: PluginHttpRouteRegistration[];
@@ -151,6 +160,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     typedHooks: [],
     channels: [],
     providers: [],
+    searchProviders: [],
     gatewayHandlers: {},
     httpHandlers: [],
     httpRoutes: [],
@@ -382,6 +392,58 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerSearchProvider = (
+    record: PluginRecord,
+    provider: import("./types.js").SearchProviderPlugin,
+  ) => {
+    const id = typeof provider?.id === "string" ? provider.id.trim() : "";
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "search provider registration missing id",
+      });
+      return;
+    }
+    const normalizedId = id.trim().toLowerCase();
+    const existing = registry.searchProviders.find(
+      (entry) => entry.provider.id.trim().toLowerCase() === normalizedId,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `search provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+
+    // Attach the plugin entry id to the provider for config lookup
+    const providerWithPluginId = { ...provider, pluginId: record.id };
+
+    // Register in the global search provider registry
+    try {
+      registerGlobalSearchProvider(providerWithPluginId);
+    } catch (error) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `failed to register search provider: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+
+    record.searchProviderIds.push(id);
+    registry.searchProviders.push({
+      pluginId: record.id,
+      provider: providerWithPluginId,
+      source: record.source,
+    });
+  };
+
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
@@ -489,6 +551,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerHttpRoute: (params) => registerHttpRoute(record, params),
       registerChannel: (registration) => registerChannel(record, registration),
       registerProvider: (provider) => registerProvider(record, provider),
+      registerSearchProvider: (provider) => registerSearchProvider(record, provider),
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
@@ -505,6 +568,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerSearchProvider,
     registerGatewayMethod,
     registerCli,
     registerService,

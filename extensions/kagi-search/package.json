@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/plugin-kagi-search",
+  "version": "1.0.0",
+  "description": "Example Kagi search provider plugin for Clawdbot",
+  "keywords": [
+    "clawdbot",
+    "kagi",
+    "openclaw",
+    "plugin",
+    "search"
+  ],
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "type": "module",
+  "main": "index.ts"
+}
