@@ -368,6 +368,10 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
+  "channels.slack.assistant.enabled": "Slack AI Assistant",
+  "channels.slack.assistant.statusMessage": "Slack AI Status Message",
+  "channels.slack.assistant.channelContext": "Slack AI Channel Context",
+  "channels.slack.assistant.channelContextMessageLimit": "Slack AI Context Message Limit",
   "channels.mattermost.botToken": "Mattermost Bot Token",
   "channels.mattermost.baseUrl": "Mattermost Base URL",
   "channels.mattermost.chatmode": "Mattermost Chat Mode",
@@ -511,6 +515,14 @@ const FIELD_HELP: Record<string, string> = {
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
     "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+  "channels.slack.assistant.enabled":
+    'Enable Slack AI Assistant features (loading states). Requires "Agents & AI Apps" enabled in your Slack app settings.',
+  "channels.slack.assistant.statusMessage":
+    'Loading status message shown while processing (default: "is thinking...").',
+  "channels.slack.assistant.channelContext":
+    "Inject recent messages from the channel the user is viewing into assistant thread context. Enables channel-aware responses like 'summarize this channel'. Default: true when assistant is enabled.",
+  "channels.slack.assistant.channelContextMessageLimit":
+    "Maximum number of recent channel messages to include as context (default: 20).",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":

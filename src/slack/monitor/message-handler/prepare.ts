@@ -38,11 +38,14 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
+import { setAssistantStatus } from "../../assistant.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
+import { getThreadContext } from "../assistant-context.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
+import { fetchChannelContext } from "../channel-context.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
@@ -374,6 +377,18 @@ export async function prepareSlackMessage(params: {
         )
       : null;
 
+  // Set Slack AI Assistant status if enabled and we're acknowledging the message
+  const assistantConfig = account.config.assistant;
+  const assistantStatusPromise =
+    assistantConfig?.enabled && shouldAckReaction() && ackReactionMessageTs
+      ? setAssistantStatus({
+          client: ctx.app.client,
+          channelId: message.channel,
+          threadTs: ackReactionMessageTs,
+          status: assistantConfig.statusMessage ?? "is thinking...",
+        })
+      : null;
+
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
@@ -448,6 +463,29 @@ export async function prepareSlackMessage(params: {
         entries: [channelInfo?.topic, channelInfo?.purpose],
       })
     : undefined;
+
+  // Fetch channel context for assistant threads (channel the user is viewing).
+  let assistantChannelContext: string | undefined;
+  const assistantContextEnabled =
+    assistantConfig?.enabled && (assistantConfig.channelContext ?? true);
+  if (assistantContextEnabled && threadTs) {
+    const threadContext2 = getThreadContext(message.channel, threadTs);
+    if (threadContext2?.channelId && threadContext2.channelId !== message.channel) {
+      const channelCtx = await fetchChannelContext({
+        channelId: threadContext2.channelId,
+        clientOpts: { client: ctx.app.client },
+        client: ctx.app.client,
+        messageLimit: assistantConfig?.channelContextMessageLimit,
+      });
+      if (channelCtx) {
+        assistantChannelContext = channelCtx.contextBlock;
+        logVerbose(
+          `slack assistant context: injected ${channelCtx.messageCount} messages from ${channelCtx.channelName ?? threadContext2.channelId}`,
+        );
+      }
+    }
+  }
+
   const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
     (entry): entry is string => Boolean(entry),
   );
@@ -497,6 +535,10 @@ export async function prepareSlackMessage(params: {
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
 
+  const untrustedEntries = [untrustedChannelMetadata, assistantChannelContext].filter(
+    (entry): entry is string => Boolean(entry),
+  );
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     RawBody: rawBody,
@@ -509,7 +551,7 @@ export async function prepareSlackMessage(params: {
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
-    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+    UntrustedContext: untrustedEntries.length > 0 ? untrustedEntries : undefined,
     SenderName: senderName,
     SenderId: senderId,
     Provider: "slack" as const,
@@ -579,5 +621,6 @@ export async function prepareSlackMessage(params: {
     ackReactionMessageTs,
     ackReactionValue,
     ackReactionPromise,
+    assistantStatusPromise,
   };
 }
