@@ -42,6 +42,10 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { detectMime } from "../media/mime.js";
+import {
+  resolveDefenderWorkspace,
+  runDefenderRuntimeMonitor,
+} from "../security/defender-client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -1158,6 +1162,36 @@ async function handleInvoke(
   ) {
     // Avoid cmd.exe in allowlist mode on Windows; run the parsed argv directly.
     execArgv = segments[0].argv;
+  }
+
+  // Defender exec gate: if runtime-monitor.sh is present, validate command before spawning
+  const defenderWorkspace = resolveDefenderWorkspace();
+  const commandCheck = await runDefenderRuntimeMonitor(
+    defenderWorkspace,
+    "check-command",
+    [cmdText, params.agentId ?? ""],
+    5_000,
+  );
+  if (!commandCheck.ok) {
+    await sendNodeEvent(
+      client,
+      "exec.denied",
+      buildExecEventPayload({
+        sessionKey,
+        runId,
+        host: "node",
+        command: cmdText,
+        reason: "defender-command-blocked",
+      }),
+    );
+    await sendInvokeResult(client, frame, {
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: Command blocked by security policy (defender).",
+      },
+    });
+    return;
   }
 
   const result = await runCommand(
