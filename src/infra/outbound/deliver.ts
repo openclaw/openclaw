@@ -90,6 +90,7 @@ async function createChannelHandler(params: {
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  silent?: boolean;
 }): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -105,6 +106,7 @@ async function createChannelHandler(params: {
     threadId: params.threadId,
     deps: params.deps,
     gifPlayback: params.gifPlayback,
+    silent: params.silent,
   });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
@@ -122,6 +124,7 @@ function createPluginHandler(params: {
   threadId?: string | number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  silent?: boolean;
 }): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
@@ -147,6 +150,7 @@ function createPluginHandler(params: {
             threadId: params.threadId,
             gifPlayback: params.gifPlayback,
             deps: params.deps,
+            silent: params.silent,
             payload,
           })
       : undefined,
@@ -160,6 +164,7 @@ function createPluginHandler(params: {
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
+        silent: params.silent,
       }),
     sendMedia: async (caption, mediaUrl) =>
       sendMedia({
@@ -172,6 +177,7 @@ function createPluginHandler(params: {
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
+        silent: params.silent,
       }),
   };
 }
@@ -196,6 +202,7 @@ export async function deliverOutboundPayloads(params: {
     text?: string;
     mediaUrls?: string[];
   };
+  silent?: boolean;
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
@@ -212,6 +219,7 @@ export async function deliverOutboundPayloads(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
+    silent: params.silent,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
