@@ -87,6 +87,12 @@ export type GatewayAuthConfig = {
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /**
+   * Skip device pairing for connections coming through a trusted proxy with valid
+   * token/password auth. When true, devices connecting via trustedProxies with
+   * successful shared auth (token or password) will be auto-approved for pairing.
+   */
+  skipDevicePairingForTrustedProxy?: boolean;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
