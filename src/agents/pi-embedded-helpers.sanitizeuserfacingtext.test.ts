@@ -51,6 +51,18 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
   });
 
+  it("does not rewrite conversational mentions of billing topics", () => {
+    const text =
+      "Your billing setup looks correct. You can upgrade your plan or add credits from the provider's dashboard if needed.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not rewrite conversational mentions of role ordering", () => {
+    const text =
+      "The API returned 'roles must alternate' because your session had two consecutive user messages. This can happen when messages are retried.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("collapses consecutive duplicate paragraphs", () => {
     const text = "Hello there!\n\nHello there!";
     expect(sanitizeUserFacingText(text)).toBe("Hello there!");

@@ -137,6 +137,33 @@ function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
+/**
+ * Returns true when the text structurally looks like an error message rather
+ * than a normal assistant reply.  Used to guard keyword-based rewrites so
+ * that legitimate conversation about error topics is not swallowed (#3594).
+ *
+ * Heuristic: the text is short (≤500 chars) OR starts with a known error
+ * prefix OR is a raw API/HTTP error payload.
+ */
+function looksLikeErrorText(raw: string): boolean {
+  if (ERROR_PREFIX_RE.test(raw) || isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
+    return true;
+  }
+  if (CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)) {
+    return true;
+  }
+  // Text starting with an HTTP status code ≥ 400 (e.g. "400 Incorrect role
+  // information") is structurally error-like even when not in HTTP_ERROR_HINTS.
+  const httpMatch = raw.match(HTTP_STATUS_PREFIX_RE);
+  if (httpMatch) {
+    const code = Number(httpMatch[1]);
+    if (Number.isFinite(code) && code >= 400) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function shouldRewriteContextOverflowText(raw: string): boolean {
   if (!isContextOverflowError(raw)) {
     return false;
@@ -410,11 +437,21 @@ export function sanitizeUserFacingText(text: string): string {
     return stripped;
   }
 
-  if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-    return (
-      "Message ordering conflict - please try again. " +
-      "If this persists, use /new to start a fresh session."
-    );
+  // Guard keyword-based rewrites so they only trigger on text that
+  // structurally looks like an error message (short, starts with error
+  // prefix, or is a raw API payload).  This prevents false positives
+  // when the assistant legitimately discusses these topics (#3594).
+  if (looksLikeErrorText(trimmed)) {
+    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+      return (
+        "Message ordering conflict - please try again. " +
+        "If this persists, use /new to start a fresh session."
+      );
+    }
+
+    if (isBillingErrorMessage(trimmed)) {
+      return BILLING_ERROR_USER_MESSAGE;
+    }
   }
 
   if (shouldRewriteContextOverflowText(trimmed)) {
@@ -424,21 +461,7 @@ export function sanitizeUserFacingText(text: string): string {
     );
   }
 
-  if (isBillingErrorMessage(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-    return formatRawAssistantErrorForUi(trimmed);
-  }
-
-  if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
-    }
-    if (isTimeoutErrorMessage(trimmed)) {
-      return "LLM request timed out.";
-    }
     return formatRawAssistantErrorForUi(trimmed);
   }
 
