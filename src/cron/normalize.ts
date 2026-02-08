@@ -8,6 +8,8 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
+  /** Fallback timezone for cron schedules without explicit `tz`. */
+  defaultTimezone?: string;
 };
 
 const DEFAULT_OPTIONS: NormalizeOptions = {
@@ -373,6 +375,17 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
+    // Inject default timezone for cron schedules without explicit tz.
+    // This prevents jobs from silently using the gateway process timezone
+    // when the user's configured timezone differs (see #8399).
+    if (
+      options.defaultTimezone &&
+      isRecord(next.schedule) &&
+      next.schedule.kind === "cron" &&
+      !next.schedule.tz
+    ) {
+      next.schedule.tz = options.defaultTimezone;
+    }
   }
 
   if (!("payload" in next) || !isRecord(next.payload)) {
