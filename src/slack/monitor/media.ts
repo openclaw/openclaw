@@ -115,16 +115,19 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
-export async function resolveSlackMedia(params: {
-  files?: SlackFile[];
-  token: string;
-  maxBytes: number;
-}): Promise<{
+export type SlackMediaRef = {
   path: string;
   contentType?: string;
   placeholder: string;
-} | null> {
+};
+
+export async function resolveSlackMediaAll(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaRef[]> {
   const files = params.files ?? [];
+  const results: SlackMediaRef[] = [];
   for (const file of files) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) {
@@ -151,16 +154,26 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      results.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
-      // Ignore download failures and fall through to the next file.
+      // Ignore download failures and continue to the next file.
     }
   }
-  return null;
+  return results;
+}
+
+/** @deprecated Use resolveSlackMediaAll for multiple file support */
+export async function resolveSlackMedia(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaRef | null> {
+  const all = await resolveSlackMediaAll(params);
+  return all[0] ?? null;
 }
 
 export type SlackThreadStarter = {

@@ -168,6 +168,109 @@ describe("fetchWithSlackAuth", () => {
   });
 });
 
+describe("resolveSlackMediaAll", () => {
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    globalThis.fetch = mockFetch as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.resetModules();
+  });
+
+  it("returns all successfully downloaded files", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi
+        .fn()
+        .mockResolvedValueOnce({
+          path: "/tmp/first.jpg",
+          contentType: "image/jpeg",
+        })
+        .mockResolvedValueOnce({
+          path: "/tmp/second.png",
+          contentType: "image/png",
+        }),
+    }));
+
+    const { resolveSlackMediaAll } = await import("./media.js");
+
+    const response1 = new Response(Buffer.from("image1"), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" },
+    });
+    const response2 = new Response(Buffer.from("image2"), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+
+    mockFetch.mockResolvedValueOnce(response1).mockResolvedValueOnce(response2);
+
+    const result = await resolveSlackMediaAll({
+      files: [
+        { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
+        { url_private: "https://files.slack.com/second.png", name: "second.png" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].path).toBe("/tmp/first.jpg");
+    expect(result[1].path).toBe("/tmp/second.png");
+  });
+
+  it("continues processing when one file fails", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi.fn().mockResolvedValue({
+        path: "/tmp/second.jpg",
+        contentType: "image/jpeg",
+      }),
+    }));
+
+    const { resolveSlackMediaAll } = await import("./media.js");
+
+    // First file fails, second succeeds
+    mockFetch.mockRejectedValueOnce(new Error("Network error")).mockResolvedValueOnce(
+      new Response(Buffer.from("image"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackMediaAll({
+      files: [
+        { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
+        { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].path).toBe("/tmp/second.jpg");
+  });
+
+  it("returns empty array when all files fail", async () => {
+    const { resolveSlackMediaAll } = await import("./media.js");
+
+    mockFetch.mockRejectedValue(new Error("Network error"));
+
+    const result = await resolveSlackMediaAll({
+      files: [
+        { url_private: "https://files.slack.com/first.jpg", name: "first.jpg" },
+        { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toHaveLength(0);
+  });
+});
+
 describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
