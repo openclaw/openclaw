@@ -20,6 +20,7 @@ const LOCATION_COMMANDS = ["location.get"];
 
 const SMS_COMMANDS = ["sms.send"];
 
+// Full system commands for desktop platforms (macOS, Linux, Windows)
 const SYSTEM_COMMANDS = [
   "system.run",
   "system.which",
@@ -29,6 +30,9 @@ const SYSTEM_COMMANDS = [
   "browser.proxy",
 ];
 
+// Restricted system commands for Android - only what the app actually implements
+const ANDROID_SYSTEM_COMMANDS = ["system.notify"];
+
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [...CANVAS_COMMANDS, ...CAMERA_COMMANDS, ...SCREEN_COMMANDS, ...LOCATION_COMMANDS],
   android: [
@@ -37,6 +41,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
     ...LOCATION_COMMANDS,
     ...SMS_COMMANDS,
+    ...ANDROID_SYSTEM_COMMANDS,
   ],
   macos: [
     ...CANVAS_COMMANDS,
