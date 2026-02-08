@@ -55,6 +55,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -82,6 +83,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val gatewayToken by viewModel.gatewayToken.collectAsState()
+  val gatewayPassword by viewModel.gatewayPassword.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
@@ -383,6 +386,24 @@ fun SettingsSheet(viewModel: MainViewModel) {
     item {
       AnimatedVisibility(visible = advancedExpanded) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+          OutlinedTextField(
+            value = gatewayToken,
+            onValueChange = viewModel::setGatewayToken,
+            label = { Text("Gateway Token") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+          )
+          OutlinedTextField(
+            value = gatewayPassword,
+            onValueChange = viewModel::setGatewayPassword,
+            label = { Text("Gateway Password") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            visualTransformation = PasswordVisualTransformation(),
+          )
+
           ListItem(
             headlineContent = { Text("Use Manual Gateway") },
             supportingContent = { Text("Use this when discovery is blocked.") },
