@@ -37,6 +37,27 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
 }
 
+export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  if (raw.toLowerCase().startsWith("cron:")) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("cron:"));
+}
+
+/**
+ * Returns true for session types that should receive restricted bootstrap files
+ * (only AGENTS.md and TOOLS.md, not full personality/memory files).
+ * Currently: sub-agents and cron agentTurn sessions.
+ */
+export function isRestrictedBootstrapSession(sessionKey: string | undefined | null): boolean {
+  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
+}
+
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
