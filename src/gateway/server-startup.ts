@@ -8,6 +8,8 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { cleanupOrphanedLocks } from "../agents/session-write-lock.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { startGmailWatcher } from "../hooks/gmail-watcher.js";
 import {
   clearInternalHooks,
@@ -38,6 +40,17 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logBrowser: { error: (msg: string) => void };
 }) {
+  // Clean up orphaned session lock files left behind by previous crashes (#10170).
+  try {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent(undefined);
+    const removed = await cleanupOrphanedLocks(sessionsDir);
+    if (removed > 0) {
+      params.log.warn(`removed ${removed} orphaned session lock file${removed > 1 ? "s" : ""}`);
+    }
+  } catch {
+    // Best-effort; don't block startup if cleanup fails.
+  }
+
   // Start OpenClaw browser control server (unless disabled via config).
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   try {

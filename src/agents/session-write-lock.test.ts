@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing, acquireSessionWriteLock } from "./session-write-lock.js";
+import { __testing, acquireSessionWriteLock, cleanupOrphanedLocks } from "./session-write-lock.js";
 
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
@@ -157,5 +157,77 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+});
+
+describe("cleanupOrphanedLocks", () => {
+  it("removes lock files whose owning PID is dead", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+    try {
+      const lockPath = path.join(root, "session-abc.jsonl.lock");
+      // Use a PID that's almost certainly not running
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 999999999, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      const removed = await cleanupOrphanedLocks(root);
+      expect(removed).toBe(1);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes lock files with corrupted payloads", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+    try {
+      const lockPath = path.join(root, "session-abc.jsonl.lock");
+      await fs.writeFile(lockPath, "not-json", "utf8");
+
+      const removed = await cleanupOrphanedLocks(root);
+      expect(removed).toBe(1);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove lock files whose owning PID is alive", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+    try {
+      const lockPath = path.join(root, "session-abc.jsonl.lock");
+      // Use the current process PID which is definitely alive
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      const removed = await cleanupOrphanedLocks(root);
+      expect(removed).toBe(0);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores non-lock files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+    try {
+      await fs.writeFile(path.join(root, "session.jsonl"), "data", "utf8");
+      await fs.writeFile(path.join(root, "sessions.json"), "{}", "utf8");
+
+      const removed = await cleanupOrphanedLocks(root);
+      expect(removed).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 0 for non-existent directory", async () => {
+    const removed = await cleanupOrphanedLocks("/tmp/does-not-exist-" + Date.now());
+    expect(removed).toBe(0);
   });
 });
