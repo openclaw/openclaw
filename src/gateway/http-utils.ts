@@ -62,15 +62,40 @@ export function resolveAgentIdForRequest(params: {
   return fromModel ?? "main";
 }
 
+/**
+ * Check whether a session key belongs to the given authenticated user.
+ *
+ * Session keys for identified users contain `-user:{login}` or `:user:{login}`.
+ * When the auth layer provides a verified user identity (e.g. Tailscale whois),
+ * this prevents one user from accessing another user's session by supplying an
+ * arbitrary session key.
+ */
+export function sessionKeyBelongsToUser(sessionKey: string, authUser: string): boolean {
+  const normalized = authUser.trim().toLowerCase();
+  if (!normalized) {
+    return true; // No user identity to validate against
+  }
+  const keyLower = sessionKey.toLowerCase();
+  return keyLower.includes(`-user:${normalized}`) || keyLower.includes(`:user:${normalized}`);
+}
+
 export function resolveSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;
   prefix: string;
+  /** Verified user identity from gateway auth (e.g. Tailscale login). */
+  authUser?: string | undefined;
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
-    return explicit;
+    // When auth identifies a specific user, validate that the explicit session
+    // key belongs to that user to prevent cross-session access (CWE-639).
+    if (params.authUser && !sessionKeyBelongsToUser(explicit, params.authUser)) {
+      // Ignore the explicit key and fall through to generate a user-bound key.
+    } else {
+      return explicit;
+    }
   }
 
   const user = params.user?.trim();

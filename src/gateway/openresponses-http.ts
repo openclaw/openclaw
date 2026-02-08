@@ -249,6 +249,7 @@ function resolveOpenResponsesSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;
+  authUser?: string | undefined;
 }): string {
   return resolveSessionKey({ ...params, prefix: "openresponses" });
 }
@@ -474,7 +475,12 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
   const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveOpenResponsesSessionKey({ req, agentId, user });
+  const sessionKey = resolveOpenResponsesSessionKey({
+    req,
+    agentId,
+    user,
+    authUser: authResult.user,
+  });
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
