@@ -70,6 +70,20 @@ async function resolveRealpathSafe(inputPath: string): Promise<string> {
   }
 }
 
+/**
+ * Derive working directory from a dist entrypoint path.
+ * E.g., /path/to/moltbot/dist/entry.js -> /path/to/moltbot
+ */
+function resolveWorkingDirectoryFromEntrypoint(entrypointPath: string): string | undefined {
+  const dir = path.dirname(entrypointPath);
+  const parts = dir.split(path.sep);
+  const distIndex = parts.lastIndexOf("dist");
+  if (distIndex > 0) {
+    return parts.slice(0, distIndex).join(path.sep);
+  }
+  return undefined;
+}
+
 function buildDistCandidates(...inputs: string[]): string[] {
   const candidates: string[] = [];
   const seen = new Set<string>();
@@ -181,6 +195,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveWorkingDirectoryFromEntrypoint(cliEntrypointPath),
     };
   }
 
@@ -200,6 +215,7 @@ async function resolveCliProgramArguments(params: {
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [bunPath, cliEntrypointPath, ...params.args],
+      workingDirectory: resolveWorkingDirectoryFromEntrypoint(cliEntrypointPath),
     };
   }
 
@@ -208,6 +224,7 @@ async function resolveCliProgramArguments(params: {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
       return {
         programArguments: [execPath, cliEntrypointPath, ...params.args],
+        workingDirectory: resolveWorkingDirectoryFromEntrypoint(cliEntrypointPath),
       };
     } catch (error) {
       // If running under bun or another runtime that can execute TS directly
