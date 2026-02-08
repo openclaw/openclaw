@@ -63,8 +63,12 @@ describe("extensionForMime", () => {
   });
 
   it("maps audio MIME types to extensions", () => {
+    expect(extensionForMime("audio/aac")).toBe(".aac");
+    expect(extensionForMime("audio/flac")).toBe(".flac");
     expect(extensionForMime("audio/mpeg")).toBe(".mp3");
     expect(extensionForMime("audio/ogg")).toBe(".ogg");
+    expect(extensionForMime("audio/opus")).toBe(".opus");
+    expect(extensionForMime("audio/wav")).toBe(".wav");
     expect(extensionForMime("audio/x-m4a")).toBe(".m4a");
     expect(extensionForMime("audio/mp4")).toBe(".m4a");
   });
