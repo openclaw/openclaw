@@ -1,11 +1,42 @@
+import type { AgentConfig } from "../../../config/types.agents.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SlackMonitorContext } from "../context.js";
-import { danger } from "../../../globals.js";
+import { danger, logVerbose } from "../../../globals.js";
 import { VERSION } from "../../../version.js";
-import { hasCurrentHomeTab, hasCustomHomeTab, markHomeTabPublished } from "../../home-tab-state.js";
+import {
+  clearPublishInFlight,
+  hasCurrentHomeTab,
+  hasCustomHomeTab,
+  isPublishInFlight,
+  markHomeTabPublished,
+  markPublishInFlight,
+} from "../../home-tab-state.js";
 import { buildDefaultHomeView, type HomeTabParams } from "../../home-tab.js";
 
-/** Gateway process start time — used for uptime display. */
-const GATEWAY_START_MS = Date.now();
+/** Returns process uptime in milliseconds, consistent with gateway health state. */
+function processUptimeMs(): number {
+  return Math.round(process.uptime() * 1000);
+}
+
+/**
+ * Resolve the primary model string for an agent, falling back to the
+ * agents.defaults or top-level model config.
+ * @internal Exported for testing only.
+ */
+export function resolveAgentModelDisplay(
+  agent: AgentConfig | undefined,
+  cfg: OpenClawConfig,
+): string {
+  const agentModel = agent?.model;
+  if (agentModel) {
+    return typeof agentModel === "string" ? agentModel : (agentModel.primary ?? "—");
+  }
+  const defaultsModel = cfg.agents?.defaults?.model;
+  if (defaultsModel?.primary) {
+    return defaultsModel.primary;
+  }
+  return "—";
+}
 
 export type AppHomeConfig = {
   enabled?: boolean;
@@ -28,12 +59,9 @@ function resolveSlashCommandInfo(ctx: SlackMonitorContext): {
   enabled: boolean;
   name: string;
 } {
-  const cfg = ctx.cfg;
-  const slackCfg = cfg.channels?.slack as Record<string, unknown> | undefined;
-  const slashCommand = slackCfg?.slashCommand as { enabled?: boolean; name?: string } | undefined;
   return {
-    enabled: slashCommand?.enabled ?? false,
-    name: slashCommand?.name?.trim() || "openclaw",
+    enabled: ctx.slashCommand.enabled,
+    name: ctx.slashCommand.name?.trim() || "openclaw",
   };
 }
 
@@ -47,33 +75,40 @@ function resolveBotName(ctx: SlackMonitorContext): string {
   );
 }
 
-function resolveModel(ctx: SlackMonitorContext): string | undefined {
-  const cfg = ctx.cfg;
-  const agents = cfg.agents?.list ?? [];
-  const defaultAgent = agents.find((a) => a.default) ?? agents[0];
-  const model = defaultAgent?.model;
-  if (model) {
-    return typeof model === "string" ? model : (model.primary ?? undefined);
-  }
-  const defaultsModel = cfg.agents?.defaults?.model;
-  if (defaultsModel?.primary) {
-    return defaultsModel.primary;
-  }
-  return undefined;
-}
-
 function resolveChannelIds(ctx: SlackMonitorContext): string[] {
   const cfg = ctx.cfg;
-  const slackCfg = cfg.channels?.slack as Record<string, unknown> | undefined;
-  const channels = slackCfg?.channels as Record<string, unknown> | undefined;
-  if (!channels) {
-    return [];
+  const slackCfg = cfg.channels?.slack;
+  const channelIds: string[] = [];
+
+  if (slackCfg) {
+    // Top-level channels (single-account or default account)
+    if (slackCfg.channels) {
+      channelIds.push(...Object.keys(slackCfg.channels));
+    }
+    // Multi-account channels
+    if (slackCfg.accounts) {
+      for (const account of Object.values(slackCfg.accounts)) {
+        if (account?.channels) {
+          channelIds.push(...Object.keys(account.channels));
+        }
+      }
+    }
   }
-  return Object.keys(channels).filter((k) => k !== "*");
+
+  return channelIds.filter((k) => k !== "*");
 }
 
 export function registerSlackAppHomeEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
+
+  // If explicitly disabled, don't register the event at all
+  const homeTabConfig = resolveHomeTabConfig(ctx);
+  if (homeTabConfig.enabled === false) {
+    logVerbose("slack: home tab disabled via config");
+    return;
+  }
+
+  const accountId = ctx.accountId;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (ctx.app as any).event(
@@ -90,48 +125,65 @@ export function registerSlackAppHomeEvents(params: { ctx: SlackMonitorContext })
           return;
         }
 
+        if (!ctx.botUserId) {
+          logVerbose("slack: skipping home tab publish — botUserId not available");
+          return;
+        }
+
         const userId = event.user as string;
 
-        const homeTabConfig = resolveHomeTabConfig(ctx);
-        if (!homeTabConfig.enabled) {
+        // If the user has a custom (agent-pushed) view, don't overwrite it.
+        if (hasCustomHomeTab(accountId, userId)) {
+          logVerbose(`slack: home tab has custom view for ${userId}, skipping default publish`);
           return;
         }
 
-        // Skip if user has a custom (agent-pushed) view
-        if (hasCustomHomeTab(userId)) {
+        // Skip re-publish if this user already has the current version rendered
+        if (hasCurrentHomeTab(accountId, userId, VERSION)) {
+          logVerbose(`slack: home tab already published for ${userId}, skipping`);
           return;
         }
 
-        // Skip if we already published the current version for this user
-        if (hasCurrentHomeTab(userId, VERSION)) {
+        // Deduplicate concurrent app_home_opened events for the same user
+        if (isPublishInFlight(accountId, userId)) {
+          logVerbose(`slack: home tab publish already in-flight for ${userId}, skipping`);
           return;
         }
+        markPublishInFlight(accountId, userId);
 
-        const slashCmd = resolveSlashCommandInfo(ctx);
-        const botName = resolveBotName(ctx);
+        try {
+          const slashCmd = resolveSlashCommandInfo(ctx);
+          const botName = resolveBotName(ctx);
+          const model = resolveAgentModelDisplay(
+            (ctx.cfg.agents?.list ?? []).find((a) => a.default) ?? ctx.cfg.agents?.list?.[0],
+            ctx.cfg,
+          );
 
-        const viewParams: HomeTabParams = {
-          botName,
-          showCommands: homeTabConfig.showCommands,
-          slashCommandName: slashCmd.name,
-          slashCommandEnabled: slashCmd.enabled,
-          customBlocks: homeTabConfig.customBlocks,
-          version: VERSION,
-          uptimeMs: Date.now() - GATEWAY_START_MS,
-          model: resolveModel(ctx),
-          channelIds: resolveChannelIds(ctx),
-          botUserId: ctx.botUserId,
-        };
+          const viewParams: HomeTabParams = {
+            botName,
+            showCommands: homeTabConfig.showCommands,
+            slashCommandName: slashCmd.name,
+            slashCommandEnabled: slashCmd.enabled,
+            customBlocks: homeTabConfig.customBlocks,
+            version: VERSION,
+            uptimeMs: processUptimeMs(),
+            model,
+            channelIds: resolveChannelIds(ctx),
+            botUserId: ctx.botUserId,
+          };
 
-        const view = buildDefaultHomeView(viewParams);
+          const view = buildDefaultHomeView(viewParams);
 
-        await ctx.app.client.views.publish({
-          token: ctx.botToken,
-          user_id: userId,
-          view,
-        });
+          await ctx.app.client.views.publish({
+            token: ctx.botToken,
+            user_id: userId,
+            view,
+          });
 
-        markHomeTabPublished(userId, VERSION);
+          markHomeTabPublished(accountId, userId, VERSION);
+        } finally {
+          clearPublishInFlight(accountId, userId);
+        }
       } catch (err) {
         ctx.runtime.error?.(danger(`slack app_home_opened handler failed: ${String(err)}`));
       }

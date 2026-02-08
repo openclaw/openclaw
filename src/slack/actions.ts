@@ -457,19 +457,21 @@ export async function publishSlackHomeTab(
   blocks: Record<string, unknown>[],
   opts: SlackActionClientOpts = {},
 ): Promise<void> {
+  const accountId = opts.accountId ?? "default";
   const client = await getClient(opts);
   await client.views.publish({
     user_id: userId,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Block Kit JSON built dynamically
     view: { type: "home", blocks: blocks as any },
   });
-  markHomeTabCustom(userId);
+  markHomeTabCustom(accountId, userId);
 }
 
 /**
  * Clear a user's custom Home Tab view, allowing the default view to be
  * published again on the next `app_home_opened` event.
  */
-export function resetSlackHomeTab(userId: string): void {
-  clearHomeTabCustom(userId);
+export function resetSlackHomeTab(userId: string, opts: SlackActionClientOpts = {}): void {
+  const accountId = opts.accountId ?? "default";
+  clearHomeTabCustom(accountId, userId);
 }

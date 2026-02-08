@@ -472,9 +472,17 @@ Example:
 }
 ```
 
-Once an agent publishes a custom view, the default Home Tab view will **not** overwrite it on subsequent tab opens. Use `resetHomeTab` (with `userId`) to clear the custom view and restore the default.
+Once an agent publishes a custom view, the default Home Tab view will **not** overwrite it on subsequent tab opens.
 
-This action is gated by the `homeTab` key in the actions config (enabled by default).
+To restore the default view, use the `resetHomeTab` action:
+
+| Parameter | Type     | Required | Description                                      |
+| --------- | -------- | -------- | ------------------------------------------------ |
+| `userId`  | `string` | yes      | Slack user ID whose Home tab to reset to default |
+
+The default view also resumes automatically after a process restart.
+
+Both actions are gated by the `homeTab` key in the actions config (enabled by default).
 
 ### Setup for existing apps
 

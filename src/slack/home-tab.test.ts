@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { SlackAccountSchema } from "../config/zod-schema.providers-core.js";
 import { buildDefaultHomeView, formatUptime } from "./home-tab.js";
+import { resolveAgentModelDisplay } from "./monitor/events/app-home.js";
 
 describe("formatUptime", () => {
   it("formats minutes only", () => {
@@ -129,5 +132,53 @@ describe("buildDefaultHomeView", () => {
     expect(text).not.toContain("token");
     expect(text).not.toContain("Dashboard");
     expect(text).not.toContain("127.0.0.1");
+  });
+});
+
+describe("resolveAgentModelDisplay", () => {
+  it("returns agent model string", () => {
+    expect(resolveAgentModelDisplay({ id: "a", model: "anthropic/claude-3" }, {})).toBe(
+      "anthropic/claude-3",
+    );
+  });
+
+  it("returns agent model primary from object", () => {
+    expect(resolveAgentModelDisplay({ id: "a", model: { primary: "openai/gpt-5" } }, {})).toBe(
+      "openai/gpt-5",
+    );
+  });
+
+  it("falls back to agents.defaults.model.primary", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "fallback/model" } } },
+    };
+    expect(resolveAgentModelDisplay({ id: "a" }, cfg)).toBe("fallback/model");
+  });
+
+  it("returns dash when no model configured", () => {
+    expect(resolveAgentModelDisplay(undefined, {})).toBe("—");
+  });
+});
+
+describe("Zod schema validation", () => {
+  it("accepts homeTab config in SlackAccountSchema", () => {
+    const result = SlackAccountSchema.safeParse({
+      homeTab: { enabled: true },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts homeTab: false in actions config", () => {
+    const result = SlackAccountSchema.safeParse({
+      actions: { homeTab: false },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown keys in homeTab config", () => {
+    const result = SlackAccountSchema.safeParse({
+      homeTab: { enabled: true, unknownKey: "bad" },
+    });
+    expect(result.success).toBe(false);
   });
 });

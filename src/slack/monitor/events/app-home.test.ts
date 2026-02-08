@@ -215,10 +215,9 @@ describe("app_home_opened event", () => {
         },
       },
     });
-    await fireAppHomeOpened();
 
-    const client = getSlackClient() as { views: { publish: ReturnType<typeof vi.fn> } };
-    expect(client.views.publish).not.toHaveBeenCalled();
+    // When disabled, the event handler is not registered at all
+    expect(getSlackHandlers()?.has("app_home_opened")).toBe(false);
   });
 
   it("handles views.publish errors gracefully without throwing", async () => {
