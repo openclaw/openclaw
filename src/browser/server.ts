@@ -1,3 +1,4 @@
+import type { RequestHandler } from "express";
 import type { Server } from "node:http";
 import express from "express";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
@@ -7,6 +8,33 @@ import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+
+/**
+ * Allowed Host header values for DNS rebinding protection.
+ * Only localhost variants are permitted since the server binds to 127.0.0.1.
+ */
+const ALLOWED_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Middleware to validate Host header and prevent DNS rebinding attacks.
+ * Rejects requests where the Host header doesn't match localhost variants.
+ */
+function createHostValidationMiddleware(): RequestHandler {
+  return (req, res, next) => {
+    const hostHeader = req.headers.host;
+    if (!hostHeader) {
+      res.status(400).json({ error: "Missing Host header" });
+      return;
+    }
+    // Extract hostname without port (e.g., "127.0.0.1:3000" -> "127.0.0.1")
+    const hostname = hostHeader.split(":")[0];
+    if (!ALLOWED_HOSTS.has(hostname)) {
+      res.status(403).json({ error: "Invalid Host header" });
+      return;
+    }
+    next();
+  };
+}
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -25,6 +53,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const app = express();
   app.use(express.json({ limit: "1mb" }));
+  app.use(createHostValidationMiddleware());
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
