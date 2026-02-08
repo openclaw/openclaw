@@ -163,6 +163,12 @@ type ExecProcessHandle = {
   kill: () => void;
 };
 
+/** Hint about a skill-managed binary so the model can self-correct on "command not found". */
+export type SkillBinHint = {
+  skillName: string;
+  skillPath: string;
+};
+
 export type ExecToolDefaults = {
   host?: ExecHost;
   security?: ExecSecurity;
@@ -182,6 +188,8 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
+  /** Map from binary name to skill info; used to hint the model on "command not found". */
+  skillBinHints?: ReadonlyMap<string, SkillBinHint>;
 };
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -191,6 +199,59 @@ export type ExecElevatedDefaults = {
   allowed: boolean;
   defaultLevel: "on" | "off" | "ask" | "full";
 };
+
+// ---------------------------------------------------------------------------
+// Skill-aware hints for "command not found" failures
+// ---------------------------------------------------------------------------
+
+const SHELL_PREFIXES = new Set(["sudo", "env", "nohup", "nice", "time"]);
+
+/** Extract the primary binary name from a shell command string. */
+export function extractBinaryName(command: string): string | undefined {
+  const tokens = command.trimStart().split(/\s+/).filter(Boolean);
+  for (const token of tokens) {
+    if (/^[A-Za-z_]\w*=/.test(token)) {
+      // Skip env var assignments (FOO=bar)
+      continue;
+    }
+    if (SHELL_PREFIXES.has(token)) {
+      // Skip common shell prefixes
+      continue;
+    }
+    // Return basename (strip leading path)
+    return token.split("/").pop() || undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Build a skill hint for a failed command when exit code is 127 (command not found).
+ * Returns undefined when no hint applies.
+ */
+export function buildSkillHint(
+  command: string,
+  exitCode: number | null,
+  hints: ReadonlyMap<string, SkillBinHint> | undefined,
+): string | undefined {
+  if (!hints || hints.size === 0) {
+    return undefined;
+  }
+  if (exitCode !== 127) {
+    return undefined;
+  }
+  const bin = extractBinaryName(command);
+  if (!bin) {
+    return undefined;
+  }
+  const hint = hints.get(bin);
+  if (!hint) {
+    return undefined;
+  }
+  return (
+    `Hint: "${bin}" is provided by the "${hint.skillName}" skill. ` +
+    `Read ${hint.skillPath} for correct usage before retrying.`
+  );
+}
 
 const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
@@ -1253,11 +1314,16 @@ export function createExecTool(
         const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
         const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
         const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+        const baseText = stdout || stderr || errorText || "";
+        const nodeSkillHint = !success
+          ? buildSkillHint(params.command, exitCode, defaults?.skillBinHints)
+          : undefined;
+        const text = nodeSkillHint ? `${baseText}\n\n${nodeSkillHint}` : baseText;
         return {
           content: [
             {
               type: "text",
-              text: stdout || stderr || errorText || "",
+              text,
             },
           ],
           details: {
@@ -1594,7 +1660,15 @@ export function createExecTool(
               return;
             }
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              const skillHint = buildSkillHint(
+                params.command,
+                outcome.exitCode,
+                defaults?.skillBinHints,
+              );
+              const reason = skillHint
+                ? `${outcome.reason ?? "Command failed."}\n\n${skillHint}`
+                : (outcome.reason ?? "Command failed.");
+              reject(new Error(reason));
               return;
             }
             resolve({

@@ -3,6 +3,7 @@ export type {
   ExecElevatedDefaults,
   ExecToolDefaults,
   ExecToolDetails,
+  SkillBinHint,
 } from "./bash-tools.exec.js";
 export { createExecTool, execTool } from "./bash-tools.exec.js";
 export type { ProcessToolDefaults } from "./bash-tools.process.js";

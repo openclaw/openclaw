@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
+import type { SkillBinHint } from "../../bash-tools.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -55,6 +56,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,
+  type SkillEntry,
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
@@ -187,6 +189,12 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
+    // Build a bin→skill map so the exec tool can hint the model on "command not found".
+    // When the snapshot path skips loading entries, load them cheaply just for bin hints.
+    const skillBinHints = buildSkillBinHintsFromEntries(
+      skillEntries.length > 0 ? skillEntries : loadWorkspaceSkillEntries(effectiveWorkspace),
+    );
+
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
@@ -212,6 +220,7 @@ export async function runEmbeddedAttempt(
           exec: {
             ...params.execOverrides,
             elevated: params.bashElevated,
+            skillBinHints,
           },
           sandbox,
           messageProvider: params.messageChannel ?? params.messageProvider,
@@ -925,4 +934,31 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
     process.chdir(prevCwd);
   }
+}
+
+/** Map required skill binaries to their skill name + SKILL.md path for exec hints. */
+function buildSkillBinHintsFromEntries(
+  entries: SkillEntry[],
+): ReadonlyMap<string, SkillBinHint> | undefined {
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const hints = new Map<string, SkillBinHint>();
+  for (const entry of entries) {
+    const bins = entry.metadata?.requires?.bins;
+    if (!bins || bins.length === 0) {
+      continue;
+    }
+    for (const bin of bins) {
+      // First-seen wins; entries are already in priority order from loadWorkspaceSkillEntries.
+      if (hints.has(bin)) {
+        continue;
+      }
+      hints.set(bin, {
+        skillName: entry.skill.name,
+        skillPath: entry.skill.filePath,
+      });
+    }
+  }
+  return hints.size > 0 ? hints : undefined;
 }
