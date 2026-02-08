@@ -62,6 +62,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       bot,
       cfg,
       account,
+      telegramCfg,
       historyLimit,
       groupHistories,
       dmPolicy,
