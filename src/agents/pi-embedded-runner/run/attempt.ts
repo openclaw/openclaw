@@ -30,6 +30,7 @@ import {
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
+import { modelSupportsTools } from "../../model-compat.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import {
   isCloudCodeAssistFormatError,
@@ -206,44 +207,56 @@ export async function runEmbeddedAttempt(
 
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
-    const toolsRaw = params.disableTools
-      ? []
-      : createOpenClawCodingTools({
-          exec: {
-            ...params.execOverrides,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-          agentAccountId: params.agentAccountId,
-          messageTo: params.messageTo,
-          messageThreadId: params.messageThreadId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
-          sessionKey: params.sessionKey ?? params.sessionId,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          config: params.config,
-          abortSignal: runAbortController.signal,
-          modelProvider: params.model.provider,
-          modelId: params.modelId,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-          currentChannelId: params.currentChannelId,
-          currentThreadTs: params.currentThreadTs,
-          replyToMode: params.replyToMode,
-          hasRepliedRef: params.hasRepliedRef,
-          modelHasVision,
-          requireExplicitMessageTarget:
-            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-          disableMessageTool: params.disableMessageTool,
-        });
+
+    // Check if model supports tools via compat.supportedParameters
+    // If not declared (undefined), assume tools are supported (backward compat with cloud providers)
+    // If explicitly declared, check if "tools" is in the array
+    const modelHasToolSupport = modelSupportsTools(params.model);
+
+    if (!modelHasToolSupport) {
+      log.debug(
+        `Tools disabled for model ${params.modelId}: compat.supportedParameters does not include "tools"`,
+      );
+    }
+    const toolsRaw =
+      params.disableTools || !modelHasToolSupport
+        ? []
+        : createOpenClawCodingTools({
+            exec: {
+              ...params.execOverrides,
+              elevated: params.bashElevated,
+            },
+            sandbox,
+            messageProvider: params.messageChannel ?? params.messageProvider,
+            agentAccountId: params.agentAccountId,
+            messageTo: params.messageTo,
+            messageThreadId: params.messageThreadId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            config: params.config,
+            abortSignal: runAbortController.signal,
+            modelProvider: params.model.provider,
+            modelId: params.modelId,
+            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
+            modelHasVision,
+            requireExplicitMessageTarget:
+              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            disableMessageTool: params.disableMessageTool,
+          });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 

@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -17,11 +18,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "duckduckgo"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -29,6 +31,41 @@ const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+// Cached proxy agent for reuse
+let proxyDispatcher: Dispatcher | undefined;
+
+function detectProxyUrl(): string | undefined {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    undefined
+  );
+}
+
+function getProxyDispatcher(): Dispatcher | undefined {
+  if (proxyDispatcher !== undefined) {
+    return proxyDispatcher;
+  }
+  const proxyUrl = detectProxyUrl();
+  if (!proxyUrl) {
+    return undefined;
+  }
+  proxyDispatcher = new ProxyAgent(proxyUrl);
+  return proxyDispatcher;
+}
+
+async function proxyFetch(input: string | URL, init?: RequestInit): Promise<Response> {
+  const dispatcher = getProxyDispatcher();
+  if (dispatcher) {
+    return undiciFetch(input, { ...init, dispatcher } as Parameters<
+      typeof undiciFetch
+    >[1]) as unknown as Response;
+  }
+  return fetch(input, init);
+}
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 
@@ -151,6 +188,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       : "";
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "duckduckgo" || raw === "ddg") {
+    return "duckduckgo";
   }
   if (raw === "brave") {
     return "brave";
@@ -309,16 +349,120 @@ function resolveSiteName(url: string | undefined): string | undefined {
   }
 }
 
+type DuckDuckGoSearchResult = {
+  title: string;
+  url: string;
+  description: string;
+  siteName?: string;
+};
+
+function parseDuckDuckGoHtml(html: string): DuckDuckGoSearchResult[] {
+  const results: DuckDuckGoSearchResult[] = [];
+  const linkRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
+  const snippetRegex = /<a[^>]*class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)<\/a>/gi;
+
+  const links: { url: string; title: string }[] = [];
+  let match;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    let url = match[1] ?? "";
+    const title = (match[2] ?? "").trim();
+
+    if (url.includes("uddg=")) {
+      try {
+        const parsed = new URL(url, "https://duckduckgo.com");
+        const realUrl = parsed.searchParams.get("uddg");
+        if (realUrl) {
+          url = decodeURIComponent(realUrl);
+        }
+      } catch {
+        // Keep original URL if parsing fails
+      }
+    }
+
+    if (url && title && url.startsWith("http")) {
+      links.push({ url, title });
+    }
+  }
+
+  const snippets: string[] = [];
+  while ((match = snippetRegex.exec(html)) !== null) {
+    const snippet = (match[1] ?? "").replace(/<[^>]*>/g, "").trim();
+    snippets.push(snippet);
+  }
+
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    if (!link) {
+      continue;
+    }
+    results.push({
+      title: link.title,
+      url: link.url,
+      description: snippets[i] ?? "",
+      siteName: resolveSiteName(link.url),
+    });
+  }
+
+  return results;
+}
+
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<DuckDuckGoSearchResult[]> {
+  const { execFileSync } = await import("child_process");
+
+  const curlArgs = [
+    "-s",
+    "--max-time",
+    String(params.timeoutSeconds),
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/x-www-form-urlencoded",
+    "-H",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "-H",
+    "Accept: text/html",
+    "-d",
+    `q=${encodeURIComponent(params.query)}`,
+    DUCKDUCKGO_HTML_ENDPOINT,
+  ];
+
+  try {
+    const html = execFileSync("curl", curlArgs, {
+      encoding: "utf-8",
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: params.timeoutSeconds * 1000,
+    });
+
+    const allResults = parseDuckDuckGoHtml(html);
+
+    if (allResults.length === 0 && html.includes("<title>") && !html.includes("at DuckDuckGo")) {
+      throw new Error(
+        "DuckDuckGo returned homepage instead of search results (possible anti-bot detection)",
+      );
+    }
+
+    return allResults.slice(0, params.count);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`DuckDuckGo search failed: ${message}`, { cause: err });
+  }
+}
+
 async function runPerplexitySearch(params: {
   query: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
-  const res = await fetch(endpoint, {
+  const res = await proxyFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -353,7 +497,7 @@ async function runPerplexitySearch(params: {
 async function runWebSearch(params: {
   query: string;
   count: number;
-  apiKey: string;
+  apiKey?: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
@@ -379,7 +523,7 @@ async function runWebSearch(params: {
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       timeoutSeconds: params.timeoutSeconds,
@@ -392,6 +536,23 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       content: wrapWebContent(content),
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "duckduckgo") {
+    const ddgResults = await runDuckDuckGoSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: ddgResults.length,
+      tookMs: Date.now() - start,
+      results: ddgResults,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -417,11 +578,11 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", params.freshness);
   }
 
-  const res = await fetch(url.toString(), {
+  const res = await proxyFetch(url.toString(), {
     method: "GET",
     headers: {
       Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
+      "X-Subscription-Token": params.apiKey!,
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
@@ -486,7 +647,7 @@ export function createWebSearchTool(options?: {
       const apiKey =
         provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      if (!apiKey && provider !== "duckduckgo") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;

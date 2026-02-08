@@ -75,3 +75,6 @@ USER.md
 memory/
 .agent/*.json
 !.agent/workflows/
+
+# Local patch documentation
+patch_readme_*.md

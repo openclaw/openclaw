@@ -18,6 +18,9 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
+    // Local model tool support: declare supported API parameters (e.g. "tools", "tool_choice")
+    // This allows local models (sglang, vLLM, etc.) to declare tool calling capability
+    supportedParameters: z.array(z.string()).optional(),
   })
   .strict()
   .optional();

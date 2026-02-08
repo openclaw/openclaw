@@ -11,6 +11,12 @@ export type ModelCompatConfig = {
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
+  /**
+   * Declare API parameters supported by this model (e.g. ["tools", "tool_choice"]).
+   * Local inference servers (sglang, vLLM, etc.) can use this to enable tool calling.
+   * If not set, tools will be sent by default (existing behavior for cloud providers).
+   */
+  supportedParameters?: string[];
 };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
