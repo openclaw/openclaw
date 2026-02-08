@@ -118,6 +118,9 @@ export const FeishuAccountConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema,
     tools: FeishuToolsConfigSchema,
+    // Optimization flags
+    typingIndicator: z.boolean().optional(),
+    resolveSenderNames: z.boolean().optional(),
   })
   .strict();
 
@@ -152,6 +155,9 @@ export const FeishuConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     renderMode: RenderModeSchema, // raw = plain text (default), card = interactive card with markdown
     tools: FeishuToolsConfigSchema,
+    // Optimization flags
+    typingIndicator: z.boolean().optional().default(true),
+    resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

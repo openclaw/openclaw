@@ -527,25 +527,27 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
-  const senderResult = await resolveFeishuSenderName({
-    account,
-    senderOpenId: ctx.senderOpenId,
-    log,
-  });
-  if (senderResult.name) {
-    ctx = { ...ctx, senderName: senderResult.name };
-  }
+  // Optimization: skip if disabled to save API quota (Feishu free tier limit)
+  if (feishuCfg?.resolveSenderNames ?? true) {
+    const senderResult = await resolveFeishuSenderName({
+      account,
+      senderOpenId: ctx.senderOpenId,
+      log,
+    });
+    if (senderResult.name) {
+      ctx = { ...ctx, senderName: senderResult.name };
+    }
 
-  // Track permission error to inform agent later (with cooldown to avoid repetition)
-  let permissionErrorForAgent: PermissionError | undefined;
-  if (senderResult.permissionError) {
-    const appKey = account.appId ?? "default";
-    const now = Date.now();
-    const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
+    // Track permission error to inform agent later (with cooldown to avoid repetition)
+    if (senderResult.permissionError) {
+      const appKey = account.appId ?? "default";
+      const now = Date.now();
+      const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
 
-    if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
-      permissionErrorNotifiedAt.set(appKey, now);
-      permissionErrorForAgent = senderResult.permissionError;
+      if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
+        permissionErrorNotifiedAt.set(appKey, now);
+        permissionErrorForAgent = senderResult.permissionError;
+      }
     }
   }
 
