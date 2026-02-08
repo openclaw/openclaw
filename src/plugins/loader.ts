@@ -11,6 +11,7 @@ import type {
   PluginLogger,
 } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isScannable, scanSource } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
@@ -289,6 +290,37 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         message: record.error,
       });
       continue;
+    }
+
+    // Scan plugin source for dangerous code patterns before loading
+    if (isScannable(candidate.source)) {
+      try {
+        const rawSource = fs.readFileSync(candidate.source, "utf-8");
+        const scanFindings = scanSource(rawSource, candidate.source);
+        const criticalFindings = scanFindings.filter((f) => f.severity === "critical");
+        if (criticalFindings.length > 0) {
+          const details = criticalFindings
+            .map((f) => `${f.message} (line ${f.line})`)
+            .join("; ");
+          logger.error(
+            `[plugins] ${pluginId} blocked from loading: dangerous code patterns detected in ${candidate.source}: ${details}`,
+          );
+          record.status = "error";
+          record.error = `blocked: dangerous code patterns detected: ${details}`;
+          registry.plugins.push(record);
+          seenIds.set(pluginId, candidate.origin);
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: record.error,
+          });
+          continue;
+        }
+      } catch {
+        // Scan failure should not prevent loading — log and continue
+        logger.warn(`[plugins] ${pluginId} source scan failed for ${candidate.source}`);
+      }
     }
 
     let mod: OpenClawPluginModule | null = null;

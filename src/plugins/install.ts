@@ -10,7 +10,11 @@ import {
   resolvePackedRootDir,
 } from "../infra/archive.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import {
+  isScannable,
+  scanDirectoryWithSummary,
+  scanSource,
+} from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 type PluginInstallLogger = {
@@ -140,6 +144,7 @@ async function installPluginFromPackageDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
@@ -194,7 +199,7 @@ async function installPluginFromPackageDir(params: {
     forcedScanEntries.push(resolvedEntry);
   }
 
-  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
+  // Scan plugin source for dangerous code patterns (blocks install on critical findings)
   try {
     const scanSummary = await scanDirectoryWithSummary(params.packageDir, {
       includeFiles: forcedScanEntries,
@@ -204,8 +209,14 @@ async function installPluginFromPackageDir(params: {
         .filter((f) => f.severity === "critical")
         .map((f) => `${f.message} (${f.file}:${f.line})`)
         .join("; ");
+      if (!params.skipScan) {
+        return {
+          ok: false,
+          error: `Plugin "${pluginId}" blocked: dangerous code patterns detected: ${criticalDetails}. Use --force to override.`,
+        };
+      }
       logger.warn?.(
-        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
+        `WARNING: Plugin "${pluginId}" contains dangerous code patterns (scan overridden): ${criticalDetails}`,
       );
     } else if (scanSummary.warn > 0) {
       logger.warn?.(
@@ -316,6 +327,7 @@ export async function installPluginFromArchive(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
@@ -361,6 +373,7 @@ export async function installPluginFromArchive(params: {
     mode,
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
+    skipScan: params.skipScan,
   });
 }
 
@@ -372,6 +385,7 @@ export async function installPluginFromDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const dirPath = resolveUserPath(params.dirPath);
   if (!(await fileExists(dirPath))) {
@@ -390,6 +404,7 @@ export async function installPluginFromDir(params: {
     mode: params.mode,
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
+    skipScan: params.skipScan,
   });
 }
 
@@ -399,6 +414,7 @@ export async function installPluginFromFile(params: {
   logger?: PluginInstallLogger;
   mode?: "install" | "update";
   dryRun?: boolean;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const mode = params.mode ?? "install";
@@ -437,6 +453,33 @@ export async function installPluginFromFile(params: {
     };
   }
 
+  // Scan single-file plugin source for dangerous code patterns before copying
+  if (isScannable(filePath)) {
+    try {
+      const source = await fs.readFile(filePath, "utf-8");
+      const findings = scanSource(source, filePath);
+      const criticalFindings = findings.filter((f) => f.severity === "critical");
+      if (criticalFindings.length > 0) {
+        const criticalDetails = criticalFindings
+          .map((f) => `${f.message} (${f.file}:${f.line})`)
+          .join("; ");
+        if (!params.skipScan) {
+          return {
+            ok: false,
+            error: `Plugin "${pluginId}" blocked: dangerous code patterns detected: ${criticalDetails}. Use --force to override.`,
+          };
+        }
+        logger.warn?.(
+          `WARNING: Plugin "${pluginId}" contains dangerous code patterns (scan overridden): ${criticalDetails}`,
+        );
+      }
+    } catch (err) {
+      logger.warn?.(
+        `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues.`,
+      );
+    }
+  }
+
   logger.info?.(`Installing to ${targetFile}…`);
   await fs.copyFile(filePath, targetFile);
 
@@ -458,6 +501,7 @@ export async function installPluginFromNpmSpec(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
@@ -501,6 +545,7 @@ export async function installPluginFromNpmSpec(params: {
     mode,
     dryRun,
     expectedPluginId,
+    skipScan: params.skipScan,
   });
 }
 
@@ -512,6 +557,7 @@ export async function installPluginFromPath(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  skipScan?: boolean;
 }): Promise<InstallPluginResult> {
   const resolved = resolveUserPath(params.path);
   if (!(await fileExists(resolved))) {
@@ -528,6 +574,7 @@ export async function installPluginFromPath(params: {
       mode: params.mode,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      skipScan: params.skipScan,
     });
   }
 
@@ -541,6 +588,7 @@ export async function installPluginFromPath(params: {
       mode: params.mode,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      skipScan: params.skipScan,
     });
   }
 
@@ -550,5 +598,6 @@ export async function installPluginFromPath(params: {
     logger: params.logger,
     mode: params.mode,
     dryRun: params.dryRun,
+    skipScan: params.skipScan,
   });
 }
