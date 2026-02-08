@@ -44,12 +44,48 @@ interface RateLimitEntry {
 const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const MAX_RATE_LIMIT_ENTRIES = 10_000; // Prevent unbounded growth
+
+// Throttle cleanup to avoid per-request traversal
+let nextCleanupAt = 0;
 
 function checkRateLimit(accountId: string): boolean {
   const now = Date.now();
+
+  // Evict stale entries at size limit (throttled to once per second)
+  if (rateLimitMap.size >= MAX_RATE_LIMIT_ENTRIES && now >= nextCleanupAt) {
+    // Snapshot keys to avoid mutating Map during iteration
+    const keysToDelete: string[] = [];
+    for (const [key, entry] of rateLimitMap) {
+      if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      rateLimitMap.delete(key);
+    }
+    // If still at limit after evicting stale entries, remove oldest
+    if (rateLimitMap.size >= MAX_RATE_LIMIT_ENTRIES) {
+      const oldestKey = rateLimitMap.keys().next().value;
+      if (oldestKey !== undefined) {
+        rateLimitMap.delete(oldestKey);
+      }
+    }
+    // Throttle: next cleanup after 1 second
+    nextCleanupAt = now + 1000;
+  }
+
   const entry = rateLimitMap.get(accountId);
 
   if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    // Enforce hard limit before inserting new entry
+    if (!entry && rateLimitMap.size >= MAX_RATE_LIMIT_ENTRIES) {
+      // Remove oldest entry to make room
+      const oldestKey = rateLimitMap.keys().next().value;
+      if (oldestKey !== undefined) {
+        rateLimitMap.delete(oldestKey);
+      }
+    }
     rateLimitMap.set(accountId, { count: 1, windowStart: now });
     return true;
   }
@@ -58,7 +94,9 @@ function checkRateLimit(accountId: string): boolean {
     return false;
   }
 
-  entry.count++;
+  // Refresh insertion order for LRU-like behavior
+  rateLimitMap.delete(accountId);
+  rateLimitMap.set(accountId, { count: entry.count + 1, windowStart: entry.windowStart });
   return true;
 }
 
