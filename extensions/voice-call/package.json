@@ -9,7 +9,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "openclaw": "^2026.2.1"
   },
   "openclaw": {
     "extensions": [
