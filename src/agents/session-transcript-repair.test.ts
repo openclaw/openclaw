@@ -93,6 +93,101 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(results[0]?.toolCallId).toBe("call_1");
   });
 
+  it("drops errored assistant with tool calls and its tool results", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_ok", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_ok",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_err", name: "exec", arguments: {} }],
+        stopReason: "error",
+        errorMessage: "boom",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_err",
+        toolName: "exec",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+      },
+      { role: "user", content: "next message" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("call_ok");
+  });
+
+  it("drops aborted assistant with tool calls and its tool results", () => {
+    const input = [
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_abort", name: "read", arguments: {} }],
+        stopReason: "aborted",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_abort",
+        toolName: "read",
+        content: [{ type: "text", text: "partial" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("keeps errored assistant without tool calls", () => {
+    const input = [
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "error occurred" }],
+        stopReason: "error",
+        errorMessage: "rate limit",
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("preserves remainder messages when dropping errored assistant", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_err", name: "exec", arguments: {} }],
+        stopReason: "error",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_err",
+        toolName: "exec",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+      },
+      { role: "user", content: "after error" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recovery" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
   it("drops orphan tool results that do not match any tool call", () => {
     const input = [
       { role: "user", content: "hello" },
