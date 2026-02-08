@@ -152,6 +152,47 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig minimax defaults", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("resolves minimax defaults when no minimax config is provided", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.minimax.model).toBe("speech-2.8-hd");
+      expect(config.minimax.voiceId).toBe("Friendly_Person");
+      expect(config.minimax.speed).toBe(1.0);
+      expect(config.minimax.vol).toBe(1.0);
+      expect(config.minimax.pitch).toBe(0);
+      expect(config.minimax.baseUrl).toBe("https://api.minimax.io");
+    });
+
+    it("uses configured minimax values", () => {
+      const config = resolveTtsConfig({
+        ...baseCfg,
+        messages: {
+          tts: {
+            minimax: {
+              model: "speech-2.8-turbo",
+              voiceId: "English_CalmWoman",
+              speed: 1.5,
+              vol: 2.0,
+              pitch: 3,
+              languageBoost: "English",
+            },
+          },
+        },
+      });
+      expect(config.minimax.model).toBe("speech-2.8-turbo");
+      expect(config.minimax.voiceId).toBe("English_CalmWoman");
+      expect(config.minimax.speed).toBe(1.5);
+      expect(config.minimax.vol).toBe(2.0);
+      expect(config.minimax.pitch).toBe(3);
+      expect(config.minimax.languageBoost).toBe("English");
+    });
+  });
+
   describe("resolveEdgeOutputFormat", () => {
     const baseCfg = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -198,6 +239,15 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("accepts minimax as provider override with voice directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=minimax minimax_voice=English_CalmWoman]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+      expect(result.overrides.minimax?.voiceId).toBe("English_CalmWoman");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -424,11 +474,28 @@ describe("tts", () => {
           OPENAI_API_KEY: undefined,
           ELEVENLABS_API_KEY: undefined,
           XI_API_KEY: undefined,
+          MINIMAX_API_KEY: undefined,
         },
         () => {
           const config = resolveTtsConfig(baseCfg);
           const provider = getTtsProvider(config, "/tmp/tts-prefs-edge.json");
           expect(provider).toBe("edge");
+        },
+      );
+    });
+
+    it("prefers MiniMax when OpenAI and ElevenLabs keys are missing and MiniMax key exists", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          MINIMAX_API_KEY: "test-minimax-key",
+        },
+        () => {
+          const config = resolveTtsConfig(baseCfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-minimax.json");
+          expect(provider).toBe("minimax");
         },
       );
     });

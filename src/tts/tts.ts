@@ -46,6 +46,13 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io";
+const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
+const DEFAULT_MINIMAX_VOICE_ID = "Friendly_Person";
+const DEFAULT_MINIMAX_SPEED = 1.0;
+const DEFAULT_MINIMAX_VOL = 1.0;
+const DEFAULT_MINIMAX_PITCH = 0;
+
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -63,6 +70,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  minimax: { format: "mp3" as const, sampleRate: 32000, bitrate: 128000 },
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -70,6 +78,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  minimax: { format: "mp3" as const, sampleRate: 32000, bitrate: 128000 },
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -77,6 +86,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  minimax: { format: "pcm" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -122,6 +132,16 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  minimax: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voiceId: string;
+    speed: number;
+    vol: number;
+    pitch: number;
+    languageBoost?: string;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -162,6 +182,11 @@ type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voiceId?: string;
+    model?: string;
+    speed?: number;
   };
 };
 
@@ -295,6 +320,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    minimax: {
+      apiKey: raw.minimax?.apiKey,
+      baseUrl: (raw.minimax?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL).replace(/\/+$/, ""),
+      model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
+      voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
+      speed: raw.minimax?.speed ?? DEFAULT_MINIMAX_SPEED,
+      vol: raw.minimax?.vol ?? DEFAULT_MINIMAX_VOL,
+      pitch: raw.minimax?.pitch ?? DEFAULT_MINIMAX_PITCH,
+      languageBoost: raw.minimax?.languageBoost,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -434,6 +469,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "edge";
 }
 
@@ -498,10 +536,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -633,7 +674,12 @@ function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "minimax"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -663,6 +709,20 @@ function parseTtsDirectives(
             } else {
               warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
             }
+            break;
+          case "minimax_voice":
+          case "minimaxvoice":
+            if (!policy.allowVoice) {
+              break;
+            }
+            overrides.minimax = { ...overrides.minimax, voiceId: rawValue };
+            break;
+          case "minimax_model":
+          case "minimaxmodel":
+            if (!policy.allowModelId) {
+              break;
+            }
+            overrides.minimax = { ...overrides.minimax, model: rawValue };
             break;
           case "model":
           case "modelid":
@@ -1158,6 +1218,91 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+async function minimaxTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  voiceId: string;
+  speed: number;
+  vol: number;
+  pitch: number;
+  languageBoost?: string;
+  audioFormat: "mp3" | "pcm";
+  sampleRate?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    model,
+    voiceId,
+    speed,
+    vol,
+    pitch,
+    languageBoost,
+    audioFormat,
+    sampleRate,
+    timeoutMs,
+  } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      model,
+      text,
+      stream: false,
+      voice_setting: {
+        voice_id: voiceId,
+        speed,
+        vol,
+        pitch,
+      },
+      audio_setting: {
+        sample_rate: sampleRate ?? 32000,
+        bitrate: 128000,
+        format: audioFormat,
+        channel: 1,
+      },
+    };
+    if (languageBoost) {
+      body.language_boost = languageBoost;
+    }
+
+    const response = await fetch(`${baseUrl}/v1/t2a_v2`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`MiniMax TTS API error (${response.status})`);
+    }
+
+    const json = (await response.json()) as {
+      data?: { audio?: string };
+      base_resp?: { status_code?: number; status_msg?: string };
+    };
+    if (json.base_resp?.status_code !== 0) {
+      throw new Error(`MiniMax TTS error: ${json.base_resp?.status_msg ?? "unknown"}`);
+    }
+    const hexAudio = json.data?.audio;
+    if (!hexAudio) {
+      throw new Error("MiniMax TTS: no audio data in response");
+    }
+    return Buffer.from(hexAudio, "hex");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1262,7 +1407,22 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
-      if (provider === "elevenlabs") {
+      if (provider === "minimax") {
+        audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.minimax.baseUrl,
+          model: params.overrides?.minimax?.model ?? config.minimax.model,
+          voiceId: params.overrides?.minimax?.voiceId ?? config.minimax.voiceId,
+          speed: params.overrides?.minimax?.speed ?? config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          languageBoost: config.minimax.languageBoost,
+          audioFormat: output.minimax.format,
+          sampleRate: output.minimax.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
+      } else if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
         const voiceSettings = {
@@ -1299,6 +1459,12 @@ export async function textToSpeech(params: {
       }
 
       const latencyMs = Date.now() - providerStart;
+      const resolvedOutputFormat =
+        provider === "minimax"
+          ? output.minimax.format
+          : provider === "openai"
+            ? output.openai
+            : output.elevenlabs;
 
       const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
@@ -1310,7 +1476,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat: resolvedOutputFormat,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -1361,6 +1527,33 @@ export async function textToSpeechTelephony(params: {
       if (!apiKey) {
         lastError = `No API key for ${provider}`;
         continue;
+      }
+
+      if (provider === "minimax") {
+        const output = TELEPHONY_OUTPUT.minimax;
+        const audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.minimax.baseUrl,
+          model: config.minimax.model,
+          voiceId: config.minimax.voiceId,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          languageBoost: config.minimax.languageBoost,
+          audioFormat: output.format,
+          sampleRate: output.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
       }
 
       if (provider === "elevenlabs") {
