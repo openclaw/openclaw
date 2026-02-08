@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
@@ -164,10 +165,11 @@ interface ControlUiInjectionOpts {
   basePath: string;
   assistantName?: string;
   assistantAvatar?: string;
+  pageTitle?: string;
 }
 
 function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): string {
-  const { basePath, assistantName, assistantAvatar } = opts;
+  const { basePath, assistantName, assistantAvatar, pageTitle } = opts;
   const script =
     `<script>` +
     `window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${JSON.stringify(basePath)};` +
@@ -182,11 +184,28 @@ function injectControlUiConfig(html: string, opts: ControlUiInjectionOpts): stri
   if (html.includes("__OPENCLAW_ASSISTANT_NAME__")) {
     return html;
   }
+
+  // Replace page title if configured or default to hostname
+  const resolvedTitle = pageTitle || `${getHostnameForTitle()} - OpenClaw Control`;
+  html = html.replace(/<title>OpenClaw Control<\/title>/, `<title>${escapeHtml(resolvedTitle)}</title>`);
+
   const headClose = html.indexOf("</head>");
   if (headClose !== -1) {
     return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;
   }
   return `${script}${html}`;
+}
+
+function getHostnameForTitle(): string {
+  try {
+    return os.hostname() || "OpenClaw";
+  } catch {
+    return "OpenClaw";
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 interface ServeIndexHtmlOpts {
@@ -218,6 +237,7 @@ function serveIndexHtml(res: ServerResponse, indexPath: string, opts: ServeIndex
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue,
+      pageTitle: opts?.config?.gateway?.controlUi?.pageTitle,
     }),
   );
 }

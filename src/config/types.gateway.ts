@@ -68,6 +68,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Custom page title for the Control UI tab. Defaults to "<hostname> - OpenClaw Control". */
+  pageTitle?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /** Allow token-only auth over insecure HTTP (default: false). */

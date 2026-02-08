@@ -202,6 +202,7 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
+  "gateway.controlUi.pageTitle": "Control UI Page Title",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.allowInsecureAuth": "Allow Insecure Control UI Auth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
@@ -422,6 +423,8 @@ const FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.pageTitle":
+    "Custom browser tab title for the Control UI. Defaults to '<hostname> - OpenClaw Control'. Useful when running multiple instances.",
   "gateway.controlUi.allowedOrigins":
     "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
@@ -770,6 +773,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
+  "gateway.controlUi.pageTitle": "My Server - OpenClaw Control",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
