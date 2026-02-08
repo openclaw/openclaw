@@ -226,6 +226,15 @@ export const DiscordDmSchema = z
     });
   });
 
+const ChimeInSchema = z
+  .object({
+    every: z.number().int().min(2),
+    prompt: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 export const DiscordGuildChannelSchema = z
   .object({
     allow: z.boolean().optional(),
@@ -238,6 +247,7 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    chimeIn: ChimeInSchema,
   })
   .strict();
 
@@ -245,6 +255,7 @@ export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
+    chimeIn: ChimeInSchema,
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),

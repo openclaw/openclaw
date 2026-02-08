@@ -24,9 +24,20 @@ export type DiscordDmConfig = {
   groupChannels?: Array<string | number>;
 };
 
+export type ChimeInConfig = {
+  /** Evaluate whether to chime in every N messages (minimum 2). */
+  every: number;
+  /** Custom evaluation prompt. If omitted, uses a sensible default. */
+  prompt?: string;
+  /** Model to use for evaluation. If omitted, uses the agent's default model. */
+  model?: string;
+};
+
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** Frequency-gated chime-in: accumulate N messages then let model decide whether to respond. */
+  chimeIn?: ChimeInConfig;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -47,6 +58,8 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /** Frequency-gated chime-in: accumulate N messages then let model decide whether to respond. */
+  chimeIn?: ChimeInConfig;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

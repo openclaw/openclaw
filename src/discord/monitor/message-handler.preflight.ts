@@ -36,11 +36,13 @@ import {
   normalizeDiscordSlug,
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordChimeIn,
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,
   resolveDiscordUserAllowed,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { evaluateChimeIn } from "./chime-in-eval.js";
 import {
   formatDiscordUserTag,
   resolveDiscordSystemLocation,
@@ -398,6 +400,11 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
+  const chimeInConfig = resolveDiscordChimeIn({
+    isGuildMessage,
+    channelConfig,
+    guildInfo,
+  });
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: "discord",
@@ -464,25 +471,6 @@ export async function preflightDiscordMessage(
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-  if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
-      logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
-      logger.info(
-        {
-          channelId: message.channelId,
-          reason: "no-mention",
-        },
-        "discord: skipping guild message",
-      );
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: params.guildHistories,
-        historyKey: message.channelId,
-        limit: params.historyLimit,
-        entry: historyEntry ?? null,
-      });
-      return null;
-    }
-  }
 
   if (isGuildMessage) {
     const channelUsers = channelConfig?.users ?? guildInfo?.users;
@@ -498,6 +486,73 @@ export async function preflightDiscordMessage(
         return null;
       }
     }
+  }
+
+  if (isGuildMessage && shouldRequireMention) {
+    if (botId && mentionGate.shouldSkip) {
+      // ChimeIn frequency gating: accumulate messages, don't drop immediately
+      if (chimeInConfig) {
+        const counterKey = message.channelId;
+        const currentCount = (params.chimeInCounters.get(counterKey) ?? 0) + 1;
+
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: params.guildHistories,
+          historyKey: message.channelId,
+          limit: params.historyLimit,
+          entry: historyEntry ?? null,
+        });
+
+        if (currentCount < chimeInConfig.every) {
+          // Not yet at threshold — accumulate and drop
+          params.chimeInCounters.set(counterKey, currentCount);
+          logVerbose(
+            `discord: chimeIn accumulating (${currentCount}/${chimeInConfig.every}) for channel ${message.channelId}`,
+          );
+          return null;
+        }
+
+        params.chimeInCounters.set(counterKey, 0);
+        logVerbose(
+          `discord: chimeIn threshold reached (${chimeInConfig.every}) for channel ${message.channelId}`,
+        );
+
+        const shouldChimeIn = await evaluateChimeIn({
+          history: params.guildHistories.get(message.channelId) ?? [],
+          chimeInConfig,
+          cfg: params.cfg,
+          agentId: route.agentId,
+          channelId: message.channelId,
+        });
+
+        if (!shouldChimeIn) {
+          logVerbose(`discord: chimeIn evaluation declined for channel ${message.channelId}`);
+          return null;
+        }
+        logVerbose(`discord: chimeIn evaluation approved for channel ${message.channelId}`);
+      } else {
+        // Original behavior: no chimeIn, just drop non-mentioned messages
+        logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
+        logger.info(
+          {
+            channelId: message.channelId,
+            reason: "no-mention",
+          },
+          "discord: skipping guild message",
+        );
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: params.guildHistories,
+          historyKey: message.channelId,
+          limit: params.historyLimit,
+          entry: historyEntry ?? null,
+        });
+        return null;
+      }
+    }
+  }
+
+  // Reset chimeIn counter when bot is mentioned
+  if (isGuildMessage && chimeInConfig && !mentionGate.shouldSkip) {
+    params.chimeInCounters.set(message.channelId, 0);
   }
 
   const systemLocation = resolveDiscordSystemLocation({
@@ -528,6 +583,7 @@ export async function preflightDiscordMessage(
     runtime: params.runtime,
     botUserId: params.botUserId,
     guildHistories: params.guildHistories,
+    chimeInCounters: params.chimeInCounters,
     historyLimit: params.historyLimit,
     mediaMaxBytes: params.mediaMaxBytes,
     textLimit: params.textLimit,
@@ -571,5 +627,6 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
+    chimeInConfig,
   };
 }
