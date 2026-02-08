@@ -39,6 +39,8 @@ export const ChatSendParamsSchema = Type.Object(
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    /** When true, branches session from before last assistant message (for regeneration). */
+    regenerate: Type.Optional(Type.Boolean()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

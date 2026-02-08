@@ -1,4 +1,4 @@
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -323,6 +323,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      regenerate?: boolean;
       idempotencyKey: string;
     };
     const stopCommand = isChatStopCommandText(p.message);
@@ -369,6 +370,51 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const { cfg, entry } = loadSessionEntry(p.sessionKey);
+
+    // Handle regeneration: branch from before the last assistant message so the agent
+    // doesn't see the previous response and avoids context leakage ("Ed wants another...").
+    if (p.regenerate && entry?.sessionFile && fs.existsSync(entry.sessionFile)) {
+      try {
+        const sessionManager = SessionManager.open(entry.sessionFile);
+        const branch = sessionManager.getBranch();
+        // Find the last assistant message in the current branch
+        let lastAssistantIdx = -1;
+        for (let i = branch.length - 1; i >= 0; i--) {
+          const branchEntry = branch[i];
+          if (
+            branchEntry.type === "message" &&
+            (branchEntry as { message?: { role?: string } }).message?.role === "assistant"
+          ) {
+            lastAssistantIdx = i;
+            break;
+          }
+        }
+        if (lastAssistantIdx > 0) {
+          // Find the preceding user message and branch from its parent
+          for (let i = lastAssistantIdx - 1; i >= 0; i--) {
+            const branchEntry = branch[i];
+            if (
+              branchEntry.type === "message" &&
+              (branchEntry as { message?: { role?: string } }).message?.role === "user"
+            ) {
+              // Branch from the parent of the user message so the resent message
+              // becomes a fresh turn without the old assistant response in context
+              if (branchEntry.parentId) {
+                sessionManager.branch(branchEntry.parentId);
+                context.logGateway.info(
+                  `chat.regenerate: branched session ${p.sessionKey} from ${branchEntry.parentId}`,
+                );
+              }
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        context.logGateway.warn(`chat.regenerate: failed to branch session: ${err}`);
+        // Continue anyway - worst case is the old behavior with context leak
+      }
+    }
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
