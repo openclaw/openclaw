@@ -234,10 +234,11 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  // Final fallback: Just note what was there
+  // Final fallback: Provide actionable context for the agent
   return (
     `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
+    `Summary unavailable due to context limits. ` +
+    `If you use workspace memory files, check them for recent task state.`
   );
 }
 
