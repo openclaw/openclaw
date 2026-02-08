@@ -3,6 +3,7 @@ import path from "node:path";
 import type { loadConfig } from "../config/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getLogger } from "../logging/logger.js";
 import { VERSION } from "../version.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
@@ -119,5 +120,7 @@ export function scheduleGatewayUpdateCheck(params: {
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
 }): void {
-  void runGatewayUpdateCheck(params).catch(() => {});
+  void runGatewayUpdateCheck(params).catch((err) => {
+    getLogger().debug(`gateway update check failed: ${String(err)}`);
+  });
 }

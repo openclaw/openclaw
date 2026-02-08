@@ -39,6 +39,11 @@ RUN chown -R node:node /app
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+# Container health check: verify the gateway is listening on its default port.
+# The /health RPC is WebSocket-only, so we probe the TCP port instead.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "const s=require('node:net').createConnection(18789,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))"
+
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #

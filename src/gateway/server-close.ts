@@ -5,6 +5,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { getLogger } from "../logging/logger.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -65,7 +66,9 @@ export function createGatewayCloseHandler(params: {
       await params.stopChannel(plugin.id);
     }
     if (params.pluginServices) {
-      await params.pluginServices.stop().catch(() => {});
+      await params.pluginServices.stop().catch((err) => {
+        getLogger().debug(`pluginServices.stop failed during shutdown: ${String(err)}`);
+      });
     }
     await stopGmailWatcher();
     params.cron.stop();
@@ -104,9 +107,13 @@ export function createGatewayCloseHandler(params: {
       }
     }
     params.clients.clear();
-    await params.configReloader.stop().catch(() => {});
+    await params.configReloader.stop().catch((err) => {
+      getLogger().debug(`configReloader.stop failed during shutdown: ${String(err)}`);
+    });
     if (params.browserControl) {
-      await params.browserControl.stop().catch(() => {});
+      await params.browserControl.stop().catch((err) => {
+        getLogger().debug(`browserControl.stop failed during shutdown: ${String(err)}`);
+      });
     }
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
     const servers =
