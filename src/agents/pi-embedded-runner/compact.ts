@@ -12,6 +12,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -436,6 +437,21 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Trigger before_compact hook (allows hooks to capture session content)
+        const sessionKey = params.sessionKey?.trim() || params.sessionId;
+        const beforeCompactEvent = createInternalHookEvent(
+          "session",
+          "before_compact",
+          sessionKey,
+          {
+            sessionFile: params.sessionFile,
+            sessionId: params.sessionId,
+            cfg: params.config,
+          },
+        );
+        await triggerInternalHook(beforeCompactEvent);
+
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -452,6 +468,18 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+
+        // Trigger after_compact hook
+        const afterCompactEvent = createInternalHookEvent("session", "after_compact", sessionKey, {
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          tokensBefore: result.tokensBefore,
+          tokensAfter,
+          cfg: params.config,
+        });
+        // Fire and forget - don't block return on hook completion
+        void triggerInternalHook(afterCompactEvent);
+
         return {
           ok: true,
           compacted: true,

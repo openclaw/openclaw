@@ -171,8 +171,8 @@ Currently supported events:
 - **command:stop**: `/stop` command
 - **agent:bootstrap**: Before workspace bootstrap files are injected
 - **gateway:startup**: Gateway startup (after channels start)
-
-More event types coming soon (session lifecycle, agent errors, etc.).
+- **session:before_compact**: Before session compaction (context: `sessionFile`, `sessionId`, `cfg`)
+- **session:after_compact**: After session compaction (context: `sessionFile`, `sessionId`, `tokensBefore`, `tokensAfter`, `cfg`)
 
 ## Handler API
 
