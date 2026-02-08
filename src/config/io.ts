@@ -22,6 +22,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { restoreEnvVarRefs } from "./env-ref-preservation.js";
 import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
@@ -493,9 +494,30 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
-      .trimEnd()
-      .concat("\n");
+
+    const stamped = applyModelDefaults(stampConfigVersion(cfg));
+
+    // Preserve ${VAR} env-var references that haven't actually changed.
+    // Read the raw (pre-substitution) config from disk and restore references
+    // for any values that still match their original env-var expansion.
+    let toWrite: unknown = stamped;
+    if (deps.fs.existsSync(configPath)) {
+      try {
+        const rawContent = deps.fs.readFileSync(configPath, "utf-8");
+        const rawParsed = deps.json5.parse(rawContent);
+        const rawWithIncludes = resolveConfigIncludes(rawParsed, configPath, {
+          readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+          parseJson: (raw) => deps.json5.parse(raw),
+        });
+        toWrite = restoreEnvVarRefs(rawWithIncludes, stamped, deps.env);
+      } catch {
+        // If we can't read or parse the existing file, write the resolved config as-is.
+        // This is intentionally a silent fallback so config writes never fail due to
+        // preservation logic.
+      }
+    }
+
+    const json = JSON.stringify(toWrite, null, 2).trimEnd().concat("\n");
 
     const tmp = path.join(
       dir,

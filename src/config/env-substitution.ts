@@ -24,6 +24,9 @@
 // followed by letters, numbers, or underscores (all uppercase)
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
+// Pattern to detect ${VAR} references inside an arbitrary string
+const ENV_VAR_REF_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
+
 export class MissingEnvVarError extends Error {
   constructor(
     public readonly varName: string,
@@ -119,6 +122,14 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
 
   // Primitives (number, boolean, null) pass through unchanged
   return value;
+}
+
+/**
+ * Returns true if the string contains at least one `${UPPER_CASE_VAR}` reference.
+ * Does not check whether the variable is set — only whether the syntax is present.
+ */
+export function hasEnvVarRef(value: string): boolean {
+  return ENV_VAR_REF_PATTERN.test(value);
 }
 
 /**

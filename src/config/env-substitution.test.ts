@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import { hasEnvVarRef, MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+
+describe("hasEnvVarRef", () => {
+  it("detects a single ${VAR} reference", () => {
+    expect(hasEnvVarRef("${TELEGRAM_BOT_TOKEN}")).toBe(true);
+  });
+
+  it("detects inline ${VAR} with surrounding text", () => {
+    expect(hasEnvVarRef("https://${API_HOST}/v1")).toBe(true);
+  });
+
+  it("returns false for plain strings", () => {
+    expect(hasEnvVarRef("no-env-vars-here")).toBe(false);
+  });
+
+  it("returns false for lowercase ${var} (not a valid env ref)", () => {
+    expect(hasEnvVarRef("${lowercase}")).toBe(false);
+  });
+
+  it("returns false for $VAR without braces", () => {
+    expect(hasEnvVarRef("$VAR")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(hasEnvVarRef("")).toBe(false);
+  });
+});
 
 describe("resolveConfigEnvVars", () => {
   describe("basic substitution", () => {
