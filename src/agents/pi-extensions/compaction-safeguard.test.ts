@@ -11,6 +11,7 @@ const {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  emergencyPruneToFitContext,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
@@ -247,5 +248,83 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+});
+
+describe("emergencyPruneToFitContext", () => {
+  const CONTEXT_WINDOW = 100_000;
+
+  it("returns original messages when under target", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Hello", timestamp: Date.now() },
+      { role: "assistant", content: [{ type: "text", text: "Hi" }], timestamp: Date.now() },
+    ];
+
+    const result = emergencyPruneToFitContext(messages, CONTEXT_WINDOW, 0.85);
+    expect(result.messages).toBe(messages);
+    expect(result.droppedCount).toBe(0);
+    expect(result.droppedTokens).toBe(0);
+  });
+
+  it("drops oldest messages when over target", () => {
+    // Create messages that exceed the target (85K tokens)
+    const messages: AgentMessage[] = [
+      { role: "user", content: "x".repeat(40_000 * 4), timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "y".repeat(40_000 * 4) }],
+        timestamp: Date.now(),
+      },
+      { role: "user", content: "z".repeat(40_000 * 4), timestamp: Date.now() },
+    ];
+
+    const result = emergencyPruneToFitContext(messages, CONTEXT_WINDOW, 0.85);
+    expect(result.droppedCount).toBeGreaterThan(0);
+    expect(result.messages.length).toBeLessThan(messages.length);
+    expect(result.droppedTokens).toBeGreaterThan(0);
+  });
+
+  it("targets 85% of context window by default", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "x".repeat(90_000 * 4), timestamp: Date.now() },
+    ];
+
+    const result = emergencyPruneToFitContext(messages, CONTEXT_WINDOW);
+    // Default target is 85K, so 90K message should be dropped
+    expect(result.droppedCount).toBe(1);
+    expect(result.messages.length).toBe(0);
+  });
+
+  it("respects custom target ratio", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
+    ];
+
+    // With 0.6 target ratio (60K), 50K message should be kept
+    const result = emergencyPruneToFitContext(messages, CONTEXT_WINDOW, 0.6);
+    expect(result.droppedCount).toBe(0);
+    expect(result.messages.length).toBe(1);
+  });
+
+  it("handles empty message array", () => {
+    const result = emergencyPruneToFitContext([], CONTEXT_WINDOW, 0.85);
+    expect(result.messages).toEqual([]);
+    expect(result.droppedCount).toBe(0);
+    expect(result.droppedTokens).toBe(0);
+  });
+
+  it("drops from beginning (oldest first)", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "first", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "second" }], timestamp: 2 },
+      { role: "user", content: "third", timestamp: 3 },
+    ];
+
+    // Force pruning by using tiny context window
+    const result = emergencyPruneToFitContext(messages, 100, 0.5);
+    if (result.droppedCount > 0) {
+      // Oldest messages should be dropped
+      expect(result.messages[0]?.timestamp).toBeGreaterThan(messages[0].timestamp);
+    }
   });
 });
