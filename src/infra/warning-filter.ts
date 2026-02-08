@@ -1,9 +1,13 @@
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
-export type ProcessWarning = Error & {
+export type ProcessWarning = {
   code?: string;
   name?: string;
   message?: string;
+};
+
+type ProcessWarningInstallState = {
+  installed: boolean;
 };
 
 export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
@@ -22,19 +26,60 @@ export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   return false;
 }
 
+function normalizeWarningArgs(args: unknown[]): ProcessWarning {
+  const warningArg = args[0];
+  const secondArg = args[1];
+  const thirdArg = args[2];
+  let name: string | undefined;
+  let code: string | undefined;
+  let message: string | undefined;
+
+  if (warningArg instanceof Error) {
+    name = warningArg.name;
+    message = warningArg.message;
+    code = (warningArg as Error & { code?: string }).code;
+  } else if (typeof warningArg === "string") {
+    message = warningArg;
+  }
+
+  if (secondArg && typeof secondArg === "object" && !Array.isArray(secondArg)) {
+    const options = secondArg as { type?: unknown; code?: unknown };
+    if (typeof options.type === "string") {
+      name = options.type;
+    }
+    if (typeof options.code === "string") {
+      code = options.code;
+    }
+  } else {
+    if (typeof secondArg === "string") {
+      name = secondArg;
+    }
+    if (typeof thirdArg === "string") {
+      code = thirdArg;
+    }
+  }
+
+  return { name, code, message };
+}
+
 export function installProcessWarningFilter(): void {
   const globalState = globalThis as typeof globalThis & {
-    [warningFilterKey]?: { installed: boolean };
+    [warningFilterKey]?: ProcessWarningInstallState;
   };
   if (globalState[warningFilterKey]?.installed) {
     return;
   }
-  globalState[warningFilterKey] = { installed: true };
 
-  process.on("warning", (warning: ProcessWarning) => {
-    if (shouldIgnoreWarning(warning)) {
+  const originalEmitWarning = process.emitWarning.bind(process);
+  const wrappedEmitWarning: typeof process.emitWarning = ((...args: unknown[]) => {
+    if (shouldIgnoreWarning(normalizeWarningArgs(args))) {
       return;
     }
-    process.stderr.write(`${warning.stack ?? warning.toString()}\n`);
-  });
+    return Reflect.apply(originalEmitWarning, process, args);
+  }) as typeof process.emitWarning;
+
+  process.emitWarning = wrappedEmitWarning;
+  globalState[warningFilterKey] = {
+    installed: true,
+  };
 }

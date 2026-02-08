@@ -28,6 +28,11 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Hygiene: remove `workspace:*` from `dependencies` in msteams, nostr, zalo extensions (breaks external `npm install`; keep in `devDependencies` only).
+- Hygiene: add non-root `sandbox` user to `Dockerfile.sandbox` and `Dockerfile.sandbox-browser`.
+- Hygiene: remove dead `vitest` key from `package.json` (superseded by `vitest.config.ts`).
+- Hygiene: remove redundant top-level `overrides` from `package.json` (pnpm uses `pnpm.overrides`).
+- Hygiene: sync `onlyBuiltDependencies` between `pnpm-workspace.yaml` and `package.json` (add missing `node-llama-cpp`, sort alphabetically).
 - Cron: default `wakeMode` is now `"now"` for new jobs (was `"next-heartbeat"`). (#10776) Thanks @tyler6204.
 - Cron: `cron run` defaults to force execution; use `--due` to restrict to due-only. (#10776) Thanks @tyler6204.
 - Models: support Anthropic Opus 4.6 and OpenAI Codex gpt-5.3-codex (forward-compat fallbacks). (#9853, #10720, #9995) Thanks @TinyTb, @calvin-hpnet, @tyler6204.

@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
+const baseEmitWarning = process.emitWarning.bind(process) as typeof process.emitWarning;
 
 function resetWarningFilterInstallState(): void {
   const globalState = globalThis as typeof globalThis & {
     [warningFilterKey]?: { installed: boolean };
   };
   delete globalState[warningFilterKey];
+  process.emitWarning = baseEmitWarning;
 }
 
 describe("warning filter", () => {
@@ -53,37 +55,29 @@ describe("warning filter", () => {
     ).toBe(false);
   });
 
-  it("installs once and only writes unsuppressed warnings", () => {
-    let warningHandler: ((warning: Error & { code?: string; message?: string }) => void) | null =
-      null;
-    const onSpy = vi.spyOn(process, "on").mockImplementation(((event, handler) => {
-      if (event === "warning") {
-        warningHandler = handler as (warning: Error & { code?: string; message?: string }) => void;
-      }
-      return process;
-    }) as typeof process.on);
+  it("installs once and suppresses known warnings at emit time", async () => {
     const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     installProcessWarningFilter();
     installProcessWarningFilter();
+    installProcessWarningFilter();
+    const emitWarning = (...args: unknown[]) =>
+      (process.emitWarning as unknown as (...warningArgs: unknown[]) => void)(...args);
 
-    expect(onSpy).toHaveBeenCalledTimes(1);
-    expect(warningHandler).not.toBeNull();
-
-    warningHandler?.({
-      name: "DeprecationWarning",
+    emitWarning(
+      "The `util._extend` API is deprecated. Please use Object.assign() instead.",
+      "DeprecationWarning",
+      "DEP0060",
+    );
+    emitWarning("The `util._extend` API is deprecated. Please use Object.assign() instead.", {
+      type: "DeprecationWarning",
       code: "DEP0060",
-      message: "The `util._extend` API is deprecated.",
-      toString: () => "suppressed",
-    } as Error & { code?: string; message?: string });
+    });
+    await new Promise((resolve) => setImmediate(resolve));
     expect(writeSpy).not.toHaveBeenCalled();
 
-    warningHandler?.({
-      name: "Warning",
-      message: "Visible warning",
-      stack: "Warning: visible",
-      toString: () => "visible",
-    } as Error & { code?: string; message?: string });
-    expect(writeSpy).toHaveBeenCalledWith("Warning: visible\n");
+    emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(writeSpy).toHaveBeenCalled();
   });
 });
