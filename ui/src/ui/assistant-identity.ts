@@ -14,6 +14,7 @@ declare global {
   interface Window {
     __OPENCLAW_ASSISTANT_NAME__?: string;
     __OPENCLAW_ASSISTANT_AVATAR__?: string;
+    __OPENCLAW_USER_NAME__?: string;
   }
 }
 
@@ -49,4 +50,16 @@ export function resolveInjectedAssistantIdentity(): AssistantIdentity {
     name: window.__OPENCLAW_ASSISTANT_NAME__,
     avatar: window.__OPENCLAW_ASSISTANT_AVATAR__,
   });
+}
+
+export function resolveInjectedUserName(): string {
+  if (typeof window === "undefined") {
+    return "You";
+  }
+  const raw = window.__OPENCLAW_USER_NAME__;
+  if (typeof raw !== "string") {
+    return "You";
+  }
+  const trimmed = raw.trim();
+  return trimmed || "You";
 }

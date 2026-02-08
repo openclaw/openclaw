@@ -110,13 +110,15 @@ export function renderMessageGroup(
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
+    userName?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const userName = opts.userName ?? "You";
   const who =
     normalizedRole === "user"
-      ? "You"
+      ? userName
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole;
