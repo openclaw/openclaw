@@ -119,13 +119,12 @@ function createMacOSProvider(
     try {
       // Pass password via stdin to avoid exposing it in process arguments (ps aux).
       // The `security unlock-keychain` command reads from stdin when no -p flag is given.
-      // Use stdio: ['pipe', 'pipe', 'pipe'] and a timeout to prevent hanging if the
-      // process prompts interactively or fills its output buffer.
+      // execFile without a callback returns a ChildProcess with piped stdio by default.
+      // Use a timeout to prevent hanging if the process prompts interactively.
       const UNLOCK_TIMEOUT_MS = 10_000;
       const child = execFile("security", ["unlock-keychain", keychainPath], {
-        stdio: ["pipe", "pipe", "pipe"],
         timeout: UNLOCK_TIMEOUT_MS,
-      } as Parameters<typeof execFile>[2]);
+      });
       if (child.stdin) {
         child.stdin.write(keychainPassword + "\n");
         child.stdin.end();
