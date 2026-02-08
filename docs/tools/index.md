@@ -406,7 +406,7 @@ Core actions:
 Notes:
 
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
-- `update` uses `{ id, patch }`.
+- `update` uses `{ jobId, patch }` (`id` accepted for compatibility).
 
 ### `gateway`
 
