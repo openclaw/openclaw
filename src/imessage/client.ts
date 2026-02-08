@@ -97,7 +97,7 @@ export class IMessageRpcClient {
     });
 
     child.on("close", (code, signal) => {
-      if (code !== 0 && code !== null) {
+      if (code !== 0 || signal) {
         const reason = signal ? `signal ${signal}` : `code ${code}`;
         this.failAll(new Error(`imsg rpc exited (${reason})`));
       } else {
