@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -19,6 +20,8 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+
+const log = createSubsystemLogger("agents/compaction-safeguard");
 
 type ToolFailure = {
   toolCallId: string;
@@ -226,7 +229,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            console.warn(
+            log.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
@@ -257,7 +260,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
-                console.warn(
+                log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
@@ -318,7 +321,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
+      log.warn(
         `Compaction summarization failed; truncating history: ${
           error instanceof Error ? error.message : String(error)
         }`,
