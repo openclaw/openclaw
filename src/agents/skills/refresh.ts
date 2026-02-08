@@ -26,9 +26,29 @@ const watchers = new Map<string, SkillsWatchState>();
 let globalVersion = 0;
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
+  // Version control
   /(^|[\\/])\.git([\\/]|$)/,
+  // JS/Node
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
+  /(^|[\\/])\.next([\\/]|$)/,
+  // Python
+  /(^|[\\/])venv([\\/]|$)/,
+  /(^|[\\/])\.venv([\\/]|$)/,
+  /(^|[\\/])__pycache__([\\/]|$)/,
+  /(^|[\\/])site-packages([\\/]|$)/,
+  /(^|[\\/])\.tox([\\/]|$)/,
+  /(^|[\\/])\.mypy_cache([\\/]|$)/,
+  /(^|[\\/])\.pytest_cache([\\/]|$)/,
+  /(^|[\\/])\.ruff_cache([\\/]|$)/,
+  /(^|[\\/])__pypackages__([\\/]|$)/,
+  /\.egg-info([\\/]|$)/,
+  // Build artifacts
+  /(^|[\\/])build([\\/]|$)/,
+  /(^|[\\/])target([\\/]|$)/,
+  /(^|[\\/])\.gradle([\\/]|$)/,
+  // Disabled skills
+  /\.disabled([\\/]|$)/,
 ];
 
 function bumpVersion(current: number): number {
