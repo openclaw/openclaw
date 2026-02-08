@@ -260,6 +260,70 @@ describe("daemon-cli coverage", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
   });
 
+  it("stops gateway by port when service is not loaded", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    // First call: port is busy with an openclaw process
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "busy",
+      listeners: [
+        {
+          pid: 99999,
+          command: "openclaw-gateway",
+          commandLine: "/usr/bin/node /usr/lib/node_modules/openclaw/dist/index.js gateway",
+        },
+      ],
+      hints: [],
+    });
+    // Second call (wait loop): port is now free
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "stop"], { from: "user" });
+
+    expect(killSpy).toHaveBeenCalledWith(99999, "SIGTERM");
+    expect(runtimeLogs.join("\n")).toContain("Stopped gateway process");
+    expect(runtimeLogs.join("\n")).toContain("99999");
+
+    killSpy.mockRestore();
+  });
+
+  it("reports not-loaded when no service and no gateway on port", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+
+    // Port is free — no gateway process running
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "stop"], { from: "user" });
+
+    expect(runtimeLogs.join("\n")).toContain("not loaded");
+  });
+
   it("emits json for daemon start/stop", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;

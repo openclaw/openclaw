@@ -1,8 +1,10 @@
 import type { DaemonLifecycleOptions } from "./types.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+import { loadConfig } from "../../config/io.js";
+import { resolveGatewayPort, resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
+import { inspectPortUsage } from "../../infra/ports.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
@@ -162,6 +164,61 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
+/**
+ * Try to stop a gateway process by finding it on the configured port.
+ * Used as a fallback when no daemon service (systemd/launchd) is loaded,
+ * or to clean up orphan processes after a daemon stop.
+ */
+async function tryStopGatewayByPort(): Promise<{ message: string } | null> {
+  try {
+    let cfg;
+    try {
+      cfg = loadConfig();
+    } catch {
+      cfg = undefined;
+    }
+    const port = resolveGatewayPort(cfg);
+    const usage = await inspectPortUsage(port);
+    if (usage.status !== "busy") {
+      return null;
+    }
+    const gatewayListeners = usage.listeners.filter((l) => {
+      const raw = `${l.commandLine ?? ""} ${l.command ?? ""}`.toLowerCase();
+      return raw.includes("openclaw");
+    });
+    if (gatewayListeners.length === 0) {
+      return null;
+    }
+
+    for (const listener of gatewayListeners) {
+      if (!listener.pid) continue;
+      try {
+        process.kill(listener.pid, "SIGTERM");
+      } catch {
+        // Process may have already exited (ESRCH)
+      }
+    }
+
+    const pids = gatewayListeners.map((l) => l.pid).filter(Boolean);
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const check = await inspectPortUsage(port);
+      const still = check.listeners.filter((l) => l.pid && pids.includes(l.pid));
+      if (still.length === 0) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const pidStr = pids.join(", ");
+    return {
+      message: `Stopped gateway process${pids.length > 1 ? "es" : ""} (pid ${pidStr}) on port ${port}.`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const json = Boolean(opts.json);
   const stdout = json ? createNullWriter() : process.stdout;
@@ -200,6 +257,19 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     return;
   }
   if (!loaded) {
+    // Fallback: try to stop gateway by port when no daemon service is active
+    const portStop = await tryStopGatewayByPort();
+    if (portStop) {
+      emit({
+        ok: true,
+        result: "stopped",
+        message: portStop.message,
+      });
+      if (!json) {
+        defaultRuntime.log(portStop.message);
+      }
+      return;
+    }
     emit({
       ok: true,
       result: "not-loaded",
@@ -217,6 +287,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     fail(`Gateway stop failed: ${String(err)}`);
     return;
   }
+
+  // Also stop any orphan gateway process not managed by the daemon
+  await tryStopGatewayByPort();
 
   let stopped = false;
   try {
