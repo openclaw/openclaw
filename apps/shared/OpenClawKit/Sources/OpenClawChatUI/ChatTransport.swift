@@ -24,10 +24,18 @@ public protocol OpenClawChatTransport: Sendable {
     func events() -> AsyncStream<OpenClawChatTransportEvent>
 
     func setActiveSessionKey(_ sessionKey: String) async throws
+    func resetSession(sessionKey: String) async throws
 }
 
 extension OpenClawChatTransport {
     public func setActiveSessionKey(_: String) async throws {}
+
+    public func resetSession(sessionKey _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.reset not supported by this transport"])
+    }
 
     public func abortRun(sessionKey _: String, runId _: String) async throws {
         throw NSError(
