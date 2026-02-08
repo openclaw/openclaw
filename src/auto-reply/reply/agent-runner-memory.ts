@@ -1,16 +1,26 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
+  derivePromptTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type UsageLike,
+} from "../../agents/usage.js";
+import {
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
@@ -24,9 +34,82 @@ import {
 } from "./memory-flush.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = prompt?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  const tokens = estimateMessagesTokens([message]);
+  if (!Number.isFinite(tokens) || tokens <= 0) {
+    return undefined;
+  }
+  return Math.ceil(tokens);
+}
+
+export function resolveEffectivePromptTokens(
+  baseTotalTokens?: number,
+  transcriptTotalTokens?: number,
+  promptTokenEstimate?: number,
+): number {
+  const lastPromptTokens = Math.max(baseTotalTokens ?? 0, transcriptTotalTokens ?? 0);
+  return promptTokenEstimate ? lastPromptTokens + promptTokenEstimate : lastPromptTokens;
+}
+
+export async function readPromptTokensFromSessionLog(
+  sessionId?: string,
+  sessionEntry?: SessionEntry,
+  sessionKey?: string,
+): Promise<number | undefined> {
+  if (!sessionId) {
+    return undefined;
+  }
+  const transcriptPath = (
+    sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
+  )?.transcriptPath?.trim();
+  const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+  const agentId = sessionFile ? undefined : resolveAgentIdFromSessionKey(sessionKey);
+  const logPath =
+    sessionFile ??
+    resolveSessionFilePath(sessionId, sessionEntry, agentId ? { agentId } : undefined);
+
+  try {
+    const lines = (await fs.promises.readFile(logPath, "utf-8")).split(/\n+/);
+    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          message?: { usage?: UsageLike };
+          usage?: UsageLike;
+        };
+        const usageRaw = parsed.message?.usage ?? parsed.usage;
+        const usage = normalizeUsage(usageRaw);
+        if (usage && hasNonzeroUsage(usage)) {
+          lastUsage = usage;
+        }
+      } catch {
+        // ignore bad lines
+      }
+    }
+    if (!lastUsage) {
+      return undefined;
+    }
+    const promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.input ?? 0;
+    const outputTokens = lastUsage.output ?? 0;
+    const totalTokens = lastUsage.total ?? promptTokens + outputTokens;
+    return totalTokens > 0 ? totalTokens : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
+  promptForEstimate?: string;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;
   defaultModel: string;
@@ -58,28 +141,101 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
+  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  let entry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+
+  const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
+    params.promptForEstimate ?? params.followupRun.prompt,
+  );
+  let baseTotalTokens = entry?.totalTokens;
+  const hasBaseTotalTokens =
+    typeof baseTotalTokens === "number" && Number.isFinite(baseTotalTokens) && baseTotalTokens > 0;
+  const shouldReadTranscript = canAttemptFlush && entry && !hasBaseTotalTokens;
+  const transcriptTotalTokens = shouldReadTranscript
+    ? await readPromptTokensFromSessionLog(
+        params.followupRun.run.sessionId,
+        entry,
+        params.sessionKey ?? params.followupRun.run.sessionKey,
+      )
+    : undefined;
+  const derivedTotalTokens = Math.max(baseTotalTokens ?? 0, transcriptTotalTokens ?? 0);
+  if (entry && derivedTotalTokens > (baseTotalTokens ?? 0)) {
+    const nextEntry = { ...entry, totalTokens: derivedTotalTokens };
+    entry = nextEntry;
+    if (params.sessionKey && params.sessionStore) {
+      params.sessionStore[params.sessionKey] = nextEntry;
+    }
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({ totalTokens: derivedTotalTokens }),
+        });
+        if (updatedEntry) {
+          entry = updatedEntry;
+          if (params.sessionStore) {
+            params.sessionStore[params.sessionKey] = updatedEntry;
+          }
+        }
+      } catch (err) {
+        logVerbose(`failed to persist derived totalTokens: ${String(err)}`);
+      }
+    }
+    baseTotalTokens = entry.totalTokens;
+  }
+  const effectivePromptTokens = resolveEffectivePromptTokens(
+    baseTotalTokens,
+    transcriptTotalTokens,
+    promptTokenEstimate,
+  );
+  const effectiveEntry =
+    entry && typeof effectivePromptTokens === "number" && effectivePromptTokens > 0
+      ? { ...entry, totalTokens: effectivePromptTokens }
+      : entry;
+
+  // Diagnostic logging to understand why memory flush may not trigger
+  const totalTokens = effectiveEntry?.totalTokens;
+  const threshold =
+    contextWindowTokens -
+    memoryFlushSettings.reserveTokensFloor -
+    memoryFlushSettings.softThresholdTokens;
+  logVerbose(
+    `memoryFlush check: sessionKey=${params.sessionKey} totalTokens=${totalTokens ?? "undefined"} ` +
+      `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `compactionCount=${effectiveEntry?.compactionCount ?? 0} memoryFlushCompactionCount=${effectiveEntry?.memoryFlushCompactionCount ?? "undefined"} ` +
+      `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptTotalTokens=${transcriptTotalTokens ?? "undefined"}`,
+  );
+
   const shouldFlushMemory =
     memoryFlushSettings &&
     memoryFlushWritable &&
     !params.isHeartbeat &&
-    !isCliProvider(params.followupRun.run.provider, params.cfg) &&
+    !isCli &&
     shouldRunMemoryFlush({
-      entry:
-        params.sessionEntry ??
-        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
-      contextWindowTokens: resolveMemoryFlushContextWindowTokens({
-        modelId: params.followupRun.run.model ?? params.defaultModel,
-        agentCfgContextTokens: params.agentCfgContextTokens,
-      }),
+      entry: effectiveEntry,
+      contextWindowTokens,
       reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
       softThresholdTokens: memoryFlushSettings.softThresholdTokens,
     });
 
   if (!shouldFlushMemory) {
-    return params.sessionEntry;
+    return entry ?? params.sessionEntry;
   }
 
-  let activeSessionEntry = params.sessionEntry;
+  logVerbose(
+    `memoryFlush triggered: sessionKey=${params.sessionKey} totalTokens=${totalTokens} threshold=${threshold}`,
+  );
+
+  let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   const flushRunId = crypto.randomUUID();
   if (params.sessionKey) {
