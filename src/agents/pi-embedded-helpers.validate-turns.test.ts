@@ -268,6 +268,8 @@ describe("validateAnthropicTurns", () => {
 
   it("should handle mixed scenario with steering messages", () => {
     // Simulates: user asks -> assistant errors -> steering user message injected
+    // The empty error assistant message is removed to prevent cascading API failures,
+    // then all consecutive user messages are merged.
     const msgs: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "Original question" }] },
       {
@@ -285,13 +287,51 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    // The two consecutive user messages at the end should be merged
-    expect(result).toHaveLength(3);
+    // Empty error assistant removed, all users merged into one
+    expect(result).toHaveLength(1);
     expect(result[0].role).toBe("user");
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(3);
+  });
+
+  it("should remove empty error assistant messages to prevent cascading failures", () => {
+    const msgs: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "An unknown error occurred",
+      },
+      { role: "user", content: [{ type: "text", text: "Try again" }] },
+    ];
+
+    const result = validateAnthropicTurns(msgs);
+
+    // Error assistant with empty content should be removed
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+  });
+
+  it("should salvage partial error assistant messages by stripping error metadata", () => {
+    const msgs: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I was saying..." }],
+        stopReason: "error",
+        errorMessage: "Stream interrupted",
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ];
+
+    const result = validateAnthropicTurns(msgs);
+
+    // Partial content kept but error metadata stripped
+    expect(result).toHaveLength(3);
     expect(result[1].role).toBe("assistant");
-    expect(result[2].role).toBe("user");
-    const lastContent = (result[2] as { content: unknown[] }).content;
-    expect(lastContent).toHaveLength(2);
+    expect((result[1] as { stopReason?: string }).stopReason).toBe("stop");
+    expect((result[1] as { errorMessage?: string }).errorMessage).toBeUndefined();
   });
 });
 
