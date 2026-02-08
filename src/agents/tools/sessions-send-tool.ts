@@ -265,6 +265,7 @@ export function createSessionsSendTool(opts?: {
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
+      const shouldRunA2A = isCrossAgent && a2aPolicy.enabled && !!requesterSessionKey;
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
@@ -289,7 +290,9 @@ export function createSessionsSendTool(opts?: {
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
-          startA2AFlow(undefined, runId);
+          if (shouldRunA2A) {
+            startA2AFlow(undefined, runId);
+          }
           return jsonResult({
             runId,
             status: "accepted",
@@ -376,7 +379,9 @@ export function createSessionsSendTool(opts?: {
       const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
-      startA2AFlow(reply ?? undefined);
+      if (shouldRunA2A) {
+        startA2AFlow(reply ?? undefined);
+      }
 
       return jsonResult({
         runId,

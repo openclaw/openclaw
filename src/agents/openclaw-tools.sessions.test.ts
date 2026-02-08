@@ -15,6 +15,12 @@ vi.mock("../config/config.js", async (importOriginal) => {
         scope: "per-sender",
         agentToAgent: { maxPingPongTurns: 2 },
       },
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["*"],
+        },
+      },
     }),
     resolveGatewayPort: () => 18789,
   };
@@ -374,7 +380,8 @@ describe("sessions tools", () => {
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
-    const requesterKey = "discord:group:req";
+    const requesterKey = "agent:agent1:discord:group:req";
+    const targetKey = "agent:agent2:main";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -438,7 +445,7 @@ describe("sessions tools", () => {
     }
 
     const fire = await tool.execute("call5", {
-      sessionKey: "main",
+      sessionKey: targetKey,
       message: "ping",
       timeoutSeconds: 0,
     });
@@ -452,7 +459,7 @@ describe("sessions tools", () => {
     await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
 
     const waitPromise = tool.execute("call6", {
-      sessionKey: "main",
+      sessionKey: targetKey,
       message: "wait",
       timeoutSeconds: 1,
     });
@@ -564,8 +571,8 @@ describe("sessions tools", () => {
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
-    const requesterKey = "discord:group:req";
-    const targetKey = "discord:group:target";
+    const requesterKey = "agent:agent1:discord:group:req";
+    const targetKey = "agent:agent2:discord:group:target";
     let sendParams: { to?: string; channel?: string; message?: string } = {};
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
