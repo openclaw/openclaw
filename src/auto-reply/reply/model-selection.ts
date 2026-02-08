@@ -299,6 +299,7 @@ export async function createModelSelectionState(params: {
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = [];
+  let allowAnyModel = false;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
 
@@ -312,6 +313,7 @@ export async function createModelSelectionState(params: {
     });
     allowedModelCatalog = allowed.allowedCatalog;
     allowedModelKeys = allowed.allowedKeys;
+    allowAnyModel = allowed.allowAny;
   }
 
   if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
@@ -319,7 +321,7 @@ export async function createModelSelectionState(params: {
     const overrideModel = sessionEntry.modelOverride?.trim();
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      if (!allowAnyModel && allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -346,7 +348,7 @@ export async function createModelSelectionState(params: {
   if (storedOverride?.model) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    if (allowAnyModel || allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
       model = storedOverride.model;
     }
