@@ -15,7 +15,7 @@ title: "Thinking Levels"
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
+- xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
