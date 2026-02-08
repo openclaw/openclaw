@@ -90,6 +90,51 @@ describe("runCronIsolatedAgentTurn", () => {
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
+  it("uses subagents.model for isolated cron sessions", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "ollama", model: "llama3.2:3b" },
+        },
+      });
+
+      const cfg = makeCfg(home, storePath, {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-5",
+            subagents: { model: "ollama/llama3.2:3b" },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store: storePath, mainKey: "main" },
+      } as Partial<OpenClawConfig>);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it" }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.provider).toBe("ollama");
+      expect(call?.model).toBe("llama3.2:3b");
+    });
+  });
+
   it("treats blank model overrides as unset", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
