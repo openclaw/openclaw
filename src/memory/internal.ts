@@ -21,7 +21,7 @@ export type MemoryChunk = {
 export function ensureDir(dir: string): string {
   try {
     fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  } catch {} // Dir may already exist; mkdirSync throws EEXIST which is safe to ignore
   return dir;
 }
 
