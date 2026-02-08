@@ -6,6 +6,20 @@ import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
 
+export type ToolResultSanitizerOptions = {
+  /** Optional max decoded bytes to keep for base64 data fields. */
+  maxDataBytes?: number;
+};
+
+function estimateBase64Bytes(data: string): number {
+  const len = data.length;
+  if (!len) {
+    return 0;
+  }
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((len * 3) / 4) - padding);
+}
+
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
     return text;
@@ -60,7 +74,7 @@ function extractErrorField(value: unknown): string | undefined {
   return status ? normalizeToolErrorText(status) : undefined;
 }
 
-export function sanitizeToolResult(result: unknown): unknown {
+export function sanitizeToolResult(result: unknown, options?: ToolResultSanitizerOptions): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -69,6 +83,11 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (!content) {
     return record;
   }
+  const maxDataBytes =
+    typeof options?.maxDataBytes === "number" && options.maxDataBytes > 0
+      ? options.maxDataBytes
+      : undefined;
+  const enforceDataLimit = maxDataBytes !== undefined;
   const sanitized = content.map((item) => {
     if (!item || typeof item !== "object") {
       return item;
@@ -78,12 +97,17 @@ export function sanitizeToolResult(result: unknown): unknown {
     if (type === "text" && typeof entry.text === "string") {
       return { ...entry, text: truncateToolText(entry.text) };
     }
-    if (type === "image") {
-      const data = typeof entry.data === "string" ? entry.data : undefined;
-      const bytes = data ? data.length : undefined;
-      const cleaned = { ...entry };
-      delete cleaned.data;
-      return { ...cleaned, bytes, omitted: true };
+    const data = typeof entry.data === "string" ? entry.data : undefined;
+    if (data) {
+      const bytes = estimateBase64Bytes(data);
+      const shouldOmit =
+        (enforceDataLimit && bytes > maxDataBytes) || (!enforceDataLimit && type === "image");
+      if (shouldOmit) {
+        const cleaned = { ...entry };
+        delete cleaned.data;
+        return { ...cleaned, bytes, omitted: true };
+      }
+      return entry;
     }
     return entry;
   });

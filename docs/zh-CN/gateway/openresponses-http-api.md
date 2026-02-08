@@ -103,13 +103,15 @@ OpenClaw 的 Gateway 网关可以提供兼容 OpenResponses 的 `POST /v1/respon
 接受但**当前忽略**：
 
 - `max_tool_calls`
-- `reasoning`
 - `metadata`
 - `store`
 - `previous_response_id`
 - `truncation`
 
-## Item（输入）
+`reasoning` 会用于流式输出推理项。`reasoning.summary` 会切换为摘要输出；
+`reasoning.effort` 目前仅为兼容接受，暂不生效。
+
+## Items（输入）
 
 ### `message`
 
@@ -227,6 +229,8 @@ URL 获取默认值：
             maxRedirects: 3,
             timeoutMs: 10000,
           },
+          // 可选：允许包含 base64 工具结果数据的最大解码字节数。
+          toolResultMaxDataBytes: 1048576,
         },
       },
     },
@@ -247,6 +251,16 @@ URL 获取默认值：
 - `images.maxBytes`：10MB
 - `images.maxRedirects`：3
 - `images.timeoutMs`：10s
+- `toolResultMaxDataBytes`：未设置或 `0`（工具结果 data 会被剥离）
+
+说明：
+
+- `toolResultMaxDataBytes` 适用于工具返回的任意 `content[].data` 字段
+  （图片或 PDF/docx 等二进制负载）。
+- 未设置时，OpenClaw 会剥离 `type: "image"` 的 base64 数据并返回
+  `{ bytes, omitted: true }`。
+- 如果返回的 base64 数据超过上限，OpenClaw 会剥离 `data` 并返回
+  `{ bytes, omitted: true }`。
 
 ## 流式传输（SSE）
 

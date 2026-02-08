@@ -428,8 +428,35 @@ describe("OpenResponses HTTP API (e2e)", () => {
       agentCommand.mockReset();
       agentCommand.mockImplementationOnce(async (opts: unknown) => {
         const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        const onReasoningStream = (
+          opts as { onReasoningStream?: (payload: { text?: string }) => void }
+        )?.onReasoningStream;
+        onReasoningStream?.({ text: "thinking..." });
         emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
         emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "browser",
+            toolCallId: "call_tool_1",
+            args: { action: "open", targetUrl: "https://example.com" },
+          },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "browser",
+            toolCallId: "call_tool_1",
+            result: {
+              content: [{ type: "text", text: "ok" }],
+              ok: true,
+            },
+          },
+        });
         return { payloads: [{ text: "hello" }] } as never;
       });
 
@@ -437,6 +464,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         stream: true,
         model: "openclaw",
         input: "hi",
+        reasoning: { summary: "auto" },
       });
       expect(resDelta.status).toBe(200);
       expect(resDelta.headers.get("content-type") ?? "").toContain("text/event-stream");
@@ -463,6 +491,20 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })
         .join("");
       expect(deltas).toBe("hello");
+
+      const outputItems = deltaEvents
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string } })
+        .map((parsed) => parsed.item?.type);
+      expect(outputItems).toContain("function_call");
+      expect(outputItems).toContain("function_call_output");
+      expect(outputItems).toContain("reasoning");
+      const reasoningItem = deltaEvents
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string; summary?: string } })
+        .map((parsed) => parsed.item)
+        .find((item) => item?.type === "reasoning");
+      expect(reasoningItem?.summary).toBe("thinking...");
 
       agentCommand.mockReset();
       agentCommand.mockResolvedValueOnce({

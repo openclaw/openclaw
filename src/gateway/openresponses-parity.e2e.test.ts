@@ -9,6 +9,19 @@ import { describe, it, expect } from "vitest";
 
 describe("OpenResponses Feature Parity", () => {
   describe("Schema Validation", () => {
+    it("should validate function_call_output output items", async () => {
+      const { OutputItemSchema } = await import("./open-responses.schema.js");
+
+      const validOutput = {
+        type: "function_call_output" as const,
+        call_id: "call_123",
+        output: '{"ok":true}',
+      };
+
+      const result = OutputItemSchema.safeParse(validOutput);
+      expect(result.success).toBe(true);
+    });
+
     it("should validate input_image with url source", async () => {
       const { InputImageContentPartSchema } = await import("./open-responses.schema.js");
 

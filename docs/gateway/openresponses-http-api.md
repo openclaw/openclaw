@@ -98,11 +98,13 @@ The request follows the OpenResponses API with item-based input. Current support
 Accepted but **currently ignored**:
 
 - `max_tool_calls`
-- `reasoning`
 - `metadata`
 - `store`
 - `previous_response_id`
 - `truncation`
+
+`reasoning` is honored for streaming output items. `reasoning.summary` switches to summary output;
+`reasoning.effort` is accepted for parity but currently ignored.
 
 ## Items (input)
 
@@ -227,6 +229,8 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
             maxRedirects: 3,
             timeoutMs: 10000,
           },
+          // Optional: include base64 tool-result data up to this many decoded bytes.
+          toolResultMaxDataBytes: 1048576,
         },
       },
     },
@@ -247,6 +251,16 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- `toolResultMaxDataBytes`: unset or `0` (tool result data stripped)
+
+Notes:
+
+- `toolResultMaxDataBytes` applies to any `content[].data` field returned by tools
+  (images or other binary payloads like PDFs/docx).
+- When unset, OpenClaw strips base64 data for `type: "image"` tool results and returns
+  `{ bytes, omitted: true }`. When set, base64 is included up to the byte cap.
+- If a tool returns base64 data over the cap, OpenClaw omits `data` and returns
+  `{ bytes, omitted: true }` for that item.
 
 ## Streaming (SSE)
 
@@ -268,6 +282,11 @@ Event types currently emitted:
 - `response.output_item.done`
 - `response.completed`
 - `response.failed` (on error)
+
+Tool calls and internal tool results are emitted as `response.output_item.added`/`done`
+items with `type: "function_call"` and `type: "function_call_output"`. If reasoning
+streaming is enabled, `type: "reasoning"` output items are emitted as they arrive. If you
+request `reasoning.summary`, the reasoning text is returned in the `summary` field.
 
 ## Usage
 

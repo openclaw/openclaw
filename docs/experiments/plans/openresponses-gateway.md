@@ -121,3 +121,9 @@ Key points extracted:
 
 - Add a new docs page for `/v1/responses` usage and examples.
 - Update `/gateway/openai-http-api` with a legacy note and pointer to `/v1/responses`.
+
+## Follow-up Enhancements
+
+- Emit internal tool events in OpenResponses output (`function_call` + `function_call_output`).
+- Stream reasoning output items when requested via `reasoning` and/or `/thinking`.
+- Add an opt-in size cap to include base64 tool-result data (default: stripped).

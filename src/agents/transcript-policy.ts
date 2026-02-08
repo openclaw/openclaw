@@ -34,6 +34,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai",
   "openai-completions",
   "openai-responses",
+  "vida-responses",
   "openai-codex-responses",
 ]);
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
