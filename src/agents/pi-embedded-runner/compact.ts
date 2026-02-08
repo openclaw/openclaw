@@ -60,6 +60,7 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "./google.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -436,6 +437,24 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Run before_compaction hook
+        const hookRunner = getGlobalHookRunner();
+        const hookCtx = {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: effectiveWorkspace,
+          messageProvider: params.messageChannel ?? params.messageProvider,
+        };
+        const messageCountBefore = session.messages?.length ?? 0;
+
+        if (hookRunner?.hasHooks("before_compaction")) {
+          await hookRunner.runBeforeCompaction(
+            { messageCount: messageCountBefore, tokenCount: undefined },
+            hookCtx,
+          );
+        }
+
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -452,6 +471,23 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+
+        // Run after_compaction hook (fire-and-forget)
+        if (hookRunner?.hasHooks("after_compaction")) {
+          hookRunner
+            .runAfterCompaction(
+              {
+                messageCount: session.messages?.length ?? 0,
+                tokenCount: tokensAfter,
+                compactedCount: messageCountBefore - (session.messages?.length ?? 0),
+              },
+              hookCtx,
+            )
+            .catch((err) => {
+              log.error(`after_compaction hook error: ${err}`);
+            });
+        }
+
         return {
           ok: true,
           compacted: true,
