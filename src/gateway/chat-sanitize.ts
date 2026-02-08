@@ -1,3 +1,6 @@
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+
 const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
 const ENVELOPE_CHANNELS = [
   "WebChat",
@@ -120,4 +123,97 @@ export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
     return stripped;
   });
   return changed ? next : messages;
+}
+
+/**
+ * Extract text content from a message for heartbeat detection.
+ */
+function extractMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (Array.isArray(entry.content)) {
+    return entry.content
+      .filter(
+        (item): item is { type: string; text: string } =>
+          !!item && typeof item === "object" && (item as Record<string, unknown>).type === "text",
+      )
+      .map((item) => item.text)
+      .join("\n");
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  return "";
+}
+
+function getMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const role = (message as Record<string, unknown>).role;
+  return typeof role === "string" ? role.toLowerCase() : "";
+}
+
+/**
+ * Check if a message is a heartbeat prompt (user message containing the heartbeat prompt text).
+ */
+function isHeartbeatPromptMessage(message: unknown): boolean {
+  if (getMessageRole(message) !== "user") {
+    return false;
+  }
+  const text = extractMessageText(message);
+  return text.includes(HEARTBEAT_PROMPT);
+}
+
+/**
+ * Check if a message is a HEARTBEAT_OK response (assistant message that is only HEARTBEAT_OK).
+ */
+function isHeartbeatOkResponse(message: unknown): boolean {
+  const role = getMessageRole(message);
+  if (role !== "assistant") {
+    return false;
+  }
+  const text = extractMessageText(message).trim();
+  // Match messages that are just HEARTBEAT_OK (possibly with minor whitespace/markup)
+  // Strip HTML tags and edge markdown wrappers (including underscores at boundaries),
+  // consistent with stripHeartbeatToken() in heartbeat.ts
+  const stripped = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "")
+    .trim();
+  return stripped === HEARTBEAT_TOKEN;
+}
+
+/**
+ * Filter out HEARTBEAT_OK message pairs (heartbeat prompt + HEARTBEAT_OK response)
+ * from chat history. Keeps heartbeat runs that produced actual content (alerts).
+ */
+export function filterHeartbeatOkMessages(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+
+  // Identify indices to remove: heartbeat prompt followed by HEARTBEAT_OK response
+  const indicesToRemove = new Set<number>();
+  for (let i = 0; i < messages.length; i++) {
+    if (isHeartbeatOkResponse(messages[i])) {
+      indicesToRemove.add(i);
+      // Also remove the preceding heartbeat prompt if present
+      if (i > 0 && isHeartbeatPromptMessage(messages[i - 1])) {
+        indicesToRemove.add(i - 1);
+      }
+    }
+  }
+
+  if (indicesToRemove.size === 0) {
+    return messages;
+  }
+
+  return messages.filter((_, index) => !indicesToRemove.has(index));
 }
