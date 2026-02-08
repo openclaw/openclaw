@@ -47,6 +47,21 @@ describe("failover-error", () => {
     expect(err?.status).toBe(400);
   });
 
+  it("infers not_found from 404 status", () => {
+    expect(resolveFailoverReasonFromError({ status: 404 })).toBe("not_found");
+  });
+
+  it("coerces 404 errors into FailoverError with not_found reason", () => {
+    const err = coerceToFailoverError(
+      Object.assign(new Error("Requested entity was not found"), { status: 404 }),
+      { provider: "google-gemini-cli", model: "gemini-3-pro-preview" },
+    );
+    expect(err?.name).toBe("FailoverError");
+    expect(err?.reason).toBe("not_found");
+    expect(err?.status).toBe(404);
+    expect(err?.provider).toBe("google-gemini-cli");
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");

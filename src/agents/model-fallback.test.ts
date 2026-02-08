@@ -494,6 +494,28 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("falls back on 404 not found errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Requested entity was not found"), { status: 404 }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google-gemini-cli",
+      model: "gemini-3-pro-preview",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
   it("does not fall back on user aborts", async () => {
     const cfg = makeCfg();
     const run = vi

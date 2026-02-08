@@ -496,6 +496,14 @@ const ERROR_PATTERNS = {
     "messages.1.content.1.tool_use.id",
     "invalid request format",
   ],
+  notFound: [
+    /\b404\b/,
+    "entity was not found",
+    /model\b.*\bnot found/,
+    "resource not found",
+    "does not exist",
+    "not_found_error",
+  ] as ErrorPattern[],
 } as const;
 
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -617,6 +625,24 @@ export function isImageSizeError(errorMessage?: string): boolean {
   return Boolean(parseImageSizeError(errorMessage));
 }
 
+export function isNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  // Exclude local file-system / config "not found" that aren't model 404s
+  const falsePositives = [
+    "file not found",
+    "config not found",
+    "path not found",
+    "module not found",
+  ];
+  if (falsePositives.some((fp) => lower.includes(fp))) {
+    return false;
+  }
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.notFound);
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
@@ -652,6 +678,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isNotFoundErrorMessage(raw)) {
+    return "not_found";
   }
   return null;
 }

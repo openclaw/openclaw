@@ -23,6 +23,7 @@ export {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isNotFoundErrorMessage,
   isImageDimensionErrorMessage,
   isImageSizeError,
   isOverloadedErrorMessage,

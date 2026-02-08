@@ -38,4 +38,32 @@ describe("classifyFailoverReason", () => {
       "rate_limit",
     );
   });
+
+  it("classifies 'entity was not found' as not_found", () => {
+    expect(classifyFailoverReason("Requested entity was not found.")).toBe("not_found");
+  });
+
+  it("classifies 'model not found' as not_found", () => {
+    expect(classifyFailoverReason("The model xyz-123 was not found")).toBe("not_found");
+  });
+
+  it("classifies messages containing '404' as not_found", () => {
+    expect(classifyFailoverReason("HTTP 404: resource unavailable")).toBe("not_found");
+  });
+
+  it("classifies not_found_error type as not_found", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"not_found_error","message":"Not found"}}',
+      ),
+    ).toBe("not_found");
+  });
+
+  it("does NOT classify 'file not found' as not_found (false positive)", () => {
+    expect(classifyFailoverReason("file not found: config.json")).toBeNull();
+  });
+
+  it("does NOT classify 'module not found' as not_found (false positive)", () => {
+    expect(classifyFailoverReason("module not found: @some/package")).toBeNull();
+  });
 });
