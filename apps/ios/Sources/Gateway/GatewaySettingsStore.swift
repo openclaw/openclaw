@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum GatewaySettingsStore {
     private static let gatewayService = "ai.openclaw.gateway"
@@ -12,6 +13,12 @@ enum GatewaySettingsStore {
     private static let manualPortDefaultsKey = "gateway.manual.port"
     private static let manualTlsDefaultsKey = "gateway.manual.tls"
     private static let discoveryDebugLogsDefaultsKey = "gateway.discovery.debugLogs"
+    private static let lastGatewayHostDefaultsKey = "gateway.last.host"
+    private static let lastGatewayPortDefaultsKey = "gateway.last.port"
+    private static let lastGatewayTlsDefaultsKey = "gateway.last.tls"
+    private static let lastGatewayStableIDDefaultsKey = "gateway.last.stableID"
+    private static let clientIdOverrideDefaultsPrefix = "gateway.clientIdOverride."
+    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
 
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
@@ -107,6 +114,71 @@ enum GatewaySettingsStore {
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }
 
+    static func saveLastGatewayConnection(host: String, port: Int, useTLS: Bool, stableID: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(host, forKey: self.lastGatewayHostDefaultsKey)
+        defaults.set(port, forKey: self.lastGatewayPortDefaultsKey)
+        defaults.set(useTLS, forKey: self.lastGatewayTlsDefaultsKey)
+        defaults.set(stableID, forKey: self.lastGatewayStableIDDefaultsKey)
+    }
+
+    static func loadLastGatewayConnection() -> (host: String, port: Int, useTLS: Bool, stableID: String)? {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: self.lastGatewayHostDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = defaults.integer(forKey: self.lastGatewayPortDefaultsKey)
+        let useTLS = defaults.bool(forKey: self.lastGatewayTlsDefaultsKey)
+        let stableID = defaults.string(forKey: self.lastGatewayStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !host.isEmpty, port > 0, port <= 65535, !stableID.isEmpty else { return nil }
+        return (host: host, port: port, useTLS: useTLS, stableID: stableID)
+    }
+
+    static func loadGatewayClientIdOverride(stableID: String) -> String? {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return nil }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let value = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveGatewayClientIdOverride(stableID: String, clientId: String?) {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let trimmedClientId = clientId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedClientId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmedClientId, forKey: key)
+        }
+    }
+
+    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return nil }
+        let key = self.selectedAgentDefaultsPrefix + trimmedID
+        let value = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let key = self.selectedAgentDefaultsPrefix + trimmedID
+        let trimmedAgentId = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedAgentId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmedAgentId, forKey: key)
+        }
+    }
+
     private static func gatewayTokenAccount(instanceId: String) -> String {
         "gateway-token.\(instanceId)"
     }
@@ -174,4 +246,102 @@ enum GatewaySettingsStore {
         }
     }
 
+}
+
+enum GatewayDiagnostics {
+    private static let logger = Logger(subsystem: "ai.openclaw.ios", category: "GatewayDiag")
+    private static let queue = DispatchQueue(label: "ai.openclaw.gateway.diagnostics")
+    private static let maxLogBytes: Int64 = 512 * 1024
+    private static let keepLogBytes: Int64 = 256 * 1024
+    private static let logSizeCheckEveryWrites = 50
+    nonisolated(unsafe) private static var logWritesSinceCheck = 0
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("openclaw-gateway.log")
+    }
+
+    private static func truncateLogIfNeeded(url: URL) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let sizeNumber = attrs[.size] as? NSNumber
+        else { return }
+        let size = sizeNumber.int64Value
+        guard size > self.maxLogBytes else { return }
+
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+
+            let start = max(Int64(0), size - self.keepLogBytes)
+            try handle.seek(toOffset: UInt64(start))
+            var tail = try handle.readToEnd() ?? Data()
+
+            // If we truncated mid-line, drop the first partial line so logs remain readable.
+            if start > 0, let nl = tail.firstIndex(of: 10) {
+                let next = tail.index(after: nl)
+                if next < tail.endIndex {
+                    tail = tail.suffix(from: next)
+                } else {
+                    tail = Data()
+                }
+            }
+
+            try tail.write(to: url, options: .atomic)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    private static func appendToLog(url: URL, data: Data) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+            }
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    static func bootstrap() {
+        guard let url = fileURL else { return }
+        queue.async {
+            self.truncateLogIfNeeded(url: url)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let timestamp = formatter.string(from: Date())
+            let line = "[\(timestamp)] gateway diagnostics started\n"
+            if let data = line.data(using: .utf8) {
+                self.appendToLog(url: url, data: data)
+            }
+        }
+    }
+
+    static func log(_ message: String) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: Date())
+        let line = "[\(timestamp)] \(message)"
+        logger.info("\(line, privacy: .public)")
+
+        guard let url = fileURL else { return }
+        queue.async {
+            self.logWritesSinceCheck += 1
+            if self.logWritesSinceCheck >= self.logSizeCheckEveryWrites {
+                self.logWritesSinceCheck = 0
+                self.truncateLogIfNeeded(url: url)
+            }
+            let entry = line + "\n"
+            if let data = entry.data(using: .utf8) {
+                self.appendToLog(url: url, data: data)
+            }
+        }
+    }
+
+    static func reset() {
+        guard let url = fileURL else { return }
+        queue.async {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 }
