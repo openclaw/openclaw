@@ -1,0 +1,166 @@
+---
+title: 렌더링 시 배포
+x-i18n:
+    generated_at: "2026-02-08T15:56:46Z"
+    model: gtx
+    provider: google-translate
+    source_hash: 7ad9d0d78812feb1844e9897fe6590372983ec3fc047ebe353638875c7c7e42b
+    source_path: install/render.mdx
+    workflow: 15
+---
+
+인프라를 코드로 사용하여 렌더링 시 OpenClaw를 배포합니다. 포함된 `render.yaml` Blueprint는 전체 스택, 서비스, 디스크, 환경 변수를 선언적으로 정의하므로 클릭 한 번으로 배포하고 코드와 함께 인프라 버전을 지정할 수 있습니다.
+
+## 전제조건
+
+- 에이 [렌더링 계정](https://render.com) (무료 등급 사용 가능)
+- 원하는 API 키 [모델 제공자](/providers)
+
+## Render Blueprint를 사용하여 배포
+
+[렌더링에 배포](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+
+이 링크를 클릭하면 다음이 수행됩니다.
+
+1. 다음에서 새 렌더 서비스를 생성합니다. `render.yaml` 이 저장소의 루트에 있는 청사진.
+2. 설정하라는 메시지가 표시됩니다. `SETUP_PASSWORD`
+3. Docker 이미지 빌드 및 배포
+
+배포되면 서비스 URL은 패턴을 따릅니다. `https://<service-name>.onrender.com`.
+
+## 청사진 이해
+
+렌더 블루프린트는 인프라를 정의하는 YAML 파일입니다. 그만큼 `render.yaml` 이것에
+저장소는 OpenClaw를 실행하는 데 필요한 모든 것을 구성합니다.
+
+```yaml
+services:
+  - type: web
+    name: openclaw
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: SETUP_PASSWORD
+        sync: false # prompts during deploy
+      - key: OPENCLAW_STATE_DIR
+        value: /data/.openclaw
+      - key: OPENCLAW_WORKSPACE_DIR
+        value: /data/workspace
+      - key: OPENCLAW_GATEWAY_TOKEN
+        generateValue: true # auto-generates a secure token
+    disk:
+      name: openclaw-data
+      mountPath: /data
+      sizeGB: 1
+```
+
+사용된 주요 블루프린트 기능:
+
+| Feature               | Purpose                                                    |
+| --------------------- | ---------------------------------------------------------- |
+| `runtime: docker`     | Builds from the repo's Dockerfile                          |
+| `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
+| `sync: false`         | Prompts for value during deploy (secrets)                  |
+| `generateValue: true` | Auto-generates a cryptographically secure value            |
+| `disk`                | Persistent storage that survives redeploys                 |
+
+## 플랜 선택
+
+| Plan      | Spin-down         | Disk          | Best for                      |
+| --------- | ----------------- | ------------- | ----------------------------- |
+| Free      | After 15 min idle | Not available | Testing, demos                |
+| Starter   | Never             | 1GB+          | Personal use, small teams     |
+| Standard+ | Never             | 1GB+          | Production, multiple channels |
+
+블루프린트의 기본값은 `starter`. 무료 등급을 사용하려면 변경하세요. `plan: free` 당신의 포크에
+`render.yaml` (그러나 참고: 영구 디스크가 없다는 것은 배포할 때마다 구성이 재설정된다는 의미입니다.)
+
+## 배포 후
+
+### 설정 마법사 완료
+
+1. 다음으로 이동 `https://<your-service>.onrender.com/setup`
+2. 귀하의 `SETUP_PASSWORD`
+3. 모델 제공자를 선택하고 API 키를 붙여넣으세요.
+4. 선택적으로 메시징 채널 구성(Telegram, Discord, Slack)
+5. 딸깍 하는 소리 **설정 실행**
+
+### 컨트롤 UI에 액세스
+
+웹 대시보드는 다음에서 사용할 수 있습니다. `https://<your-service>.onrender.com/openclaw`.
+
+## 렌더 대시보드 기능
+
+### 로그
+
+실시간 로그인 보기 **대시보드 → 귀하의 서비스 → 로그**. 필터링 기준:
+
+- 빌드 로그(Docker 이미지 생성)
+- 로그 배포(서비스 시작)
+- 런타임 로그(애플리케이션 출력)
+
+### 쉘 액세스
+
+디버깅을 위해 다음을 통해 셸 세션을 엽니다. **대시보드 → 서비스 → Shell**. 영구 디스크는 다음 위치에 마운트됩니다. `/data`.
+
+### 환경변수
+
+변수 수정 **대시보드 → 귀하의 서비스 → 환경**. 변경 사항은 자동 재배포를 트리거합니다.
+
+### 자동 배포
+
+원래 OpenClaw 저장소를 사용하는 경우 Render는 OpenClaw를 자동 배포하지 않습니다. 업데이트하려면 대시보드에서 수동 블루프린트 동기화를 실행하세요.
+
+## 맞춤 도메인
+
+1. 이동 **대시보드 → 서비스 → 설정 → 맞춤 도메인**
+2. 도메인 추가
+3. 지시에 따라 DNS를 구성합니다(CNAME을 `*.onrender.com`)
+4. 렌더는 TLS 인증서를 자동으로 프로비저닝합니다.
+
+## 스케일링
+
+렌더링은 수평 및 수직 크기 조정을 지원합니다.
+
+- **수직의**: 더 많은 CPU/RAM을 확보하기 위해 계획을 변경하세요.
+- **수평의**: 인스턴스 수 증가(Standard 플랜 이상)
+
+OpenClaw의 경우 일반적으로 수직 스케일링으로 충분합니다. 수평적 확장에는 고정 세션 또는 외부 상태 관리가 필요합니다.
+
+## 백업 및 마이그레이션
+
+언제든지 구성과 작업공간을 내보냅니다.
+
+```
+https://<your-service>.onrender.com/setup/export
+```
+
+그러면 모든 OpenClaw 호스트에서 복원할 수 있는 휴대용 백업이 다운로드됩니다.
+
+## 문제 해결
+
+### 서비스가 시작되지 않습니다
+
+렌더 대시보드에서 배포 로그를 확인하세요. 일반적인 문제:
+
+- 없어진 `SETUP_PASSWORD` — 블루프린트에 이에 대한 메시지가 표시되지만 설정되었는지 확인하세요.
+- 포트 불일치 — 확인 `PORT=8080` Dockerfile의 노출된 포트와 일치합니다.
+
+### 느린 콜드 스타트(프리 티어)
+
+15분 동안 활동이 없으면 무료 등급 서비스가 종료됩니다. 스핀다운 후 첫 번째 요청은 컨테이너가 시작되는 동안 몇 초 정도 걸립니다. 항상 켜져 있는 스타터 플랜으로 업그레이드하세요.
+
+### 재배포 후 데이터 손실
+
+이는 무료 등급(영구 디스크 없음)에서 발생합니다. 유료 플랜으로 업그레이드하거나
+다음을 통해 정기적으로 구성을 내보냅니다. `/setup/export`.
+
+### 상태 확인 실패
+
+렌더링은 200 응답을 기대합니다. `/health` 30초 이내. 빌드가 성공했지만 배포가 실패하면 서비스를 시작하는 데 너무 오랜 시간이 걸릴 수 있습니다. 확인하다:
+
+- 오류에 대한 로그 작성
+- 컨테이너가 로컬에서 실행되는지 여부 `docker build && docker run`

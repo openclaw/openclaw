@@ -1,0 +1,60 @@
+---
+title: 북쪽 측면에 배치
+x-i18n:
+    generated_at: "2026-02-08T16:06:57Z"
+    model: gtx
+    provider: google-translate
+    source_hash: a6f89f2737505dce438bc23cf9298e6a6e32e144f1e596b6b00ee5e240be9f6c
+    source_path: install/northflank.mdx
+    workflow: 15
+---
+
+원클릭 템플릿을 사용하여 Northflank에 OpenClaw를 배포하고 브라우저에서 설정을 완료하세요.
+이것은 가장 쉬운 "서버에 터미널 없음" 경로입니다. Northflank가 게이트웨이를 실행합니다.
+그리고 당신은 다음을 통해 모든 것을 구성합니다 `/setup` 웹 마법사.
+
+## 시작하는 방법
+
+1. 딸깍 하는 소리 [OpenClaw 배포](https://northflank.com/stacks/deploy-openclaw) 템플릿을 엽니다.
+2. 만들기 [Northflank 계정](https://app.northflank.com/signup) 아직 가지고 있지 않다면.
+3. 딸깍 하는 소리 **지금 OpenClaw 배포**.
+4. 필수 환경 변수를 설정합니다. `SETUP_PASSWORD`.
+5. 딸깍 하는 소리 **스택 배포** OpenClaw 템플릿을 빌드하고 실행합니다.
+6. 배포가 완료될 때까지 기다린 후 다음을 클릭합니다. **리소스 보기**.
+7. OpenClaw 서비스를 엽니다.
+8. 공개 OpenClaw URL을 열고 다음에서 설정을 완료하세요. `/setup`.
+9. 다음에서 컨트롤 UI를 엽니다. `/openclaw`.
+
+## 당신이 얻는 것
+
+- 호스팅된 OpenClaw 게이트웨이 + 제어 UI
+- 웹 설정 마법사 `/setup` (터미널 명령 없음)
+- Northflank 볼륨을 통한 영구 스토리지(`/data`) 따라서 구성/자격 증명/작업 공간은 재배포 후에도 유지됩니다.
+
+## 설정 흐름
+
+1. 방문하다 `https://<your-northflank-domain>/setup` 그리고 당신의 `SETUP_PASSWORD`.
+2. 모델/인증 제공업체를 선택하고 키를 붙여넣으세요.
+3. (선택사항) 텔레그램/Discord/Slack 토큰을 추가합니다.
+4. 딸깍 하는 소리 **설정 실행**.
+5. 다음에서 컨트롤 UI를 엽니다. `https://<your-northflank-domain>/openclaw`
+
+Telegram DM이 페어링으로 설정된 경우 설정 마법사가 페어링 코드를 승인할 수 있습니다.
+
+## 채팅 토큰 받기
+
+### 텔레그램 봇 토큰
+
+1. 메시지 `@BotFather` 텔레그램에서
+2. 달리다 `/newbot`
+3. 토큰을 복사하세요(다음과 같습니다. `123456789:AA...`)
+4. 에 붙여넣으세요 `/setup`
+
+### 디스코드 봇 토큰
+
+1. 이동 [https://discord.com/developers/applications](https://discord.com/developers/applications)
+2. **새로운 애플리케이션** → 이름을 선택하세요
+3. **봇** → **봇 추가**
+4. **메시지 콘텐츠 의도 활성화** Bot → Privileged Gateway Intents(필수, 그렇지 않으면 봇이 시작 시 충돌함)
+5. 복사 **봇 토큰** 그리고 붙여넣기 `/setup`
+6. 서버에 봇을 초대합니다(OAuth2 URL 생성기, 범위: `bot`, `applications.commands`)

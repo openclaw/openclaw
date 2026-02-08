@@ -1,44 +1,41 @@
 ---
-summary: "OpenClaw를 설치하고 첫 번째 채팅까지 빠르게 완료하는 가이드입니다."
 read_when:
-  - 처음부터 빠르게 설정하고 싶을 때
-  - 가장 짧은 경로로 채팅을 시작하고 싶을 때
-title: "시작하기"
+    - 0에서 처음 설정
+    - 채팅을 진행하는 가장 빠른 경로를 원합니다.
+summary: OpenClaw를 설치하고 몇 분 안에 첫 번째 채팅을 실행하세요.
+title: 시작하기
 x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 78cfa02eb2e4ea1a83e18edd99d142dbae707ec063e8d74c9a54f94581aa067f
-  workflow: manual-ko-bootstrap
+    generated_at: "2026-02-08T16:05:01Z"
+    model: gtx
+    provider: google-translate
+    source_hash: 6eeb4d38a70f2ad9f20977ff24191a3e2417b73c989fb6074aceddcff0e633d4
+    source_path: start/getting-started.md
+    workflow: 15
 ---
 
 # 시작하기
 
-목표: 최소 설정으로 **0에서 첫 채팅**까지 빠르게 진행합니다.
-
-<Note>
-한국어 문서는 현재 일부 페이지만 번역되어 있습니다. 상세 문서는 영어 페이지로
-연결될 수 있습니다.
-</Note>
+목표: 최소한의 설정으로 0에서 첫 번째 작업 채팅으로 이동합니다.
 
 <Info>
-가장 빠른 경로는 Control UI를 여는 것입니다(채널 설정 불필요).  
-`openclaw dashboard`를 실행한 뒤 브라우저에서 채팅하거나,
-<Tooltip headline="Gateway host" tip="OpenClaw Gateway 서비스가 실행 중인 머신">Gateway host</Tooltip>
-에서 `http://127.0.0.1:18789/`를 여세요.  
-관련 문서: [Dashboard](/web/dashboard), [Control UI](/web/control-ui)
+가장 빠른 채팅: 제어 UI를 엽니다(채널 설정이 필요하지 않음). `openclaw dashboard` 실행
+브라우저에서 채팅하거나 다음에서 `http://127.0.0.1:18789/`을 엽니다.
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">게이트웨이 호스트</Tooltip>.
+문서: [대시보드](/web/dashboard) 및 [제어 UI](/web/control-ui).
 </Info>
 
-## 사전 요구사항
+## 전제조건
 
-- Node 22 이상
+- 노드 22 이상
 
 <Tip>
-버전이 헷갈리면 `node --version`으로 확인하세요.
+확실하지 않은 경우 `node --version`으로 Node 버전을 확인하세요.
 </Tip>
 
-## 빠른 설정 (CLI)
+## 빠른 설정(CLI)
 
 <Steps>
-  <Step title="OpenClaw 설치 (권장)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -53,28 +50,28 @@ x-i18n:
     </Tabs>
 
     <Note>
-    다른 설치 방식과 요구사항은 [Install](/install)을 참고하세요.
+    Other install methods and requirements: [Install](/install).
     </Note>
 
   </Step>
-  <Step title="온보딩 마법사 실행">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
-    마법사가 인증, Gateway 설정, 선택 채널 구성을 안내합니다.  
-    자세한 내용: [Onboarding Wizard](/start/wizard)
+    The wizard configures auth, gateway settings, and optional channels.
+    See [Onboarding Wizard](/start/wizard) for details.
 
   </Step>
-  <Step title="Gateway 상태 확인">
-    서비스를 설치했다면 보통 이미 실행 중입니다.
+  <Step title="Check the Gateway">
+    서비스를 설치했다면 이미 실행 중이어야 합니다.
 
     ```bash
     openclaw gateway status
     ```
 
   </Step>
-  <Step title="Control UI 열기">
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -82,22 +79,22 @@ x-i18n:
 </Steps>
 
 <Check>
-Control UI가 열리면 Gateway가 정상 동작 중입니다.
+Control UI가 로드되면 게이트웨이를 사용할 준비가 된 것입니다.
 </Check>
 
-## 선택 점검 및 추가 작업
+## 선택적 확인 사항 및 추가 사항
 
 <AccordionGroup>
-  <Accordion title="Gateway를 포그라운드로 실행">
-    빠른 테스트나 문제 분석에 유용합니다.
+  <Accordion title="Run the Gateway in the foreground">
+    빠른 테스트나 문제 해결에 유용합니다.
 
     ```bash
     openclaw gateway --port 18789
     ```
 
   </Accordion>
-  <Accordion title="테스트 메시지 보내기">
-    채널이 미리 설정되어 있어야 합니다.
+  <Accordion title="Send a test message">
+    구성된 채널이 필요합니다.
 
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
@@ -106,25 +103,25 @@ Control UI가 열리면 Gateway가 정상 동작 중입니다.
   </Accordion>
 </AccordionGroup>
 
-## 더 알아보기
+## 더 깊이 들어가세요
 
 <Columns>
-  <Card title="Onboarding Wizard (상세)" href="/start/wizard">
-    CLI 마법사 전체 옵션과 고급 설정을 확인하세요.
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
+    전체 CLI 마법사 참조 및 고급 옵션.
   </Card>
-  <Card title="macOS 앱 온보딩" href="/start/onboarding">
-    macOS 앱 첫 실행 흐름을 확인하세요.
+  <Card title="macOS app onboarding" href="/start/onboarding">
+    macOS 앱의 첫 번째 실행 흐름입니다.
   </Card>
 </Columns>
 
-## 완료 상태
+## 당신은 무엇을 갖게 될 것인가
 
-- 실행 중인 Gateway
-- 인증 구성 완료
-- Control UI 접근 또는 채널 연결 완료
+- 실행 중인 게이트웨이
+- 인증이 구성됨
+- UI 액세스 또는 연결된 채널 제어
 
 ## 다음 단계
 
-- DM 보안/승인 흐름: [Pairing](/channels/pairing)
-- 채널 추가 연결: [Channels](/channels)
-- 고급 워크플로우/소스 빌드: [Setup](/start/setup)
+- DM 안전 및 승인: [편성](/channels/pairing)
+- 더 많은 채널을 연결하세요: [채널](/channels)
+- 고급 워크플로우 및 소스: [설정](/start/setup)
