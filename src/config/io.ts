@@ -22,7 +22,11 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  MissingEnvVarError,
+  MissingSecretError,
+  resolveConfigEnvVars,
+} from "./env-substitution.js";
 import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
@@ -34,7 +38,7 @@ import { compareOpenClawVersions } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
-export { MissingEnvVarError } from "./env-substitution.js";
+export { MissingEnvVarError, MissingSecretError } from "./env-substitution.js";
 
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
@@ -404,9 +408,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         substituted = resolveConfigEnvVars(resolved, deps.env);
       } catch (err) {
         const message =
-          err instanceof MissingEnvVarError
+          err instanceof MissingEnvVarError || err instanceof MissingSecretError
             ? err.message
-            : `Env var substitution failed: ${String(err)}`;
+            : `Config substitution failed: ${String(err)}`;
         return {
           path: configPath,
           exists: true,
