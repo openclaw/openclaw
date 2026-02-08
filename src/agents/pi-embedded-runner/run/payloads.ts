@@ -211,7 +211,12 @@ export function buildEmbeddedRunPayloads(params: {
       errorLower.includes("must be") ||
       errorLower.includes("must have") ||
       errorLower.includes("needs") ||
-      errorLower.includes("requires");
+      errorLower.includes("requires") ||
+      // Treat command exit codes as internal - the model sees them and can decide how to proceed.
+      // Exit code 1 from grep/find/etc. just means "no matches", not a real error.
+      errorLower.includes("exited with code") ||
+      errorLower.includes("exit code") ||
+      errorLower.includes("aborted");
 
     // Show tool errors only when:
     // 1. There's no user-facing reply AND the error is not recoverable

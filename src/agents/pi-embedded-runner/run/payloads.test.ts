@@ -148,7 +148,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("All good");
   });
 
-  it("adds tool error fallback when the assistant only invoked tools", () => {
+  it("suppresses exit code errors as internal (model sees them in context)", () => {
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
       toolMetas: [],
@@ -171,10 +171,9 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "plain",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("code 1");
+    // Exit code errors should be treated as internal - the model sees them in context
+    // and can decide how to proceed. Users shouldn't see "grep returned exit code 1" etc.
+    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses recoverable tool errors containing 'required'", () => {
@@ -216,6 +215,22 @@ describe("buildEmbeddedRunPayloads", () => {
       toolMetas: [],
       lastAssistant: undefined,
       lastToolError: { toolName: "message", error: "invalid parameter: to" },
+      sessionKey: "session:telegram",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("suppresses aborted command errors", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "exec", error: "Command aborted by signal SIGTERM" },
       sessionKey: "session:telegram",
       inlineToolResultsAllowed: false,
       verboseLevel: "off",
