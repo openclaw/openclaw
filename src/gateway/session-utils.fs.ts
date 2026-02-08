@@ -1,7 +1,9 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SessionPreviewItem } from "./session-utils.types.js";
+import { repairToolUseResultPairing } from "../agents/session-transcript-repair.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -50,7 +52,12 @@ export function readSessionMessages(
       // ignore bad lines
     }
   }
-  return messages;
+  // Repair orphaned tool_use blocks that can occur when browser operations timeout.
+  // Without this, sessions reload with mismatched tool_use/tool_result pairs,
+  // causing API errors like "unexpected tool_use_id in tool_result blocks".
+  // See: https://github.com/openclaw/openclaw/issues/7930
+  const repaired = repairToolUseResultPairing(messages as AgentMessage[]);
+  return repaired.messages;
 }
 
 export function resolveSessionTranscriptCandidates(
