@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
+import {
+  addSubagentRunForTests,
+  listSubagentRunsForRequester,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -837,6 +841,12 @@ describe("sessions tools", () => {
         sessionKey: "agent:main:subagent:steer",
       },
     });
+
+    const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(trackedRuns).toHaveLength(1);
+    expect(trackedRuns[0].runId).toBe("run-steer-1");
+    expect(trackedRuns[0].endedAt).toBeUndefined();
+
     resetSubagentRegistryForTests();
   });
 

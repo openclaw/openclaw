@@ -17,7 +17,12 @@ import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { abortEmbeddedPiRun } from "../pi-embedded.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
-import { listSubagentRunsForRequester, type SubagentRunRecord } from "../subagent-registry.js";
+import {
+  listSubagentRunsForRequester,
+  markSubagentRunForSteerRestart,
+  replaceSubagentRunAfterSteer,
+  type SubagentRunRecord,
+} from "../subagent-registry.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -691,6 +696,10 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         }
         steerRateLimit.set(rateKey, now);
 
+        // Suppress announce for the interrupted run before aborting so we don't
+        // emit stale pre-steer findings if the run exits immediately.
+        markSubagentRunForSteerRestart(resolved.entry.runId);
+
         const targetSession = resolveSessionEntryForKey({
           cfg,
           key: resolved.entry.childSessionKey,
@@ -742,6 +751,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             error,
           });
         }
+
+        replaceSubagentRunAfterSteer({
+          previousRunId: resolved.entry.runId,
+          nextRunId: runId,
+          fallback: resolved.entry,
+        });
 
         return jsonResult({
           status: "accepted",
