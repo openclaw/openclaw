@@ -778,6 +778,9 @@ export async function renameStaleLegacyConfigs(stateDir?: string): Promise<strin
     }
     const migratedPath = `${legacyPath}.migrated`;
     try {
+      // Remove existing .migrated first — on Windows, rename() fails with
+      // EEXIST if the destination exists (unlike POSIX which overwrites).
+      await fs.rm(migratedPath, { force: true });
       await fs.rename(legacyPath, migratedPath);
       changes.push(`Renamed stale legacy config: ${legacyPath} -> ${migratedPath}`);
     } catch {
