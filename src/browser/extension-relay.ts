@@ -133,6 +133,20 @@ function isLoopbackAddress(ip: string | undefined): boolean {
   return false;
 }
 
+function getCorsHeaders(origin: string | undefined): Record<string, string> {
+  if (!origin) {
+    return {};
+  }
+  if (origin.startsWith("chrome-extension://") || origin.startsWith("moz-extension://")) {
+    return {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Methods": "GET, HEAD, PUT, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+  }
+  return {};
+}
+
 function parseBaseUrl(raw: string): {
   host: string;
   port: number;
@@ -362,6 +376,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", info.baseUrl);
     const path = url.pathname;
+    const corsHeaders = getCorsHeaders(req.headers.origin);
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
 
     if (path.startsWith("/json")) {
       const token = getHeader(req, RELAY_AUTH_HEADER);
@@ -373,19 +394,19 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (req.method === "HEAD" && path === "/") {
-      res.writeHead(200);
+      res.writeHead(200, corsHeaders);
       res.end();
       return;
     }
 
     if (path === "/") {
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders });
       res.end("OK");
       return;
     }
 
     if (path === "/extension/status") {
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", ...corsHeaders });
       res.end(JSON.stringify({ connected: Boolean(extensionWs) }));
       return;
     }
@@ -406,7 +427,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       if (extensionWs) {
         payload.webSocketDebuggerUrl = cdpWsUrl;
       }
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", ...corsHeaders });
       res.end(JSON.stringify(payload));
       return;
     }
@@ -422,7 +443,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         webSocketDebuggerUrl: cdpWsUrl,
         devtoolsFrontendUrl: `/devtools/inspector.html?ws=${cdpWsUrl.replace("ws://", "")}`,
       }));
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", ...corsHeaders });
       res.end(JSON.stringify(list));
       return;
     }
@@ -431,7 +452,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     if (activateMatch && (req.method === "GET" || req.method === "PUT")) {
       const targetId = decodeURIComponent(activateMatch[1] ?? "").trim();
       if (!targetId) {
-        res.writeHead(400);
+        res.writeHead(400, corsHeaders);
         res.end("targetId required");
         return;
       }
@@ -446,7 +467,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
           // ignore
         }
       })();
-      res.writeHead(200);
+      res.writeHead(200, corsHeaders);
       res.end("OK");
       return;
     }
@@ -455,7 +476,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     if (closeMatch && (req.method === "GET" || req.method === "PUT")) {
       const targetId = decodeURIComponent(closeMatch[1] ?? "").trim();
       if (!targetId) {
-        res.writeHead(400);
+        res.writeHead(400, corsHeaders);
         res.end("targetId required");
         return;
       }
@@ -470,12 +491,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
           // ignore
         }
       })();
-      res.writeHead(200);
+      res.writeHead(200, corsHeaders);
       res.end("OK");
       return;
     }
 
-    res.writeHead(404);
+    res.writeHead(404, corsHeaders);
     res.end("not found");
   });
 

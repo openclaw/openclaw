@@ -298,6 +298,38 @@ describe("chrome extension relay server", () => {
     ext.close();
   }, 15_000);
 
+  it("returns CORS headers for chrome-extension:// origins", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    // Test HEAD / with chrome-extension origin
+    const headRes = await fetch(`${cdpUrl}/`, {
+      method: "HEAD",
+      headers: { Origin: "chrome-extension://hgbmgodgmoepcniaoidlifjekhjkkckl" },
+    });
+    expect(headRes.status).toBe(200);
+    expect(headRes.headers.get("Access-Control-Allow-Origin")).toBe(
+      "chrome-extension://hgbmgodgmoepcniaoidlifjekhjkkckl",
+    );
+    expect(headRes.headers.get("Access-Control-Allow-Methods")).toContain("HEAD");
+
+    // Test OPTIONS preflight
+    const optionsRes = await fetch(`${cdpUrl}/`, {
+      method: "OPTIONS",
+      headers: { Origin: "chrome-extension://hgbmgodgmoepcniaoidlifjekhjkkckl" },
+    });
+    expect(optionsRes.status).toBe(204);
+    expect(optionsRes.headers.get("Access-Control-Allow-Origin")).toBe(
+      "chrome-extension://hgbmgodgmoepcniaoidlifjekhjkkckl",
+    );
+
+    // Test without extension origin - no CORS headers
+    const noOriginRes = await fetch(`${cdpUrl}/`, { method: "HEAD" });
+    expect(noOriginRes.status).toBe(200);
+    expect(noOriginRes.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
   it("rebroadcasts attach when a session id is reused for a new target", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
