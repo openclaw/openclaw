@@ -1,7 +1,8 @@
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { parseModelRef, resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -117,7 +118,17 @@ export async function getStatusSummary(): Promise<StatusSummary> {
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const model = entry?.model ?? configModel ?? null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        // Resolve agent-specific model as fallback instead of always using default agent's model.
+        // resolveAgentModelPrimary returns the raw config string (e.g. "openai-codex/gpt-5.2"),
+        // so parse it to extract just the model id to match the format stored in entry.model
+        // and expected by lookupContextTokens.
+        const agentModelRaw = agentId ? resolveAgentModelPrimary(cfg, agentId) : undefined;
+        const agentModel = agentModelRaw
+          ? (parseModelRef(agentModelRaw, DEFAULT_PROVIDER)?.model ?? agentModelRaw)
+          : undefined;
+        const model = entry?.model ?? agentModel ?? configModel ?? null;
         const contextTokens =
           entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
         const input = entry?.inputTokens ?? 0;
@@ -128,8 +139,6 @@ export async function getStatusSummary(): Promise<StatusSummary> {
           contextTokens && contextTokens > 0
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
 
         return {
           agentId,
