@@ -372,6 +372,12 @@
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn--danger-icon:not(:disabled):hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.1);
+}
+
 /* Light theme icon button overrides */
 :root[data-theme="light"] .btn--icon {
   background: #ffffff;
@@ -384,6 +390,12 @@
   background: #ffffff;
   border-color: var(--border-strong);
   color: var(--text);
+}
+
+:root[data-theme="light"] .btn--danger-icon:not(:disabled):hover {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.4);
+  background: rgba(220, 38, 38, 0.08);
 }
 
 .btn--icon svg {
