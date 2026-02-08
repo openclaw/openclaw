@@ -127,11 +127,13 @@ const APPROVAL_SLUG_LENGTH = 8;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyListener<T> = (event: T) => void;
+type PtyDisposable = { dispose: () => void };
 type PtyHandle = {
   pid: number;
   write: (data: string | Buffer) => void;
-  onData: (listener: PtyListener<string>) => void;
-  onExit: (listener: PtyListener<PtyExitEvent>) => void;
+  onData: (listener: PtyListener<string>) => PtyDisposable;
+  onExit: (listener: PtyListener<PtyExitEvent>) => PtyDisposable;
+  kill: (signal?: string) => void;
 };
 type PtySpawn = (
   file: string,
@@ -605,6 +607,37 @@ async function runExecProcess(opts: {
   const timeoutFinalizeMs = 1000;
   let resolveFn: ((outcome: ExecProcessOutcome) => void) | null = null;
 
+  // PTY disposables for cleanup - declared early so finalizeTimeout can use cleanupPty
+  let ptyDataDisposable: PtyDisposable | null = null;
+  let ptyExitDisposable: PtyDisposable | null = null;
+
+  // Cleanup function to release PTY file descriptors
+  const cleanupPty = () => {
+    if (ptyDataDisposable) {
+      try {
+        ptyDataDisposable.dispose();
+      } catch {
+        // Ignore dispose errors
+      }
+      ptyDataDisposable = null;
+    }
+    if (ptyExitDisposable) {
+      try {
+        ptyExitDisposable.dispose();
+      } catch {
+        // Ignore dispose errors
+      }
+      ptyExitDisposable = null;
+    }
+    if (pty) {
+      try {
+        pty.kill();
+      } catch {
+        // Ignore kill errors if process already exited
+      }
+    }
+  };
+
   const settle = (outcome: ExecProcessOutcome) => {
     if (settled) {
       return;
@@ -618,6 +651,7 @@ async function runExecProcess(opts: {
       return;
     }
     markExited(session, null, "SIGKILL", "failed");
+    cleanupPty();
     maybeNotifyOnExit(session, "failed");
     const aggregated = session.aggregated.trim();
     const reason = `Command timed out after ${opts.timeoutSec} seconds`;
@@ -685,7 +719,7 @@ async function runExecProcess(opts: {
 
   if (pty) {
     const cursorResponse = buildCursorPositionResponse();
-    pty.onData((data) => {
+    ptyDataDisposable = pty.onData((data) => {
       const raw = data.toString();
       const { cleaned, requests } = stripDsrRequests(raw);
       if (requests > 0) {
@@ -718,6 +752,9 @@ async function runExecProcess(opts: {
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
+
+      // Clean up PTY file descriptors on exit
+      cleanupPty();
 
       if (settled) {
         return;
@@ -754,7 +791,7 @@ async function runExecProcess(opts: {
     };
 
     if (pty) {
-      pty.onExit((event) => {
+      ptyExitDisposable = pty.onExit((event) => {
         const rawSignal = event.signal ?? null;
         const normalizedSignal = rawSignal === 0 ? null : rawSignal;
         handleExit(event.exitCode ?? null, normalizedSignal);
@@ -772,6 +809,7 @@ async function runExecProcess(opts: {
           clearTimeout(timeoutFinalizeTimer);
         }
         markExited(session, null, null, "failed");
+        cleanupPty();
         maybeNotifyOnExit(session, "failed");
         const aggregated = session.aggregated.trim();
         const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
