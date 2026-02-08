@@ -48,10 +48,188 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "MEMORY.md" || normalized === "memory.md") {
-    return true;
+  switch (normalized) {
+    case "MEMORY.md":
+    case "memory.md":
+    case "STM.md":
+    case "stm.md":
+    case "WORKING.md":
+    case "working.md":
+      return true;
+    default:
+      return normalized.startsWith("memory/");
   }
-  return normalized.startsWith("memory/");
+}
+
+type FileStat = Awaited<ReturnType<typeof fs.lstat>>;
+
+function tryLstatSync(targetPath: string): FileStat | null {
+  try {
+    return fsSync.lstatSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+async function tryLstat(targetPath: string): Promise<FileStat | null> {
+  try {
+    return await fs.lstat(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function isRegularFileSync(targetPath: string): boolean {
+  const stat = tryLstatSync(targetPath);
+  return Boolean(stat && !stat.isSymbolicLink() && stat.isFile());
+}
+
+function isRegularDirSync(targetPath: string): boolean {
+  const stat = tryLstatSync(targetPath);
+  return Boolean(stat && !stat.isSymbolicLink() && stat.isDirectory());
+}
+
+async function isRegularFile(targetPath: string): Promise<boolean> {
+  const stat = await tryLstat(targetPath);
+  return Boolean(stat && !stat.isSymbolicLink() && stat.isFile());
+}
+
+async function isRegularDir(targetPath: string): Promise<boolean> {
+  const stat = await tryLstat(targetPath);
+  return Boolean(stat && !stat.isSymbolicLink() && stat.isDirectory());
+}
+
+export function isLtmOptedInSync(workspaceDir: string): boolean {
+  const ltmDir = path.join(workspaceDir, "ltm");
+  if (!isRegularDirSync(ltmDir)) {
+    return false;
+  }
+  return (
+    isRegularFileSync(path.join(ltmDir, "index.md")) || isRegularDirSync(path.join(ltmDir, "nodes"))
+  );
+}
+
+export async function isLtmOptedIn(workspaceDir: string): Promise<boolean> {
+  const ltmDir = path.join(workspaceDir, "ltm");
+  if (!(await isRegularDir(ltmDir))) {
+    return false;
+  }
+  return (
+    (await isRegularFile(path.join(ltmDir, "index.md"))) ||
+    (await isRegularDir(path.join(ltmDir, "nodes")))
+  );
+}
+
+type MemoryLayoutResult = {
+  created: {
+    stm: boolean;
+    working: boolean;
+    ltmIndex: boolean;
+    ltmNodes: boolean;
+  };
+};
+
+type MemoryLayoutLogger = (message: string) => void;
+
+export async function ensureWmStmLtmLayout(params: {
+  workspaceDir: string;
+  allowCreate: boolean;
+  log?: MemoryLayoutLogger;
+}): Promise<MemoryLayoutResult> {
+  const created = {
+    stm: false,
+    working: false,
+    ltmIndex: false,
+    ltmNodes: false,
+  };
+  if (!params.allowCreate) {
+    return { created };
+  }
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    params.log?.("memory layout: missing workspaceDir");
+    return { created };
+  }
+  const log = params.log;
+
+  const ensureDir = async (targetPath: string, label: string) => {
+    const stat = await tryLstat(targetPath);
+    if (stat) {
+      if (stat.isSymbolicLink()) {
+        log?.(`memory layout: skip ${label} (symlink)`);
+        return { ok: false, created: false };
+      }
+      if (!stat.isDirectory()) {
+        log?.(`memory layout: skip ${label} (not a directory)`);
+        return { ok: false, created: false };
+      }
+      return { ok: true, created: false };
+    }
+    try {
+      await fs.mkdir(targetPath, { recursive: true });
+      return { ok: true, created: true };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        return { ok: true, created: false };
+      }
+      log?.(`memory layout: failed to create ${label}: ${String(err)}`);
+      return { ok: false, created: false };
+    }
+  };
+
+  const ensureFile = async (targetPath: string, content: string, label: string) => {
+    const stat = await tryLstat(targetPath);
+    if (stat) {
+      if (stat.isSymbolicLink()) {
+        log?.(`memory layout: skip ${label} (symlink)`);
+        return { ok: false, created: false };
+      }
+      if (!stat.isFile()) {
+        log?.(`memory layout: skip ${label} (not a file)`);
+        return { ok: false, created: false };
+      }
+      return { ok: true, created: false };
+    }
+    try {
+      await fs.writeFile(targetPath, content, { flag: "wx" });
+      return { ok: true, created: true };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") {
+        return { ok: true, created: false };
+      }
+      log?.(`memory layout: failed to create ${label}: ${String(err)}`);
+      return { ok: false, created: false };
+    }
+  };
+
+  const stm = await ensureFile(path.join(workspaceDir, "STM.md"), "# STM\n", "STM.md");
+  created.stm = stm.created;
+
+  const working = await ensureFile(
+    path.join(workspaceDir, "WORKING.md"),
+    "# WORKING\n",
+    "WORKING.md",
+  );
+  created.working = working.created;
+
+  if (isLtmOptedInSync(workspaceDir)) {
+    const ltmDir = path.join(workspaceDir, "ltm");
+    const ltmDirResult = await ensureDir(ltmDir, "ltm/");
+    if (ltmDirResult.ok) {
+      const nodes = await ensureDir(path.join(ltmDir, "nodes"), "ltm/nodes/");
+      created.ltmNodes = nodes.created;
+      const index = await ensureFile(
+        path.join(ltmDir, "index.md"),
+        "# LTM Index\n",
+        "ltm/index.md",
+      );
+      created.ltmIndex = index.created;
+    }
+  }
+
+  return { created };
 }
 
 async function walkDir(dir: string, files: string[]) {
@@ -80,9 +258,8 @@ export async function listMemoryFiles(
   extraPaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
-  const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
+  const ltmDir = path.join(workspaceDir, "ltm");
 
   const addMarkdownFile = async (absPath: string) => {
     try {
@@ -97,14 +274,19 @@ export async function listMemoryFiles(
     } catch {}
   };
 
-  await addMarkdownFile(memoryFile);
-  await addMarkdownFile(altMemoryFile);
+  for (const entry of ["MEMORY.md", "memory.md", "STM.md", "stm.md"]) {
+    await addMarkdownFile(path.join(workspaceDir, entry));
+  }
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
   } catch {}
+
+  if (await isLtmOptedIn(workspaceDir)) {
+    await walkDir(ltmDir, result);
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {

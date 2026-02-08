@@ -27,6 +27,25 @@ The default workspace layout uses two memory layers:
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
+### Optional WM/STM/LTM layout (text-only)
+
+If the workspace also contains WM/STM/LTM files, OpenClaw treats them as memory too:
+
+- `STM.md`
+  - Rolling short-term cache (indexed by `memory_search` when present).
+- `WORKING.md`
+  - Working memory projection (readable via `memory_get`, but **not indexed** by default).
+- `ltm/index.md` and `ltm/nodes/*.md`
+  - Durable long-term memory as linked Markdown “nodes”.
+  - Indexed by `memory_search` only when `ltm/` is opted in (see below).
+
+LTM opt-in rule (to avoid indexing unrelated `ltm/` folders): `ltm/` is treated as memory only when
+either `ltm/index.md` exists or `ltm/nodes/` exists.
+
+When the workspace is writable, OpenClaw auto-creates `STM.md` and `WORKING.md` during the
+pre-compaction memory flush if they are missing. LTM is only created and indexed when it is
+already opted in (when `ltm/index.md` or `ltm/nodes/` exists).
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
@@ -41,6 +60,10 @@ When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
 agentic turn** that reminds the model to write durable memory **before** the
 context is compacted. The default prompts explicitly say the model _may reply_,
 but usually `NO_REPLY` is the correct response so the user never sees this turn.
+
+The default prompts also steer basic memory hygiene for WM/STM/LTM workspaces:
+keep `WORKING.md` as a small projection (about 400 words) and keep `STM.md` as a
+small rolling cache (about 1000 words).
 
 This is controlled by `agents.defaults.compaction.memoryFlush`:
 
@@ -77,8 +100,9 @@ For the full compaction lifecycle, see
 
 ## Vector memory search
 
-OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` so
-semantic queries can find related notes even when wording differs.
+OpenClaw can build a small vector index over `MEMORY.md`/`memory.md` and `memory/**/*.md` (plus
+`STM.md` and `ltm/**/*.md` when opted in, and any extra directories or files you opt in) so semantic
+queries can find related notes even when wording differs.
 
 Defaults:
 
@@ -346,15 +370,15 @@ Local mode:
 
 ### How the memory tools work
 
-- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
-- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
+- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md`/`memory.md` + `memory/**/*.md`, plus `STM.md` and `ltm/**/*.md` when opted in. `WORKING.md` is intentionally **not indexed** by default.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. It can read `MEMORY.md`/`memory.md`, `STM.md`, `WORKING.md`, `memory/**/*.md`, `ltm/**/*.md` (when opted in), plus any `.md` files under `memorySearch.extraPaths`.
 - Both tools are enabled only when `memorySearch.enabled` resolves true for the agent.
 
 ### What gets indexed (and when)
 
-- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
+- File type: Markdown only (`MEMORY.md`/`memory.md`, `memory/**/*.md`, plus `STM.md` and `ltm/**/*.md` when opted in, plus any `.md` files under `memorySearch.extraPaths`). `WORKING.md` is not indexed by default.
 - Index storage: per-agent SQLite at `~/.openclaw/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
-- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- Freshness: watcher on `MEMORY.md`/`memory.md`, `STM.md`, `memory/`, `ltm/`, and `memorySearch.extraPaths` marks the index dirty (debounce 1.5s). LTM indexing still requires opt-in. Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
 ### Hybrid search (BM25 + vector)

@@ -437,6 +437,56 @@ describe("memory index", () => {
     await expect(result.manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
   });
 
+  const createBasicConfig = () => ({
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        memorySearch: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { path: indexPath },
+          sync: { watch: false, onSessionStart: false, onSearch: true },
+        },
+      },
+      list: [{ id: "main", default: true }],
+    },
+  });
+
+  it("rejects reading ltm/ paths unless opted in", async () => {
+    const ltmDir = path.join(workspaceDir, "ltm");
+    await fs.mkdir(ltmDir, { recursive: true });
+    await fs.writeFile(path.join(ltmDir, "random.md"), "Not memory.");
+
+    const result = await getMemorySearchManager({ cfg: createBasicConfig(), agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+
+    await expect(result.manager.readFile({ relPath: "ltm/random.md" })).rejects.toThrow(
+      "path required",
+    );
+  });
+
+  it("allows reading ltm/ paths when opted in", async () => {
+    const nodesDir = path.join(workspaceDir, "ltm", "nodes");
+    await fs.mkdir(nodesDir, { recursive: true });
+    await fs.writeFile(path.join(nodesDir, "decision.md"), "Decision node.");
+
+    const result = await getMemorySearchManager({ cfg: createBasicConfig(), agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+
+    await expect(result.manager.readFile({ relPath: "ltm/nodes/decision.md" })).resolves.toEqual({
+      path: "ltm/nodes/decision.md",
+      text: "Decision node.",
+    });
+  });
+
   it("allows reading from additional memory paths and blocks symlinks", async () => {
     const extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(extraDir, { recursive: true });

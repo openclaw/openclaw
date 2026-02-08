@@ -151,6 +151,7 @@ describe("runReplyAgent memory flush", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      runOverrides: { workspaceDir: tmp },
     });
 
     await runReplyAgent({
@@ -183,6 +184,12 @@ describe("runReplyAgent memory flush", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
     expect(stored[sessionKey].memoryFlushCompactionCount).toBe(1);
+
+    const stm = await fs.readFile(path.join(tmp, "STM.md"), "utf-8");
+    const working = await fs.readFile(path.join(tmp, "WORKING.md"), "utf-8");
+    expect(stm.trim()).toBe("# STM");
+    expect(working.trim()).toBe("# WORKING");
+    await expect(fs.stat(path.join(tmp, "ltm"))).rejects.toThrow();
   });
   it("skips memory flush when disabled in config", async () => {
     runEmbeddedPiAgentMock.mockReset();

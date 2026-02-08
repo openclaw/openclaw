@@ -9,13 +9,19 @@ export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
-  "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
+  "Store durable memories now.",
+  "Legacy layout: write to MEMORY.md and/or memory/YYYY-MM-DD.md (create memory/ if needed).",
+  "Optional WM/STM/LTM layout: if STM.md / WORKING.md are missing, create them. Update ltm/ only when it is already opted in (ltm/index.md or ltm/nodes/ exists).",
+  "Keep STM.md short (rolling cache); keep ltm/ high-level (index.md + a few nodes) when opted in; WORKING.md is a projection and should stay small.",
+  "Size caps (approx): keep WORKING.md <= 400 words and STM.md <= 1000 words; if you'd exceed the caps, prune to pointers and keep only the highest-signal items.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
   "The session is near auto-compaction; capture durable memories to disk.",
+  "Create STM.md/WORKING.md if missing; update ltm/ only when opted in. If you cannot, use MEMORY.md + memory/ instead.",
+  "Keep WORKING.md <= 400 words and STM.md <= 1000 words (approx).",
   `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
 ].join(" ");
 

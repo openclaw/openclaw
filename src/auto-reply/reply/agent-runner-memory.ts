@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { ensureWmStmLtmLayout } from "../../memory/internal.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
@@ -78,6 +79,12 @@ export async function runMemoryFlushIfNeeded(params: {
   if (!shouldFlushMemory) {
     return params.sessionEntry;
   }
+
+  await ensureWmStmLtmLayout({
+    workspaceDir: params.followupRun.run.workspaceDir,
+    allowCreate: memoryFlushWritable,
+    log: logVerbose,
+  });
 
   let activeSessionEntry = params.sessionEntry;
   const activeSessionStore = params.sessionStore;

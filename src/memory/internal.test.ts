@@ -109,6 +109,34 @@ describe("listMemoryFiles", () => {
       expect(files.some((file) => file.endsWith("nested.md"))).toBe(false);
     }
   });
+
+  it("includes STM.md and opted-in ltm/ markdown files", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    await fs.writeFile(path.join(tmpDir, "STM.md"), "# Short-term");
+
+    const ltmDir = path.join(tmpDir, "ltm");
+    await fs.mkdir(path.join(ltmDir, "nodes"), { recursive: true });
+    await fs.writeFile(path.join(ltmDir, "index.md"), "# Index");
+    await fs.writeFile(path.join(ltmDir, "nodes", "decision.md"), "# Decision");
+
+    const files = await listMemoryFiles(tmpDir);
+    expect(files.some((file) => file.endsWith("STM.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith(path.join("ltm", "index.md")))).toBe(true);
+    expect(files.some((file) => file.endsWith(path.join("ltm", "nodes", "decision.md")))).toBe(
+      true,
+    );
+  });
+
+  it("does not include ltm/ when it is not opted in", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+
+    const ltmDir = path.join(tmpDir, "ltm");
+    await fs.mkdir(ltmDir, { recursive: true });
+    await fs.writeFile(path.join(ltmDir, "random.md"), "# Not memory");
+
+    const files = await listMemoryFiles(tmpDir);
+    expect(files.some((file) => file.endsWith(path.join("ltm", "random.md")))).toBe(false);
+  });
 });
 
 describe("chunkMarkdown", () => {
