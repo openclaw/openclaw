@@ -121,7 +121,6 @@ const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
-const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
@@ -173,6 +172,7 @@ export type ExecToolDefaults = {
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalTimeoutSec?: number;
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
@@ -407,6 +407,14 @@ function resolveApprovalRunningNoticeMs(value?: number) {
     return 0;
   }
   return Math.floor(value);
+}
+
+// Resolve approval timeout from config (seconds) to milliseconds.
+function resolveApprovalTimeoutMs(valueSec?: number) {
+  if (typeof valueSec !== "number" || !Number.isFinite(valueSec) || valueSec <= 0) {
+    return DEFAULT_APPROVAL_TIMEOUT_MS;
+  }
+  return Math.floor(valueSec) * 1000;
 }
 
 function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextKey?: string }) {
@@ -816,6 +824,8 @@ export function createExecTool(
   const safeBins = resolveSafeBins(defaults?.safeBins);
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
+  const approvalTimeoutMs = resolveApprovalTimeoutMs(defaults?.approvalTimeoutSec);
+  const approvalRequestTimeoutMs = approvalTimeoutMs + 10_000; // extra buffer for request round-trip
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1120,7 +1130,7 @@ export function createExecTool(
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
           const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+          const expiresAtMs = Date.now() + approvalTimeoutMs;
           const contextKey = `exec:${approvalId}`;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
@@ -1130,7 +1140,7 @@ export function createExecTool(
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+                { timeoutMs: approvalRequestTimeoutMs },
                 {
                   id: approvalId,
                   command: commandText,
@@ -1141,7 +1151,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath: undefined,
                   sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+                  timeoutMs: approvalTimeoutMs,
                 },
               );
               const decisionValue =
@@ -1300,7 +1310,7 @@ export function createExecTool(
         if (requiresAsk) {
           const approvalId = crypto.randomUUID();
           const approvalSlug = createApprovalSlug(approvalId);
-          const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+          const expiresAtMs = Date.now() + approvalTimeoutMs;
           const contextKey = `exec:${approvalId}`;
           const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
@@ -1314,7 +1324,7 @@ export function createExecTool(
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
-                { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+                { timeoutMs: approvalRequestTimeoutMs },
                 {
                   id: approvalId,
                   command: commandText,
@@ -1325,7 +1335,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath,
                   sessionKey: defaults?.sessionKey,
-                  timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+                  timeoutMs: approvalTimeoutMs,
                 },
               );
               const decisionValue =

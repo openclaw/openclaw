@@ -275,6 +275,7 @@ export const AgentToolsSchema = z
         safeBins: z.array(z.string()).optional(),
         backgroundMs: z.number().int().positive().optional(),
         timeoutSec: z.number().int().positive().optional(),
+        approvalTimeoutSec: z.number().int().positive().optional(),
         approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
         cleanupMs: z.number().int().positive().optional(),
         notifyOnExit: z.boolean().optional(),
