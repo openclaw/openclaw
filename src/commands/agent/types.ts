@@ -74,4 +74,6 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Parent message ID for transcript tree continuity (used after gateway restart). */
+  parentId?: string;
 };

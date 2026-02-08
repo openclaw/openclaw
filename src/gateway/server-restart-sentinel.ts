@@ -12,6 +12,7 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import { readSessionLeafId } from "./session-transcript-leaf.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
@@ -42,7 +43,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
   const sessionThreadId = threadIdRaw?.trim() || undefined;
 
-  const { cfg, entry } = loadSessionEntry(sessionKey);
+  const { cfg, entry, storePath } = loadSessionEntry(sessionKey);
   const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey);
 
   // Prefer delivery context from sentinel (captured at restart) over session store
@@ -84,6 +85,12 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     parsedTarget?.threadId ?? // From resolveAnnounceTargetFromKey (extracts :topic:N)
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
+  // FIX #10018: Read the current leaf ID from the transcript to preserve conversation history.
+  // Without this, the boot message would be written with parentId: null, creating a new tree root
+  // and orphaning all previous conversation history.
+  const parentId = entry?.sessionId
+    ? readSessionLeafId(entry.sessionId, storePath, entry.sessionFile)
+    : null;
 
   try {
     await agentCommand(
@@ -96,6 +103,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
         bestEffortDeliver: true,
         messageChannel: channel,
         threadId,
+        parentId: parentId ?? undefined,
       },
       defaultRuntime,
       params.deps,

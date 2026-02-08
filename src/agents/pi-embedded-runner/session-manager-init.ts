@@ -19,6 +19,8 @@ export async function prepareSessionManagerForRun(params: {
   hadSessionFile: boolean;
   sessionId: string;
   cwd: string;
+  /** Parent message ID to set as the current leaf for transcript tree continuity. */
+  parentId?: string;
 }): Promise<void> {
   const sm = params.sessionManager as {
     sessionId: string;
@@ -49,5 +51,11 @@ export async function prepareSessionManagerForRun(params: {
     sm.labelsById?.clear?.();
     sm.leafId = null;
     sm.flushed = false;
+  }
+
+  // If a parentId is provided (e.g., after gateway restart), set the leaf pointer
+  // to that entry so new messages continue the existing conversation tree.
+  if (params.parentId && sm.byId?.has(params.parentId)) {
+    sm.leafId = params.parentId;
   }
 }

@@ -436,6 +436,7 @@ export async function runEmbeddedAttempt(
         hadSessionFile,
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
+        parentId: params.parentId,
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
