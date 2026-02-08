@@ -13,7 +13,7 @@ describe("resolveAgentRoute", () => {
     });
     expect(route.agentId).toBe("main");
     expect(route.accountId).toBe("default");
-    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.sessionKey).toBe("agent:main:whatsapp:dm:+15551234567");
     expect(route.matchedBy).toBe("default");
   });
 
@@ -28,6 +28,28 @@ describe("resolveAgentRoute", () => {
       peer: { kind: "dm", id: "+15551234567" },
     });
     expect(route.sessionKey).toBe("agent:main:dm:+15551234567");
+  });
+
+  test("dmScope defaults to per-channel-peer for non-webchat channels", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "dm", id: "+15551234567" },
+    });
+    expect(route.sessionKey).toBe("agent:main:whatsapp:dm:+15551234567");
+  });
+
+  test("dmScope defaults to main for webchat", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "webchat",
+      accountId: null,
+      peer: { kind: "dm", id: "alice" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
   });
 
   test("dmScope=per-channel-peer isolates DM sessions per channel and sender", () => {

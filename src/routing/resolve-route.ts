@@ -84,6 +84,7 @@ export function buildAgentSessionKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
+  const dmScope = resolveDmScope({ channel, dmScope: params.dmScope });
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
     mainKey: DEFAULT_MAIN_KEY,
@@ -91,9 +92,22 @@ export function buildAgentSessionKey(params: {
     accountId: params.accountId,
     peerKind: peer?.kind ?? "dm",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
-    dmScope: params.dmScope,
+    dmScope,
     identityLinks: params.identityLinks,
   });
+}
+
+function resolveDmScope(params: {
+  channel: string;
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+}): "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer" {
+  if (params.dmScope) {
+    return params.dmScope;
+  }
+  if (params.channel === "webchat") {
+    return "main";
+  }
+  return "per-channel-peer";
 }
 
 function listAgents(cfg: OpenClawConfig) {
@@ -181,7 +195,10 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     return matchesAccountId(binding.match?.accountId, accountId);
   });
 
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = resolveDmScope({
+    channel,
+    dmScope: input.cfg.session?.dmScope,
+  });
   const identityLinks = input.cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
