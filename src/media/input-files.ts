@@ -112,7 +112,9 @@ export function normalizeMimeType(value: string | undefined): string | undefined
     return undefined;
   }
   const [raw] = value.split(";");
-  const normalized = raw?.trim().toLowerCase();
+  // NFKC normalization converts fullwidth Unicode characters to ASCII equivalents,
+  // preventing bypass via homoglyphs (e.g. ｔｅｘｔ/ｈｔｍｌ → text/html).
+  const normalized = raw?.normalize("NFKC").trim().toLowerCase();
   return normalized || undefined;
 }
 
