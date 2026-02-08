@@ -21,7 +21,7 @@ x-i18n:
 有两个相关系统：
 
 - **命令**：独立的 `/...` 消息。
-- **指令**：`/think`、`/verbose`、`/reasoning`、`/elevated`、`/exec`、`/model`、`/queue`。
+- **指令**：`/think`、`/verbose`、`/reasoning`、`/effort`、`/elevated`、`/exec`、`/model`、`/queue`。
   - 指令在模型看到消息之前被剥离。
   - 在普通聊天消息中（不是仅指令消息），它们被视为"内联提示"，**不会**持久化会话设置。
   - 在仅指令消息中（消息只包含指令），它们会持久化到会话并回复确认。
@@ -93,6 +93,7 @@ x-i18n:
 - `/think <off|minimal|low|medium|high|xhigh>`（按模型/提供商动态选择；别名：`/thinking`、`/t`）
 - `/verbose on|full|off`（别名：`/v`）
 - `/reasoning on|off|stream`（别名：`/reason`；启用时，发送带有 `Reasoning:` 前缀的单独消息；`stream` = 仅 Telegram 草稿）
+- `/effort low|medium|high|max`（别名：`/eff`；Claude 自适应思考深度；`max` = Opus 4.5/4.6 最大推理）
 - `/elevated on|off|ask|full`（别名：`/elev`；`full` 跳过 exec 审批）
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`（发送 `/exec` 显示当前设置）
 - `/model <name>`（别名：`/models`；或 `agents.defaults.models.*.alias` 中的 `/<alias>`）
