@@ -1,9 +1,13 @@
 import crypto from "node:crypto";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentIdentity } from "../identity.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveRootSessionKey } from "../subagent-registry.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
@@ -87,6 +91,31 @@ export async function runSessionsSendA2AFlow(params: {
         if (!replyText || isReplySkip(replyText)) {
           break;
         }
+
+        // Inject each ping-pong turn into root webchat for Slack-like visibility
+        try {
+          const rootSession = resolveRootSessionKey(
+            params.requesterSessionKey ?? currentSessionKey,
+          );
+          const speakerAgentId = resolveAgentIdFromSessionKey(currentSessionKey);
+          const cfg = loadConfig();
+          const speakerIdentity = resolveAgentIdentity(cfg, speakerAgentId);
+          callGateway({
+            method: "chat.inject",
+            params: {
+              sessionKey: rootSession,
+              message: replyText.slice(0, 600),
+              senderAgentId: speakerAgentId,
+              senderName: speakerIdentity?.name ?? speakerAgentId,
+              senderEmoji: speakerIdentity?.emoji ?? "💬",
+              senderAvatar: speakerIdentity?.avatar,
+            },
+            timeoutMs: 5_000,
+          }).catch(() => {});
+        } catch {
+          // Non-critical
+        }
+
         latestReply = replyText;
         incomingMessage = replyText;
         const swap = currentSessionKey;

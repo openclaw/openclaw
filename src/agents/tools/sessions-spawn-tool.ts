@@ -391,7 +391,7 @@ export function createSessionsSpawnTool(opts?: {
         const toName = targetIdentity?.name ?? targetAgentId;
         const fromEmoji = requesterIdentity?.emoji ?? "🤖";
         const taskPreview = (label || task).slice(0, 200);
-        void callGateway({
+        callGateway({
           method: "chat.inject",
           params: {
             sessionKey: rootSession,
@@ -402,7 +402,7 @@ export function createSessionsSpawnTool(opts?: {
             senderAvatar: requesterIdentity?.avatar,
           },
           timeoutMs: 5_000,
-        });
+        }).catch(() => {});
       } catch {
         // Non-critical — don't block the spawn
       }

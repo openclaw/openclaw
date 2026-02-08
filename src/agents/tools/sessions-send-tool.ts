@@ -297,7 +297,7 @@ export function createSessionsSendTool(opts?: {
           const senderIdentity = resolveAgentIdentity(cfg, requesterAgentId);
           const targetIdentity = resolveAgentIdentity(cfg, targetAgentId);
           const toName = targetIdentity?.name ?? targetAgentId;
-          void callGateway({
+          callGateway({
             method: "chat.inject",
             params: {
               sessionKey: rootSession,
@@ -308,7 +308,7 @@ export function createSessionsSendTool(opts?: {
               senderAvatar: senderIdentity?.avatar,
             },
             timeoutMs: 5_000,
-          });
+          }).catch(() => {});
         } catch {
           // Non-critical
         }
