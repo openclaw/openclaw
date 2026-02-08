@@ -30,7 +30,10 @@ export function modelKey(provider: string, model: string) {
   return `${provider}/${model}`;
 }
 
-export function normalizeProviderId(provider: string): string {
+export function normalizeProviderId(provider: unknown): string {
+  if (typeof provider !== "string") {
+    return "";
+  }
   const normalized = provider.trim().toLowerCase();
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";

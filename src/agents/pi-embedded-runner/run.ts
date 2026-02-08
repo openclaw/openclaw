@@ -50,6 +50,7 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -173,9 +174,105 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+
+      // ---------------------------------------------------------------------
+      // Official plugin extension point: before_agent_start can request a run-scoped
+      // provider/model override. This is fail-closed (invalid overrides are ignored).
+      // ---------------------------------------------------------------------
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("before_agent_start")) {
+        try {
+          const hookResult = await hookRunner.runBeforeAgentStart(
+            {
+              prompt: params.prompt,
+              // messages aren't available yet (session not loaded). Keep optional.
+              messages: undefined,
+            },
+            {
+              agentId: workspaceResolution.agentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: resolvedWorkspace,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          );
+
+          const requestedProvider =
+            typeof hookResult?.providerOverride === "string" && hookResult.providerOverride.trim()
+              ? hookResult.providerOverride.trim()
+              : undefined;
+          const requestedModel =
+            typeof hookResult?.modelOverride === "string" && hookResult.modelOverride.trim()
+              ? hookResult.modelOverride.trim()
+              : undefined;
+
+          if (requestedProvider || requestedModel) {
+            const original = { provider, modelId };
+
+            let nextProvider = provider;
+            let nextModelId = modelId;
+
+            if (requestedProvider) {
+              nextProvider = requestedProvider;
+            }
+            if (requestedModel) {
+              // Allow "provider/model" in modelOverride; providerOverride still wins.
+              const parts = requestedModel.split("/", 2);
+              if (parts.length === 2 && parts[0] && parts[1]) {
+                if (!requestedProvider) {
+                  nextProvider = parts[0];
+                }
+                nextModelId = parts[1];
+              } else {
+                nextModelId = requestedModel;
+              }
+            }
+
+            // Validate override (fail-closed): if model is unknown, ignore.
+            const probe = resolveModel(nextProvider, nextModelId, agentDir, params.config);
+            if (probe.model) {
+              provider = nextProvider;
+              modelId = nextModelId;
+              void params.onAgentEvent?.({
+                stream: "lifecycle",
+                data: {
+                  phase: "before_agent_start_override",
+                  ok: true,
+                  decision: "accepted",
+                  original,
+                  applied: { provider, modelId },
+                },
+              });
+            } else {
+              void params.onAgentEvent?.({
+                stream: "lifecycle",
+                data: {
+                  phase: "before_agent_start_override",
+                  ok: false,
+                  decision: "rejected",
+                  reason: probe.error ?? `Unknown model: ${nextProvider}/${nextModelId}`,
+                  original,
+                  attempted: { provider: nextProvider, modelId: nextModelId },
+                  fallback: original,
+                },
+              });
+            }
+          }
+        } catch (err) {
+          // Fail-closed: ignore hook errors and continue with defaults.
+          void params.onAgentEvent?.({
+            stream: "lifecycle",
+            data: {
+              phase: "before_agent_start_override",
+              ok: false,
+              error: String(err),
+              fallback: { provider, modelId },
+            },
+          });
+        }
+      }
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);

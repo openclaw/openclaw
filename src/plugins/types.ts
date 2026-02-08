@@ -317,6 +317,11 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+
+  /** Optional: override provider for THIS run only (fail-closed if invalid). */
+  providerOverride?: string;
+  /** Optional: override model for THIS run only (fail-closed if invalid). */
+  modelOverride?: string;
 };
 
 // agent_end hook
