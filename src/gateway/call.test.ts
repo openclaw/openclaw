@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
 const pickPrimaryTailnetIPv4 = vi.fn();
+const pickPrimaryLanIPv4 = vi.fn();
 
 let lastClientOptions: {
   url?: string;
@@ -27,6 +28,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4,
+}));
+
+vi.mock("./net.js", () => ({
+  pickPrimaryLanIPv4,
 }));
 
 vi.mock("./client.js", () => ({
@@ -70,6 +75,7 @@ describe("callGateway url resolution", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -122,6 +128,28 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
+
+  it("uses LAN IP when local bind is lan and LAN IP is available", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.100");
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://192.168.1.100:18800");
+  });
+
+  it("falls back to loopback when local bind is lan but no LAN IP is available", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+  });
 });
 
 describe("buildGatewayConnectionDetails", () => {
@@ -129,6 +157,14 @@ describe("buildGatewayConnectionDetails", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
   it("uses explicit url overrides and omits bind details", () => {
@@ -186,6 +222,101 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBeUndefined();
     expect(details.remoteFallbackNote).toBeUndefined();
   });
+
+  it("uses LAN IP when bind is lan and LAN IP is available", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.100");
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://192.168.1.100:18800");
+    expect(details.urlSource).toBe("local lan 192.168.1.100");
+    expect(details.bindDetail).toBe("Bind: lan");
+    expect(details.lanFallbackNote).toBeUndefined();
+  });
+
+  it("emits a LAN fallback note when bind is lan but no LAN IP is found", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("local loopback");
+    expect(details.bindDetail).toBe("Bind: lan");
+    expect(details.lanFallbackNote).toContain("gateway.bind=lan but no LAN IPv4 address found");
+    expect(details.lanFallbackNote).toContain("OPENCLAW_GATEWAY_URL");
+    expect(details.message).toContain("gateway.bind=lan but no LAN IPv4 address found");
+  });
+
+  it("uses OPENCLAW_GATEWAY_URL env var when set", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://env-override.example/ws";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("wss://env-override.example/ws");
+    expect(details.urlSource).toBe("env OPENCLAW_GATEWAY_URL");
+    expect(details.bindDetail).toBeUndefined();
+  });
+
+  it("prefers cli --url over env var", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://env-override.example/ws";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails({ url: "wss://cli-override.example/ws" });
+
+    expect(details.url).toBe("wss://cli-override.example/ws");
+    expect(details.urlSource).toBe("cli --url");
+  });
+
+  it("reports correct env var name when CLAWDBOT_GATEWAY_URL is used", () => {
+    process.env.CLAWDBOT_GATEWAY_URL = "wss://legacy-env.example/ws";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("wss://legacy-env.example/ws");
+    expect(details.urlSource).toBe("env CLAWDBOT_GATEWAY_URL");
+  });
+
+  it("ignores whitespace-only env var", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "   ";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("local loopback");
+  });
 });
 
 describe("callGateway error details", () => {
@@ -193,6 +324,7 @@ describe("callGateway error details", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -267,17 +399,21 @@ describe("callGateway url override auth requirements", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
     closeReason = "";
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
   });
 
   afterEach(() => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
   it("throws when url override is set without explicit credentials", async () => {
@@ -294,6 +430,19 @@ describe("callGateway url override auth requirements", () => {
       callGateway({ method: "health", url: "wss://override.example/ws" }),
     ).rejects.toThrow("explicit credentials");
   });
+
+  it("throws when env var url override is set without explicit credentials", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://env-override.example/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "local-token" },
+      },
+    });
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+  });
 });
 
 describe("callGateway password resolution", () => {
@@ -303,6 +452,7 @@ describe("callGateway password resolution", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -310,6 +460,7 @@ describe("callGateway password resolution", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -404,6 +555,7 @@ describe("callGateway token resolution", () => {
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
+    pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -411,6 +563,7 @@ describe("callGateway token resolution", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue(undefined);
   });
 
   afterEach(() => {

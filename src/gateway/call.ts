@@ -16,6 +16,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 export type CallGatewayOptions = {
@@ -48,6 +49,7 @@ export type GatewayConnectionDetails = {
   urlSource: string;
   bindDetail?: string;
   remoteFallbackNote?: string;
+  lanFallbackNote?: string;
   message: string;
 };
 
@@ -101,31 +103,58 @@ export function buildGatewayConnectionDetails(
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
   const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
+  const lanIPv4 = bindMode === "lan" ? pickPrimaryLanIPv4() : undefined;
+  const preferLan = bindMode === "lan" && !!lanIPv4;
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl =
     preferTailnet && tailnetIPv4
       ? `${scheme}://${tailnetIPv4}:${localPort}`
-      : `${scheme}://127.0.0.1:${localPort}`;
+      : preferLan && lanIPv4
+        ? `${scheme}://${lanIPv4}:${localPort}`
+        : `${scheme}://127.0.0.1:${localPort}`;
+  // Support env var override for scenarios where loopback is unavailable (e.g., VPN split tunneling)
+  const openclawEnvUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+  const clawdbotEnvUrl = process.env.CLAWDBOT_GATEWAY_URL?.trim();
+  const envUrlOverride =
+    openclawEnvUrl && openclawEnvUrl.length > 0
+      ? openclawEnvUrl
+      : clawdbotEnvUrl && clawdbotEnvUrl.length > 0
+        ? clawdbotEnvUrl
+        : undefined;
+  const envUrlSource =
+    openclawEnvUrl && openclawEnvUrl.length > 0
+      ? "env OPENCLAW_GATEWAY_URL"
+      : clawdbotEnvUrl && clawdbotEnvUrl.length > 0
+        ? "env CLAWDBOT_GATEWAY_URL"
+        : undefined;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
-      : undefined;
+      : envUrlOverride;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const url = urlOverride || remoteUrl || localUrl;
-  const urlSource = urlOverride
+  const urlSource = options.url?.trim()
     ? "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : preferTailnet && tailnetIPv4
-          ? `local tailnet ${tailnetIPv4}`
-          : "local loopback";
+    : envUrlSource
+      ? envUrlSource
+      : remoteUrl
+        ? "config gateway.remote.url"
+        : remoteMisconfigured
+          ? "missing gateway.remote.url (fallback local)"
+          : preferTailnet && tailnetIPv4
+            ? `local tailnet ${tailnetIPv4}`
+            : preferLan && lanIPv4
+              ? `local lan ${lanIPv4}`
+              : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
+  const lanFallbackNote =
+    bindMode === "lan" && !lanIPv4
+      ? "Warn: gateway.bind=lan but no LAN IPv4 address found; using loopback. Set OPENCLAW_GATEWAY_URL to override."
+      : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const message = [
     `Gateway target: ${url}`,
@@ -133,6 +162,7 @@ export function buildGatewayConnectionDetails(
     `Config: ${configPath}`,
     bindDetail,
     remoteFallbackNote,
+    lanFallbackNote,
   ]
     .filter(Boolean)
     .join("\n");
@@ -142,6 +172,7 @@ export function buildGatewayConnectionDetails(
     urlSource,
     bindDetail,
     remoteFallbackNote,
+    lanFallbackNote,
     message,
   };
 }
@@ -153,13 +184,26 @@ export async function callGateway<T = Record<string, unknown>>(
   const config = opts.config ?? loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const urlOverride =
+  const cliUrlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
+  // Env var override also requires explicit auth (same as --url)
+  const openclawEnvUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+  const clawdbotEnvUrl = process.env.CLAWDBOT_GATEWAY_URL?.trim();
+  const envUrlOverride =
+    openclawEnvUrl && openclawEnvUrl.length > 0
+      ? openclawEnvUrl
+      : clawdbotEnvUrl && clawdbotEnvUrl.length > 0
+        ? clawdbotEnvUrl
+        : undefined;
+  const urlOverride = cliUrlOverride ?? envUrlOverride;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   ensureExplicitGatewayAuth({
     urlOverride,
     auth: explicitAuth,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+    errorHint:
+      urlOverride === envUrlOverride
+        ? "Fix: pass --token or --password, or set OPENCLAW_GATEWAY_TOKEN."
+        : "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env)),
   });
   const remoteUrl =
