@@ -28,4 +28,11 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
   });
+
+  it("preserves case for group ids (often base64 + case-sensitive)", () => {
+    expect(normalizeSignalMessagingTarget("signal:group:AbC+DeF/=")).toBe("group:AbC+DeF/=");
+    expect(
+      normalizeSignalMessagingTarget("group:qu30zBG/2Oh/XvCULSsEenPrtAsf3AYNKPYn+wlCjTE="),
+    ).toBe("group:qu30zBG/2Oh/XvCULSsEenPrtAsf3AYNKPYn+wlCjTE=");
+  });
 });
