@@ -6,6 +6,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 import type { TypingController } from "./typing.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { getChannelDock } from "../../channels/dock.js";
@@ -309,7 +310,8 @@ export async function handleInlineActions(params: {
       skillCommands,
     });
     if (inlineResult.reply) {
-      if (!inlineCommand.cleaned) {
+      const cleanedAfterStrip = stripStructuralPrefixes(inlineCommand.cleaned);
+      if (!cleanedAfterStrip) {
         typing.cleanup();
         return { kind: "reply", reply: inlineResult.reply };
       }
