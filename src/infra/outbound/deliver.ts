@@ -6,6 +6,7 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import type { HitlApprovalDecision } from "../hitl/approval-manager.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 import {
@@ -23,6 +24,13 @@ import {
 } from "../../config/sessions.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
+import {
+  matchesHitlAllowlist,
+  loadHitlAllowlist,
+  addHitlAllowlistEntry,
+} from "../hitl/allowlist.js";
+import { createHitlRequest } from "../hitl/client.js";
+import { hitlApprovalManager } from "../hitl/state.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -190,6 +198,10 @@ export async function deliverOutboundPayloads(params: {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  approval?: {
+    /** Internal escape hatch to avoid approval recursion (e.g. approval notifications). */
+    bypassHitl?: boolean;
+  };
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -203,6 +215,129 @@ export async function deliverOutboundPayloads(params: {
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const results: OutboundDeliveryResult[] = [];
+
+  // HITL outbound approval gate (central choke point).
+  if (!params.approval?.bypassHitl) {
+    const hitl = cfg.approvals?.hitl;
+    const mode = hitl?.outbound?.mode ?? "off";
+    const enabled = hitl?.enabled === true && mode !== "off";
+    if (enabled) {
+      const keyParts = [
+        `outbound`,
+        channel,
+        `to=${to}`,
+        ...(accountId ? [`account=${accountId}`] : []),
+        ...(params.threadId !== undefined && params.threadId !== null
+          ? [`thread=${String(params.threadId)}`]
+          : []),
+      ];
+      const allowKey = keyParts.join(":");
+      const persisted = loadHitlAllowlist();
+      const allowPatterns = [
+        ...(hitl?.outbound?.allowlist ?? []),
+        ...(persisted.entries.map((e) => e.pattern) ?? []),
+      ];
+      const allowlisted = matchesHitlAllowlist(allowPatterns, allowKey);
+      const requiresApproval = !allowlisted && (mode === "always" || mode === "on-miss");
+      if (requiresApproval) {
+        const defaultDecision: HitlApprovalDecision = hitl?.defaultDecision ?? "deny";
+        const timeoutSecondsRaw = hitl?.timeoutSeconds ?? 120;
+        const timeoutSeconds = Math.min(86_400, Math.max(60, Math.floor(timeoutSecondsRaw)));
+        const timeoutMs = timeoutSeconds * 1000;
+
+        const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
+        const mediaCount = normalizedPayloads.reduce((sum, p) => {
+          const urls = p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : []);
+          return sum + urls.length;
+        }, 0);
+        const preview =
+          normalizedPayloads
+            .map((p) => (p.text ?? "").trim())
+            .find((t) => t.length > 0)
+            ?.slice(0, 240) ?? "";
+
+        const requestLines: string[] = [
+          "Outbound side-effect approval required.",
+          "",
+          `Channel: ${channel}`,
+          `To: ${to}`,
+          ...(accountId ? [`Account: ${accountId}`] : []),
+          ...(params.threadId !== undefined && params.threadId !== null
+            ? [`Thread: ${String(params.threadId)}`]
+            : []),
+          `Media: ${mediaCount}`,
+          ...(preview ? ["", "Preview:", preview] : []),
+          ...(params.mirror?.sessionKey ? ["", `Session: ${params.mirror.sessionKey}`] : []),
+        ];
+        let requestText = requestLines.join("\n").trim();
+        if (requestText.length > 1900) {
+          requestText = `${requestText.slice(0, 1900)}…`;
+        }
+
+        const record = hitlApprovalManager.create({
+          kind: "outbound",
+          timeoutMs,
+          defaultDecision,
+          summary: { channel, to, accountId: accountId ?? null, threadId: params.threadId ?? null },
+          id: null,
+        });
+        const decisionPromise = hitlApprovalManager.waitForDecision(record, timeoutMs);
+
+        const callbackUrl =
+          typeof hitl?.callbackUrl === "string" && hitl.callbackUrl.trim()
+            ? hitl.callbackUrl.trim()
+            : undefined;
+
+        const hitlCreate = await createHitlRequest({
+          apiKey: hitl?.apiKey ?? "",
+          loopId: hitl?.loopId ?? "",
+          request: {
+            processing_type: "time-sensitive",
+            type: "markdown",
+            priority: "high",
+            request_text: requestText,
+            timeout_seconds: timeoutSeconds,
+            response_type: "single_select",
+            response_config: {
+              options: [
+                { value: "allow-once", label: "Allow once" },
+                { value: "allow-always", label: "Allow always" },
+                { value: "deny", label: "Deny" },
+              ],
+              required: true,
+            },
+            default_response: defaultDecision,
+            ...(callbackUrl ? { callback_url: callbackUrl } : {}),
+            platform: "api",
+            context: {
+              kind: "outbound",
+              channel,
+              to,
+              accountId: accountId ?? null,
+              threadId: params.threadId ?? null,
+              key: allowKey,
+            },
+          },
+        });
+        if (!hitlCreate.ok) {
+          // Secure-by-default: if HITL is required but unavailable, block the send.
+          throw new Error(hitlCreate.error);
+        }
+        hitlApprovalManager.attachHitlRequestId(record.id, hitlCreate.requestId);
+
+        const decision = (await decisionPromise) ?? defaultDecision;
+        if (decision === "deny") {
+          throw new Error("Outbound delivery blocked by HITL approval");
+        }
+        if (decision === "allow-always") {
+          // Persist a stable pattern (recipient-scoped) to bypass future approvals.
+          const pattern = `outbound:${channel}:to=${to}${accountId ? `:account=${accountId}` : ""}:**`;
+          addHitlAllowlistEntry(pattern);
+        }
+      }
+    }
+  }
+
   const handler = await createChannelHandler({
     cfg,
     channel,

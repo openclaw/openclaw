@@ -15,6 +15,37 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
+const hitlMocks = vi.hoisted(() => ({
+  decision: "allow-once" as "allow-once" | "allow-always" | "deny" | null,
+  createHitlRequest: vi.fn(async () => ({ ok: true, requestId: "r1", raw: {} })),
+  allowlist: {
+    loadHitlAllowlist: vi.fn(() => ({ version: 1, entries: [] })),
+    matchesHitlAllowlist: vi.fn(() => false),
+    addHitlAllowlistEntry: vi.fn(),
+  },
+  manager: {
+    create: vi.fn((params: unknown) => {
+      type HitlCreateParams = {
+        kind: "outbound" | "plugin-http";
+        timeoutMs: number;
+        defaultDecision: "allow-once" | "allow-always" | "deny";
+        summary: Record<string, unknown>;
+      };
+      const p = params as HitlCreateParams;
+      return {
+        id: "a1",
+        kind: p.kind,
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + p.timeoutMs,
+        defaultDecision: p.defaultDecision,
+        summary: p.summary,
+      };
+    }),
+    waitForDecision: vi.fn(async () => hitlMocks.decision),
+    attachHitlRequestId: vi.fn(() => true),
+  },
+}));
+
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
@@ -24,6 +55,20 @@ vi.mock("../../config/sessions.js", async () => {
     appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
   };
 });
+
+vi.mock("../hitl/client.js", () => ({
+  createHitlRequest: hitlMocks.createHitlRequest,
+}));
+
+vi.mock("../hitl/allowlist.js", () => ({
+  loadHitlAllowlist: hitlMocks.allowlist.loadHitlAllowlist,
+  matchesHitlAllowlist: hitlMocks.allowlist.matchesHitlAllowlist,
+  addHitlAllowlistEntry: hitlMocks.allowlist.addHitlAllowlistEntry,
+}));
+
+vi.mock("../hitl/state.js", () => ({
+  hitlApprovalManager: hitlMocks.manager,
+}));
 
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
@@ -329,6 +374,126 @@ describe("deliverOutboundPayloads", () => {
       expect.any(Error),
       expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
     );
+  });
+
+  it("gates outbound delivery via HITL when enabled", async () => {
+    hitlMocks.createHitlRequest.mockClear();
+    hitlMocks.manager.waitForDecision.mockClear();
+    hitlMocks.decision = "allow-once";
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      approvals: {
+        hitl: {
+          enabled: true,
+          apiKey: "k",
+          loopId: "l",
+          callbackUrl: "https://example.com/hitl/callback/secret",
+          outbound: { mode: "always" },
+          timeoutSeconds: 60,
+          defaultDecision: "deny",
+        },
+      },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(hitlMocks.createHitlRequest).toHaveBeenCalledTimes(1);
+    expect(hitlMocks.manager.waitForDecision).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([{ channel: "whatsapp", messageId: "w1", toJid: "jid" }]);
+  });
+
+  it("blocks outbound delivery when HITL denies", async () => {
+    hitlMocks.decision = "deny";
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      approvals: {
+        hitl: {
+          enabled: true,
+          apiKey: "k",
+          loopId: "l",
+          outbound: { mode: "always" },
+          timeoutSeconds: 60,
+          defaultDecision: "deny",
+        },
+      },
+    };
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("persists allow-always decisions to the HITL allowlist", async () => {
+    hitlMocks.allowlist.addHitlAllowlistEntry.mockClear();
+    hitlMocks.decision = "allow-always";
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      approvals: {
+        hitl: {
+          enabled: true,
+          apiKey: "k",
+          loopId: "l",
+          outbound: { mode: "always" },
+          timeoutSeconds: 60,
+          defaultDecision: "deny",
+        },
+      },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(hitlMocks.allowlist.addHitlAllowlistEntry).toHaveBeenCalledWith(
+      expect.stringContaining("outbound:whatsapp:to=+1555"),
+    );
+  });
+
+  it("skips HITL gating when bypassHitl is set", async () => {
+    hitlMocks.createHitlRequest.mockClear();
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      approvals: {
+        hitl: {
+          enabled: true,
+          apiKey: "k",
+          loopId: "l",
+          outbound: { mode: "always" },
+          timeoutSeconds: 60,
+          defaultDecision: "deny",
+        },
+      },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+      approval: { bypassHitl: true },
+    });
+
+    expect(hitlMocks.createHitlRequest).not.toHaveBeenCalled();
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {

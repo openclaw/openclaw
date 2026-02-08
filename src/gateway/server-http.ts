@@ -25,6 +25,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleHitlCallbackHttpRequest } from "./hitl-http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -317,6 +318,21 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const hitl = configSnapshot.approvals?.hitl;
+      if (hitl?.enabled && typeof hitl.callbackSecret === "string" && hitl.callbackSecret.trim()) {
+        const maxBodyBytes =
+          typeof hitl.webhook?.maxBodyBytes === "number" && hitl.webhook.maxBodyBytes > 0
+            ? hitl.webhook.maxBodyBytes
+            : 256 * 1024;
+        if (
+          await handleHitlCallbackHttpRequest(req, res, {
+            callbackSecret: hitl.callbackSecret,
+            maxBodyBytes,
+          })
+        ) {
+          return;
+        }
+      }
       if (await handleHooksRequest(req, res)) {
         return;
       }

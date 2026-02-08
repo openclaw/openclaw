@@ -250,7 +250,14 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpHandler: (handler: OpenClawPluginHttpHandler) => void;
-  registerHttpRoute: (params: { path: string; handler: OpenClawPluginHttpRouteHandler }) => void;
+  registerHttpRoute: (params: {
+    path: string;
+    handler: OpenClawPluginHttpRouteHandler;
+    /** When true, the route bypasses gateway auth (use sparingly). Default: false. */
+    public?: boolean;
+    /** When true, the route requires HITL approval before dispatch. Default: false. */
+    requireHitlApproval?: boolean;
+  }) => void;
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;

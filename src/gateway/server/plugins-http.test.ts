@@ -1,7 +1,65 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "./__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./plugins-http.js";
+
+const mockConfig = vi.hoisted(() => ({
+  cfg: {
+    gateway: {},
+    approvals: { hitl: { enabled: false } },
+  } as unknown,
+}));
+
+const mockHitl = vi.hoisted(() => ({
+  createHitlRequest: vi.fn(async () => ({ ok: true, requestId: "r1", raw: {} })),
+  allowlist: {
+    loadHitlAllowlist: vi.fn(() => ({ version: 1, entries: [] })),
+    matchesHitlAllowlist: vi.fn(() => false),
+    addHitlAllowlistEntry: vi.fn(),
+  },
+  manager: {
+    create: vi.fn((params: unknown) => {
+      type HitlCreateParams = {
+        kind: "outbound" | "plugin-http";
+        timeoutMs: number;
+        defaultDecision: "allow-once" | "allow-always" | "deny";
+        summary: Record<string, unknown>;
+      };
+      const p = params as HitlCreateParams;
+      return {
+        id: "a1",
+        kind: p.kind,
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + p.timeoutMs,
+        defaultDecision: p.defaultDecision,
+        summary: p.summary,
+      };
+    }),
+    waitForDecision: vi.fn(async () => "allow-once"),
+    attachHitlRequestId: vi.fn(() => true),
+  },
+}));
+
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return { ...actual, loadConfig: () => mockConfig.cfg };
+});
+
+vi.mock("../../infra/hitl/client.js", () => ({
+  createHitlRequest: mockHitl.createHitlRequest,
+}));
+
+vi.mock("../../infra/hitl/allowlist.js", () => ({
+  loadHitlAllowlist: mockHitl.allowlist.loadHitlAllowlist,
+  matchesHitlAllowlist: mockHitl.allowlist.matchesHitlAllowlist,
+  addHitlAllowlistEntry: mockHitl.allowlist.addHitlAllowlistEntry,
+}));
+
+vi.mock("../../infra/hitl/state.js", () => ({
+  hitlApprovalManager: mockHitl.manager,
+}));
+
+const { createGatewayPluginRequestHandler } = await import("./plugins-http.js");
 
 const makeResponse = (): {
   res: ServerResponse;
@@ -27,6 +85,7 @@ describe("createGatewayPluginRequestHandler", () => {
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry(),
       log,
+      auth: { mode: "token", token: "tok", allowTailscale: false },
     });
     const { res } = makeResponse();
     const handled = await handler({} as IncomingMessage, res);
@@ -46,6 +105,7 @@ describe("createGatewayPluginRequestHandler", () => {
       log: { warn: vi.fn() } as unknown as Parameters<
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
+      auth: { mode: "token", token: "tok", allowTailscale: false },
     });
 
     const { res } = makeResponse();
@@ -75,13 +135,135 @@ describe("createGatewayPluginRequestHandler", () => {
       log: { warn: vi.fn() } as unknown as Parameters<
         typeof createGatewayPluginRequestHandler
       >[0]["log"],
+      auth: { mode: "token", token: "tok", allowTailscale: false },
     });
 
     const { res } = makeResponse();
-    const handled = await handler({ url: "/demo" } as IncomingMessage, res);
+    const handled = await handler(
+      {
+        url: "/demo",
+        method: "GET",
+        headers: { authorization: "Bearer tok", host: "localhost" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      res,
+    );
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
     expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("requires gateway auth for non-public routes by default", async () => {
+    const routeHandler = vi.fn();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [{ pluginId: "route", path: "/demo", handler: routeHandler, source: "route" }],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: { mode: "token", token: "tok", allowTailscale: false },
+    });
+    const { res, end } = makeResponse();
+    const handled = await handler(
+      {
+        url: "/demo",
+        method: "GET",
+        headers: { host: "localhost" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      res,
+    );
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(401);
+    expect(end).toHaveBeenCalled();
+    expect(routeHandler).not.toHaveBeenCalled();
+  });
+
+  it("allows public routes without gateway auth", async () => {
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+    });
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/demo",
+            handler: routeHandler,
+            public: true,
+            source: "route",
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: { mode: "token", token: "tok", allowTailscale: false },
+    });
+    const { res } = makeResponse();
+    const handled = await handler(
+      {
+        url: "/demo",
+        method: "GET",
+        headers: { host: "localhost" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      res,
+    );
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("gates routes that opt into HITL approval", async () => {
+    mockConfig.cfg = {
+      gateway: {},
+      approvals: {
+        hitl: {
+          enabled: true,
+          apiKey: "k",
+          loopId: "l",
+          callbackUrl: "https://example.com/hitl/callback/secret",
+          pluginHttp: { mode: "always" },
+          defaultDecision: "deny",
+          timeoutSeconds: 60,
+        },
+      },
+    } as unknown;
+    mockHitl.manager.waitForDecision.mockResolvedValueOnce("deny");
+    const routeHandler = vi.fn();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/demo",
+            handler: routeHandler,
+            requireHitlApproval: true,
+            source: "route",
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+      auth: { mode: "token", token: "tok", allowTailscale: false },
+    });
+    const { res } = makeResponse();
+    const handled = await handler(
+      {
+        url: "/demo",
+        method: "POST",
+        headers: { authorization: "Bearer tok", host: "localhost" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      res,
+    );
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(403);
+    expect(routeHandler).not.toHaveBeenCalled();
   });
 
   it("logs and responds with 500 when a handler throws", async () => {
@@ -101,6 +283,7 @@ describe("createGatewayPluginRequestHandler", () => {
         ],
       }),
       log,
+      auth: { mode: "token", token: "tok", allowTailscale: false },
     });
 
     const { res, setHeader, end } = makeResponse();

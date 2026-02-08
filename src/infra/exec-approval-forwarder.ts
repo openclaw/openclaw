@@ -213,6 +213,7 @@ async function deliverToTargets(params: {
         accountId: target.accountId,
         threadId: target.threadId,
         payloads: [{ text: params.text }],
+        approval: { bypassHitl: true },
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);

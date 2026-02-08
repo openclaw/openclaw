@@ -59,6 +59,8 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  public?: boolean;
+  requireHitlApproval?: boolean;
   source?: string;
 };
 
@@ -295,7 +297,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerHttpRoute = (
     record: PluginRecord,
-    params: { path: string; handler: OpenClawPluginHttpRouteHandler },
+    params: {
+      path: string;
+      handler: OpenClawPluginHttpRouteHandler;
+      public?: boolean;
+      requireHitlApproval?: boolean;
+    },
   ) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
@@ -321,6 +328,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      public: params.public === true,
+      requireHitlApproval: params.requireHitlApproval === true,
       source: record.source,
     });
   };

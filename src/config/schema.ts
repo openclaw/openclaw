@@ -71,6 +71,7 @@ const GROUP_LABELS: Record<string, string> = {
   discovery: "Discovery",
   presence: "Presence",
   voicewake: "Voice Wake",
+  approvals: "Approvals",
 };
 
 const GROUP_ORDER: Record<string, number> = {
@@ -98,6 +99,7 @@ const GROUP_ORDER: Record<string, number> = {
   discovery: 210,
   presence: 220,
   voicewake: 230,
+  approvals: 240,
   logging: 900,
 };
 
@@ -133,6 +135,18 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
+  "approvals.hitl.enabled": "HITL Approvals Enabled",
+  "approvals.hitl.apiKey": "HITL API Key",
+  "approvals.hitl.loopId": "HITL Loop ID",
+  "approvals.hitl.callbackSecret": "HITL Callback Secret",
+  "approvals.hitl.callbackUrl": "HITL Callback URL",
+  "approvals.hitl.timeoutSeconds": "HITL Approval Timeout (sec)",
+  "approvals.hitl.defaultDecision": "HITL Default Decision",
+  "approvals.hitl.outbound.mode": "HITL Outbound Gate Mode",
+  "approvals.hitl.outbound.allowlist": "HITL Outbound Allowlist",
+  "approvals.hitl.pluginHttp.mode": "HITL Plugin HTTP Gate Mode",
+  "approvals.hitl.pluginHttp.allowlist": "HITL Plugin HTTP Allowlist",
+  "approvals.hitl.webhook.maxBodyBytes": "HITL Webhook Max Body Bytes",
   "tools.media.image.enabled": "Enable Image Understanding",
   "tools.media.image.maxBytes": "Image Understanding Max Bytes",
   "tools.media.image.maxChars": "Image Understanding Max Chars",
@@ -418,6 +432,29 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "approvals.hitl.enabled":
+    "Enable Human-in-the-Loop approvals via HITL.sh for outbound side-effects and (optionally) plugin HTTP routes.",
+  "approvals.hitl.apiKey":
+    "HITL.sh API key used to create approval requests (recommended: ${ENV_VAR} substitution).",
+  "approvals.hitl.loopId": "HITL.sh loop id where approval requests are created.",
+  "approvals.hitl.callbackSecret":
+    "Secret path segment used for the gateway callback endpoint: POST /hitl/callback/<secret>.",
+  "approvals.hitl.callbackUrl":
+    "Full public HTTPS URL used as callback_url when creating HITL requests (recommended).",
+  "approvals.hitl.timeoutSeconds":
+    "Default time-sensitive HITL timeout in seconds (60-86400). Default: 120.",
+  "approvals.hitl.defaultDecision":
+    'Decision applied when a request times out or is cancelled ("deny" recommended).',
+  "approvals.hitl.outbound.mode":
+    'Outbound gating mode ("off", "on-miss", or "always"). Default: off.',
+  "approvals.hitl.outbound.allowlist":
+    "Allowlist patterns that bypass outbound approvals (matched against a stable key like outbound:slack:to=C123:account=default).",
+  "approvals.hitl.pluginHttp.mode":
+    'Plugin HTTP gating mode for routes that opt in ("off", "on-miss", or "always"). Default: off.',
+  "approvals.hitl.pluginHttp.allowlist":
+    "Allowlist patterns that bypass plugin HTTP approvals (matched against a key like plugin-http:POST:path=/demo:plugin=my-plugin).",
+  "approvals.hitl.webhook.maxBodyBytes":
+    "Max JSON body bytes accepted by the gateway HITL callback endpoint. Default: 262144.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
@@ -771,6 +808,8 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
+  "approvals.hitl.loopId": "65f1234567890abcdef12345",
+  "approvals.hitl.callbackUrl": "https://gateway.example.com/hitl/callback/<secret>",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
