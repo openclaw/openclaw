@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from "react";
 
+type JobStatus = "pending" | "running" | "review" | "revising" | "done" | "failed" | "success";
+
 type Job = {
   id: string;
   title: string;
   description: string | null;
-  status: "pending" | "running" | "review" | "revising" | "done" | "failed";
+  status: JobStatus;
   priority: number;
   created_at: number;
   result_summary: string | null;
@@ -67,7 +69,9 @@ export default function MissionControl() {
 
   async function createTask(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTaskTitle.trim()) return;
+    if (!newTaskTitle.trim()) {
+      return;
+    }
 
     try {
       const res = await fetch("/api/tasks", {
@@ -92,6 +96,10 @@ export default function MissionControl() {
   }
 
   function getJobsByStatus(status: string) {
+    // Map "success" to "done" for backward compatibility
+    if (status === "done") {
+      return jobs.filter((j) => j.status === "done" || j.status === "success");
+    }
     return jobs.filter((j) => j.status === status);
   }
 
@@ -118,7 +126,9 @@ export default function MissionControl() {
   }
 
   async function checkAgentStatus(job: Job) {
-    if (!job.session_key) return;
+    if (!job.session_key) {
+      return;
+    }
     try {
       const res = await fetch(`/api/tasks/${job.id}/status`);
       const data = await res.json();
