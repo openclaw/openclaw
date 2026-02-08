@@ -153,6 +153,7 @@ export const AgentDefaultsSchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        suppressAnnounce: z.boolean().optional(),
       })
       .strict()
       .optional(),
