@@ -3,6 +3,7 @@ import type { loadConfig } from "../config/config.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
+import { clearCache as clearCronStoreCache } from "../cron/service/store.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -63,13 +64,14 @@ export function createGatewayReloadHandlers(params: {
     resetDirectoryCache();
 
     if (plan.restartCron) {
+      clearCronStoreCache(state.cronState.storePath);
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
       });
-      void nextState.cronState.cron
+      await nextState.cronState.cron
         .start()
         .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
     }

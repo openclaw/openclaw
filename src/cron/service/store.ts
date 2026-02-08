@@ -506,3 +506,11 @@ export async function persist(state: CronServiceState) {
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
+
+/**
+ * Clear the store cache for a given path.
+ * Used during hot reload to prevent stale data from being used by new CronService instances.
+ */
+export function clearCache(storePath: string) {
+  storeCache.delete(storePath);
+}
