@@ -17,6 +17,8 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
+import { loadConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
@@ -24,6 +26,13 @@ import {
 } from "./extension-relay.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
+import {
+  formatReuseDecision,
+  getDefaultConfig as getDefaultTabReuseConfig,
+  shouldReuseTab,
+  type TabInfo,
+  type TabReuseConfig,
+} from "./tab-reuse.js";
 import { movePathToTrash } from "./trash.js";
 
 export type {
@@ -85,6 +94,8 @@ function createProfileContext(
   opts: ContextOptions,
   profile: ResolvedBrowserProfile,
 ): ProfileContext {
+  const log = createSubsystemLogger("browser").child("server-context");
+  
   const state = () => {
     const current = opts.getState();
     if (!current) {
@@ -106,6 +117,43 @@ function createProfileContext(
   const setProfileRunning = (running: ProfileRuntimeState["running"]) => {
     const profileState = getProfileState();
     profileState.running = running;
+  };
+
+  /**
+   * Get tab reuse configuration from config, with defaults
+   */
+  const getTabReuseConfig = (): TabReuseConfig => {
+    try {
+      const cfg = loadConfig();
+      const rawConfig = cfg.browser?.tabReuse;
+      
+      if (!rawConfig || rawConfig.enabled === false) {
+        // Tab reuse disabled
+        return {
+          enabled: false,
+          matchDomain: false,
+          matchExact: false,
+          focusExisting: false,
+        };
+      }
+      
+      // Merge with defaults
+      const defaults = getDefaultTabReuseConfig();
+      return {
+        enabled: rawConfig.enabled ?? defaults.enabled,
+        matchDomain: rawConfig.matchDomain ?? defaults.matchDomain,
+        matchExact: rawConfig.matchExact ?? defaults.matchExact,
+        focusExisting: rawConfig.focusExisting ?? defaults.focusExisting,
+      };
+    } catch {
+      // If config loading fails, return disabled
+      return {
+        enabled: false,
+        matchDomain: false,
+        matchExact: false,
+        focusExisting: false,
+      };
+    }
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
@@ -145,6 +193,55 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    // Check if we should reuse an existing tab
+    const tabReuseConfig = getTabReuseConfig();
+    
+    if (tabReuseConfig.enabled) {
+      try {
+        // Get existing tabs
+        const existingTabs = await listTabs();
+        
+        // Convert to TabInfo format
+        const tabInfos: TabInfo[] = existingTabs.map((tab) => ({
+          targetId: tab.targetId,
+          url: tab.url,
+          title: tab.title,
+          type: tab.type,
+        }));
+        
+        // Check if should reuse
+        const decision = shouldReuseTab(url, tabInfos, {}, tabReuseConfig);
+        
+        if (decision.reuse && decision.matchedTab) {
+          // Log the reuse decision
+          log.info(formatReuseDecision(url, decision));
+          
+          // Focus the existing tab if configured
+          if (tabReuseConfig.focusExisting) {
+            await focusTab(decision.matchedTab.targetId).catch(() => {
+              // Focus might fail on remote browsers, continue anyway
+            });
+          }
+          
+          // Navigate if URL is different (for domain matches)
+          const matchedFullTab = existingTabs.find(
+            (t) => t.targetId === decision.matchedTab!.targetId
+          );
+          
+          if (matchedFullTab) {
+            // Update last target ID
+            const profileState = getProfileState();
+            profileState.lastTargetId = matchedFullTab.targetId;
+            return matchedFullTab;
+          }
+        }
+      } catch (err) {
+        // If tab reuse fails, fall through to create new tab
+        log.warn(`[tab-reuse] Failed to check for reusable tabs: ${String(err)}`);
+      }
+    }
+    
+    // No reuse, create new tab (original logic):
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
     if (!profile.cdpIsLoopback) {
@@ -185,7 +282,6 @@ function createProfileContext(
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
 
-    const encoded = encodeURIComponent(url);
     type CdpTarget = {
       id?: string;
       title?: string;
@@ -195,12 +291,10 @@ function createProfileContext(
     };
 
     const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
-    const endpoint = endpointUrl.search
-      ? (() => {
-          endpointUrl.searchParams.set("url", url);
-          return endpointUrl.toString();
-        })()
-      : `${endpointUrl.toString()}?${encoded}`;
+    // CDP /json/new accepts either /json/new?<url> or /json/new?url=<url>
+    // We use the latter for consistency and proper encoding
+    endpointUrl.searchParams.set("url", url);
+    const endpoint = endpointUrl.toString();
     const created = await fetchJson<CdpTarget>(endpoint, 1500, {
       method: "PUT",
     }).catch(async (err) => {

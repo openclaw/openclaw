@@ -12,6 +12,16 @@ export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
 };
+export type BrowserTabReuseConfig = {
+  /** Enable intelligent tab reuse (reuse existing tabs instead of opening duplicates). Default: false */
+  enabled?: boolean;
+  /** Allow domain-level matching (not just exact URL). Default: true */
+  matchDomain?: boolean;
+  /** Require exact URL match (before trying domain match). Default: true */
+  matchExact?: boolean;
+  /** Focus existing tab when reusing. Default: true */
+  focusExisting?: boolean;
+};
 export type BrowserConfig = {
   enabled?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
@@ -38,4 +48,6 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** Tab reuse configuration (avoid duplicate tabs). */
+  tabReuse?: BrowserTabReuseConfig;
 };
