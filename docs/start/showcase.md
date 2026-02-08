@@ -233,15 +233,15 @@ A scheduled prompt generates a single "scene" image each morning (weather, tasks
 
 <Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
   **@joshp123** • `automation` `booking` `cli`
-  
+
   Playtomic availability checker + booking CLI. Never miss an open court again.
-  
+
   <img src="/assets/showcase/padel-screenshot.jpg" alt="padel-cli screenshot" />
 </Card>
 
 <Card title="Accounting Intake" icon="file-invoice-dollar">
   **Community** • `automation` `email` `pdf`
-  
+
   Collects PDFs from email, preps documents for tax consultant. Monthly accounting on autopilot.
 </Card>
 
@@ -289,27 +289,27 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 
 <Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
   **@joshp123** • `learning` `voice` `skill`
-  
+
   Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
-  
+
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
 </Card>
 
 <Card title="WhatsApp Memory Vault" icon="vault">
   **Community** • `memory` `transcription` `indexing`
-  
+
   Ingests full WhatsApp exports, transcribes 1k+ voice notes, cross-checks with git logs, outputs linked markdown reports.
 </Card>
 
 <Card title="Karakeep Semantic Search" icon="magnifying-glass" href="https://github.com/jamesbrooksco/karakeep-semantic-search">
   **@jamesbrooksco** • `search` `vector` `bookmarks`
-  
+
   Adds vector search to Karakeep bookmarks using Qdrant + OpenAI/Ollama embeddings.
 </Card>
 
 <Card title="Inside-Out-2 Memory" icon="brain">
   **Community** • `memory` `beliefs` `self-model`
-  
+
   Separate memory manager that turns session files into memories → beliefs → evolving self model.
 </Card>
 
@@ -321,7 +321,7 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 
 <Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
-  
+
   Vapi voice assistant ↔ OpenClaw HTTP bridge. Near real-time phone calls with your agent.
 </Card>
 
@@ -339,25 +339,25 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 
 <Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
-  
+
   OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persistent state.
 </Card>
 
 <Card title="Home Assistant Skill" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
   **ClawHub** • `homeassistant` `skill` `automation`
-  
+
   Control and automate Home Assistant devices via natural language.
 </Card>
 
 <Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
-  
+
   Batteries-included nixified OpenClaw configuration for reproducible deployments.
 </Card>
 
 <Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
   **ClawHub** • `calendar` `caldav` `skill`
-  
+
   Calendar skill using khal/vdirsyncer. Self-hosted calendar integration.
 </Card>
 
@@ -369,17 +369,17 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 
 <Card title="GoHome Automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
-  
+
   Nix-native home automation with OpenClaw as the interface, plus beautiful Grafana dashboards.
-  
+
   <img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" />
 </Card>
 
 <Card title="Roborock Vacuum" icon="robot" href="https://github.com/joshp123/gohome/tree/main/plugins/roborock">
   **@joshp123** • `vacuum` `iot` `plugin`
-  
+
   Control your Roborock robot vacuum through natural conversation.
-  
+
   <img src="/assets/showcase/roborock-screenshot.jpg" alt="Roborock status" />
 </Card>
 
@@ -391,8 +391,14 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 
 <Card title="StarSwap Marketplace" icon="star" href="https://star-swap.com/">
   **Community** • `marketplace` `astronomy` `webapp`
-  
+
   Full astronomy gear marketplace. Built with/around the OpenClaw ecosystem.
+</Card>
+
+<Card title="AgentRoulette" icon="dice" href="https://github.com/jh14101991/agent-roulette">
+  **Agent Commerce** • `usdc` `smart-contracts` `base` `hackathon`
+
+  First protocol where AI agents bet USDC on whether they'll hallucinate. Built in 6 hours during the OpenClaw USDC Hackathon. Agents stake USDC on factual claims, oracle verifies within 5 minutes, correct predictions win based on odds, wrong ones become NFT art in the "Hallucination Museum". Demonstrates autonomous agent commerce with instant USDC settlement and no human intervention. [Contract on BaseScan](https://sepolia.basescan.org/address/0xd63695F28c2166361d0F75f4fBBf76278f0BF331)
 </Card>
 
 </CardGroup>

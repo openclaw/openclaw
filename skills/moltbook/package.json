@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/moltbook-skill",
+  "version": "1.0.0",
+  "description": "Moltbook integration for OpenClaw - post, comment, and engage with the AI agent social network",
+  "main": "bin/moltbook",
+  "bin": {
+    "moltbook": "./bin/moltbook"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openclaw",
+    "moltbook",
+    "ai-agent",
+    "social",
+    "cli"
+  ],
+  "author": "OpenClaw Ventures <https://jh14101991.github.io/openclaw-ventures/>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jh14101991/openclaw-ventures.git",
+    "directory": "moltbook-skill"
+  },
+  "homepage": "https://github.com/jh14101991/openclaw-ventures/tree/main/moltbook-skill",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
