@@ -106,7 +106,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        "Telegram bot token missing. Set channels.telegram.accounts.<id>.botToken, channels.telegram.botToken, or TELEGRAM_BOT_TOKEN (env).",
       );
     }
     await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
@@ -171,7 +171,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        "Telegram bot token missing. Set channels.telegram.accounts.<id>.botToken, channels.telegram.botToken, or TELEGRAM_BOT_TOKEN (env).",
       );
     }
     const result = await sendMessageTelegram(to, content, {
@@ -206,7 +206,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        "Telegram bot token missing. Set channels.telegram.accounts.<id>.botToken, channels.telegram.botToken, or TELEGRAM_BOT_TOKEN (env).",
       );
     }
     await deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
@@ -246,7 +246,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        "Telegram bot token missing. Set channels.telegram.accounts.<id>.botToken, channels.telegram.botToken, or TELEGRAM_BOT_TOKEN (env).",
       );
     }
     const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
@@ -278,7 +278,7 @@ export async function handleTelegramAction(
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+        "Telegram bot token missing. Set channels.telegram.accounts.<id>.botToken, channels.telegram.botToken, or TELEGRAM_BOT_TOKEN (env).",
       );
     }
     const result = await sendStickerTelegram(to, fileId, {
