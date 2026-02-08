@@ -232,6 +232,23 @@
     gap: 8px;
   }
 
+  .chat-compose__row {
+    flex-wrap: wrap;
+  }
+
+  .chat-compose__field {
+    flex-basis: 100%;
+  }
+
+  .chat-compose__actions {
+    flex-basis: 100%;
+    justify-content: stretch;
+  }
+
+  .chat-compose__actions .btn {
+    flex: 1;
+  }
+
   .chat-compose__field textarea {
     min-height: 60px;
     padding: 8px 10px;
