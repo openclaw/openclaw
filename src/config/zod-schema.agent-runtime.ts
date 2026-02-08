@@ -8,6 +8,16 @@ import {
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
 
+export const AgentModelSchema = z.union([
+  z.string(),
+  z
+    .object({
+      primary: z.string().optional(),
+      fallbacks: z.array(z.string()).optional(),
+    })
+    .strict(),
+]);
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -19,10 +29,10 @@ export const HeartbeatSchema = z
       })
       .strict()
       .optional(),
-    model: z.string().optional(),
+    model: AgentModelSchema.optional(),
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
-    target: z.string().optional(),
+    target: z.union([z.literal("last"), z.literal("none"), z.string()]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),
@@ -420,15 +430,6 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
-export const AgentModelSchema = z.union([
-  z.string(),
-  z
-    .object({
-      primary: z.string().optional(),
-      fallbacks: z.array(z.string()).optional(),
-    })
-    .strict(),
-]);
 export const AgentEntrySchema = z
   .object({
     id: z.string(),

@@ -177,7 +177,7 @@ export type AgentDefaultsConfig = {
       timezone?: string;
     };
     /** Heartbeat model override (provider/model). */
-    model?: string;
+    model?: string | AgentModelListConfig;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */

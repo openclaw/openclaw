@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { AgentDefaultsConfig, AgentModelListConfig } from "../config/types.agent-defaults.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
@@ -81,7 +81,7 @@ export type HeartbeatSummary = {
   everyMs: number | null;
   prompt: string;
   target: string;
-  model?: string;
+  model?: string | AgentModelListConfig;
   ackMaxChars: number;
 };
 
@@ -618,7 +618,39 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
+    let runCfg = cfg;
+    const heartbeatModel = heartbeat?.model;
+
+    // If the heartbeat model is complex (primary/fallbacks), we need to ensure the runtime uses those fallbacks.
+    // The cleanest way is to synthesize a config where the default model matches the heartbeat model.
+    if (heartbeatModel && typeof heartbeatModel === "object") {
+      // Filter out the current agent from the list to force it to use defaults
+      const filteredList = (cfg.agents?.list ?? []).filter(
+        (a) => normalizeAgentId(a.id) !== normalizeAgentId(agentId),
+      );
+
+      runCfg = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          list: filteredList,
+          defaults: {
+            ...cfg.agents?.defaults,
+            // We override the default model for this run to match the heartbeat settings.
+            // This ensures both primary resolution and fallback logic works as expected.
+            model: heartbeatModel,
+            heartbeat: {
+              ...cfg.agents?.defaults?.heartbeat,
+              // Disable specific heartbeat model config so getReplyFromConfig falls through to the (now patched) defaults.
+              // We preserve 'prompt' and other settings.
+              model: undefined,
+            },
+          },
+        },
+      };
+    }
+
+    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, runCfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
