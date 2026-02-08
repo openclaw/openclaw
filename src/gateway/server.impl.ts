@@ -7,7 +7,7 @@ import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { type ChannelId, listChannelPlugins, getChannelPlugin } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
@@ -46,7 +46,7 @@ import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import { createAgentEventHandler, createChannelMessageHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -379,10 +379,83 @@ export async function startGatewayServer(
   });
   let { cron, storePath: cronStorePath } = cronState;
 
+  const handleChannelMessage = createChannelMessageHandler({
+    loadConfig,
+    log,
+    agentRunSeq,
+    chatRunState,
+    nodeSendToSession,
+    broadcast,
+    resolveSessionKey: (channel: string, from: string) => {
+      // Simple deterministic mapping for now
+      // TODO: In future, use a persistent registry
+      return `channel:${channel}:${from}`;
+    },
+    onReply: async (channelId, accountId, to, text) => {
+      const plugin = getChannelPlugin(channelId);
+      if (plugin?.outbound?.sendText) {
+        try {
+          await plugin.outbound.sendText({ cfg: loadConfig(), accountId, to, text });
+        } catch (err) {
+          log.error(`[${channelId}:${accountId}] reply failed: ${String(err)}`);
+        }
+        return;
+      }
+
+      const runtime = channelRuntimeEnvs[channelId];
+      // Type guard for Spixi channel capability
+      function hasSpixiChannel(obj: unknown): obj is {
+        channel: { spixi: { sendMessage: (to: string, text: string) => Promise<void> } };
+      } {
+        return (
+          typeof obj === "object" &&
+          obj !== null &&
+          "channel" in obj &&
+          typeof (obj as unknown as { channel?: unknown }).channel === "object" &&
+          (obj as unknown as { channel?: unknown }).channel !== null &&
+          (() => {
+            const channel = (obj as unknown as { channel?: unknown }).channel;
+            if (typeof channel === "object" && channel !== null) {
+              return "spixi" in channel;
+            }
+            return false;
+          })() &&
+          (() => {
+            const channel = (obj as unknown as { channel?: unknown }).channel;
+            if (typeof channel === "object" && channel !== null && "spixi" in channel) {
+              const spixi = (channel as { spixi?: unknown }).spixi;
+              return typeof spixi === "object" && spixi !== null;
+            }
+            return false;
+          })() &&
+          (() => {
+            const channel = (obj as unknown as { channel?: unknown }).channel;
+            if (typeof channel === "object" && channel !== null && "spixi" in channel) {
+              const spixi = (channel as { spixi?: unknown }).spixi;
+              return (
+                typeof spixi === "object" &&
+                spixi !== null &&
+                typeof (spixi as { sendMessage?: unknown }).sendMessage === "function"
+              );
+            }
+            return false;
+          })()
+        );
+      }
+      if (hasSpixiChannel(runtime)) {
+        // Fallback for runtime attached capabilities
+        await runtime.channel.spixi.sendMessage(to, text);
+      } else {
+        log.warn(`[${channelId}:${accountId}] No outbound.sendText capability found`);
+      }
+    },
+  });
+
   const channelManager = createChannelManager({
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
+    handleChannelMessage,
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;

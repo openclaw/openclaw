@@ -1,0 +1,61 @@
+{
+  "id": "spixi",
+  "name": "Spixi",
+  "description": "Decentralized P2P messaging via Ixian network",
+  "channels": ["spixi"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "channels": {
+        "type": "object",
+        "properties": {
+          "spixi": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "quixiApiUrl": { "type": "string" },
+              "mqttHost": { "type": "string" },
+              "mqttPort": { "type": "integer" },
+              "myWalletAddress": { "type": "string" },
+              "dmPolicy": { "type": ["string", "object"] },
+              "groupPolicy": { "type": ["string", "object"] },
+              "allowFrom": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "accounts": {
+                "type": "object",
+                "patternProperties": {
+                  ".*": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": { "type": "boolean" },
+                      "name": { "type": "string" },
+                      "quixiApiUrl": { "type": "string" },
+                      "mqttHost": { "type": "string" },
+                      "mqttPort": { "type": "integer" },
+                      "myWalletAddress": { "type": "string" },
+                      "dmPolicy": { "type": ["string", "object"] },
+                      "groupPolicy": { "type": ["string", "object"] },
+                      "allowFrom": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      },
+                      "openclawRecipient": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  }
+}

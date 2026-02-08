@@ -46,10 +46,19 @@ function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAc
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
+export type ChannelMessage = {
+  id?: string;
+  from: string;
+  text: string;
+  timestamp?: number;
+  raw?: unknown;
+};
+
 type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  handleChannelMessage: (channelId: string, accountId: string, msg: ChannelMessage) => void;
 };
 
 export type ChannelManager = {
@@ -62,7 +71,7 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
+  const { loadConfig, channelLogs, channelRuntimeEnvs, handleChannelMessage } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
 
@@ -157,6 +166,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log,
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
+          onMessage: (msg: ChannelMessage) => handleChannelMessage?.(channelId, id, msg),
         });
         const tracked = Promise.resolve(task)
           .catch((err) => {

@@ -18,6 +18,7 @@ import type {
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+import { ChannelMessage } from "../../gateway/server-channels.ts";
 
 export type ChannelSetupAdapter = {
   resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string }) => string;
@@ -155,6 +156,7 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  onMessage?: (payload: ChannelMessage) => void;
 };
 
 export type ChannelLogoutResult = {
