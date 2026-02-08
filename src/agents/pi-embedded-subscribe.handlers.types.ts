@@ -60,6 +60,9 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
+
+  /** Whether any block reply was emitted via onBlockReply during this subscription. */
+  didEmitBlockReply: boolean;
 };
 
 export type EmbeddedPiSubscribeContext = {

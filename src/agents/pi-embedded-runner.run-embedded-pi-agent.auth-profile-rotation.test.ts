@@ -58,6 +58,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   messagingToolSentTexts: [],
   messagingToolSentTargets: [],
   cloudCodeAssistFormatError: false,
+  didStreamBlockReply: false,
   ...overrides,
 });
 
@@ -471,6 +472,50 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAiKey;
       }
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips retry when block content was already streamed", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    try {
+      await writeAuthStore(agentDir);
+
+      // Simulate a scenario where content was streamed (didStreamBlockReply: true)
+      // but the LLM returned an error at the end (stopReason: "error").
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["Hello! Here is your response."],
+          didStreamBlockReply: true,
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage: "Internal server error",
+            content: [{ type: "text", text: "Hello! Here is your response." }],
+          }),
+        }),
+      );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:streamed",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:streamed",
+      });
+
+      // Should NOT retry since content was already delivered to the user.
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

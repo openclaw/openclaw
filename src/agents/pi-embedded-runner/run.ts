@@ -640,7 +640,12 @@ export async function runEmbeddedPiAgent(
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
           const shouldRotate = (!aborted && failoverFailure) || timedOut;
 
-          if (shouldRotate) {
+          // Skip retry if block content was already streamed/delivered to the user.
+          // This prevents duplicate responses when the LLM returns an error after
+          // streaming content (e.g., Gemini 500 INTERNAL after complete response).
+          if (shouldRotate && attempt.didStreamBlockReply) {
+            log.warn(`Skipping retry for ${provider}/${modelId}: content already streamed to user`);
+          } else if (shouldRotate) {
             if (lastProfileId) {
               const reason =
                 timedOut || assistantFailoverReason === "timeout"
