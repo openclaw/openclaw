@@ -61,6 +61,7 @@ Payload:
 {
   "message": "Run this",
   "name": "Email",
+  "agentId": "support",
   "sessionKey": "hook:email:msg-123",
   "wakeMode": "now",
   "deliver": true,
@@ -74,6 +75,7 @@ Payload:
 
 - `message` **required** (string): The prompt or message for the agent to process.
 - `name` optional (string): Human-readable name for the hook (e.g., "GitHub"), used as a prefix in session summaries.
+- `agentId` optional (string): The agent to route this webhook to (e.g., "support"). Defaults to the default agent. See [channel routing](/concepts/channel-routing) for agent configuration.
 - `sessionKey` optional (string): The key used to identify the agent's session. Defaults to a random `hook:<uuid>`. Using a consistent key allows for a multi-turn conversation within the hook context.
 - `wakeMode` optional (`now` | `next-heartbeat`): Whether to trigger an immediate heartbeat (default `now`) or wait for the next periodic check.
 - `deliver` optional (boolean): If `true`, the agent's response will be sent to the messaging channel. Defaults to `true`. Responses that are only heartbeat acknowledgments are automatically skipped.
