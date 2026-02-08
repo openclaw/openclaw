@@ -251,9 +251,13 @@ async function fetchProjectId(accessToken: string): Promise<string> {
     "User-Agent": "google-api-nodejs-client/9.15.1",
     "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
     "Client-Metadata": JSON.stringify({
-      ideType: "IDE_UNSPECIFIED",
-      platform: "PLATFORM_UNSPECIFIED",
-      pluginType: "GEMINI",
+      ide: "antigravity",
+      ideVersion: "1.15.8",
+      appName: "codeium-extension",
+      devMode: "false",
+      extensionVersion: "",
+      language: "UNSPECIFIED",
+      os: "windows",
     }),
   };
 

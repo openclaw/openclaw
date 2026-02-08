@@ -40,9 +40,13 @@ const LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist";
 const FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";
 
 const METADATA = {
-  ideType: "ANTIGRAVITY",
-  platform: "PLATFORM_UNSPECIFIED",
-  pluginType: "GEMINI",
+  ide: "antigravity",
+  ideVersion: "1.15.8",
+  appName: "codeium-extension",
+  devMode: "false",
+  extensionVersion: "",
+  language: "UNSPECIFIED",
+  os: "windows",
 };
 
 function parseNumber(value: number | string | undefined): number | undefined {
