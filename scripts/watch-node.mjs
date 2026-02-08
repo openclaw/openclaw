@@ -17,7 +17,7 @@ if (initialBuild.status !== 0) {
   process.exit(initialBuild.status ?? 1);
 }
 
-const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch"], {
+const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch", "--no-clean"], {
   cwd,
   env,
   stdio: "inherit",
