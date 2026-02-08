@@ -31,7 +31,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
 const CONTEXT_OVERFLOW_HINT_RE =
-  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input)\s+(?:is\s+)?too\s+(?:large|long)/i;
 
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -42,6 +42,14 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
   if (isContextOverflowError(errorMessage)) {
     return true;
+  }
+  // Exclude rate-limit and billing errors whose wording overlaps with the
+  // broad hint regex (e.g. "request tokens exceeded your per-model limit").
+  if (isRateLimitErrorMessage(errorMessage)) {
+    return false;
+  }
+  if (isBillingErrorMessage(errorMessage)) {
+    return false;
   }
   return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
 }

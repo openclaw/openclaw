@@ -31,4 +31,24 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes rate-limit errors that match the broad hint regex", () => {
+    const samples = [
+      "Number of request tokens has exceeded your per-model limit",
+      "FailoverError: Number of request tokens has exceeded your per-model limit",
+      "input token limit exceeded for this minute",
+      "rate_limit: too many requests",
+      "429 too many requests",
+      "exceeded your current quota",
+    ];
+    for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+
+  it("excludes billing errors", () => {
+    expect(isLikelyContextOverflowError("402 payment required: input credit balance too low")).toBe(
+      false,
+    );
+  });
 });
