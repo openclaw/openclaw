@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
+import { clearHomeTabCustom, markHomeTabCustom } from "./home-tab-state.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -260,4 +261,32 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+/**
+ * Publish a custom Block Kit view to a user's Slack App Home tab.
+ *
+ * After a successful publish the user is marked as having a custom view so the
+ * default `app_home_opened` handler will not overwrite it.
+ */
+export async function publishSlackHomeTab(
+  userId: string,
+  blocks: Record<string, unknown>[],
+  opts: SlackActionClientOpts = {},
+): Promise<void> {
+  const client = await getClient(opts);
+  await client.views.publish({
+    user_id: userId,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Block Kit JSON built dynamically
+    view: { type: "home", blocks: blocks as any },
+  });
+  markHomeTabCustom(userId);
+}
+
+/**
+ * Clear a user's custom Home Tab view, allowing the default view to be
+ * published again on the next `app_home_opened` event.
+ */
+export function resetSlackHomeTab(userId: string): void {
+  clearHomeTabCustom(userId);
 }

@@ -49,6 +49,7 @@ function buildSlackManifest(botName: string) {
         always_online: false,
       },
       app_home: {
+        home_tab_enabled: true,
         messages_tab_enabled: true,
         messages_tab_read_only_enabled: false,
       },
@@ -98,6 +99,7 @@ function buildSlackManifest(botName: string) {
           "channel_rename",
           "pin_added",
           "pin_removed",
+          "app_home_opened",
         ],
       },
     },

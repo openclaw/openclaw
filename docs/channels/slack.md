@@ -524,6 +524,63 @@ Slack tool actions can be gated with `channels.slack.actions.*`:
 | pins         | enabled | Pin/unpin/list         |
 | memberInfo   | enabled | Member info            |
 | emojiList    | enabled | Custom emoji list      |
+| homeTab      | enabled | Home Tab updates       |
+
+## Home Tab
+
+When a user opens the bot's **Home** tab in Slack, OpenClaw automatically publishes a Block Kit view showing:
+
+- Agent name and status
+- Version, model, and uptime
+- Getting started instructions (DM, mentions, slash commands)
+- Configured channels
+- Links to docs, GitHub, and community
+
+The view is cached per user and only re-published when the version changes (e.g., after an update or restart). No additional configuration is required — the Home Tab works out of the box.
+
+### Configuration
+
+```yaml
+channels:
+  slack:
+    homeTab:
+      enabled: true # default: true
+      showCommands: true # default: true — show slash command reference
+      customBlocks: [] # optional static Block Kit blocks to append
+```
+
+### Custom Home Tab via `updateHomeTab`
+
+Agents can dynamically customize a user's Home Tab using the `updateHomeTab` action:
+
+| Parameter | Type       | Required | Description                            |
+| --------- | ---------- | -------- | -------------------------------------- |
+| `userId`  | `string`   | yes      | Slack user ID whose Home tab to update |
+| `blocks`  | `object[]` | yes      | Block Kit blocks array for the view    |
+
+Example:
+
+```json
+{
+  "action": "updateHomeTab",
+  "userId": "U12345",
+  "blocks": [{ "type": "section", "text": { "type": "mrkdwn", "text": "Hello from your agent!" } }]
+}
+```
+
+Once an agent publishes a custom view, the default Home Tab view will **not** overwrite it on subsequent tab opens. Use `resetHomeTab` (with `userId`) to clear the custom view and restore the default.
+
+This action is gated by the `homeTab` key in the actions config (enabled by default).
+
+### Setup for existing apps
+
+If your Slack app was created before this feature, you need to add the `app_home_opened` event subscription:
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → select your app
+2. **Event Subscriptions** → **Subscribe to bot events** → add `app_home_opened`
+3. Save and reinstall if prompted
+
+New apps created via the onboarding wizard include this automatically.
 
 ## Security notes
 

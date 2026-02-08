@@ -55,6 +55,16 @@ export type SlackActionConfig = {
   memberInfo?: boolean;
   channelInfo?: boolean;
   emojiList?: boolean;
+  homeTab?: boolean;
+};
+
+export type SlackHomeTabConfig = {
+  /** If false, disable the Home tab. Default: true. */
+  enabled?: boolean;
+  /** Show available commands/interaction methods. Default: true. */
+  showCommands?: boolean;
+  /** Optional static Block Kit blocks to append to the default view. */
+  customBlocks?: unknown[];
 };
 
 export type SlackSlashCommandConfig = {
@@ -144,6 +154,8 @@ export type SlackAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Home tab configuration. */
+  homeTab?: SlackHomeTabConfig;
 };
 
 export type SlackConfig = {

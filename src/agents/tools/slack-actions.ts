@@ -9,10 +9,12 @@ import {
   listSlackPins,
   listSlackReactions,
   pinSlackMessage,
+  publishSlackHomeTab,
   reactSlackMessage,
   readSlackMessages,
   removeOwnSlackReactions,
   removeSlackReaction,
+  resetSlackHomeTab,
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
@@ -307,6 +309,35 @@ export async function handleSlackAction(
     }
     const emojis = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (action === "updateHomeTab") {
+    if (!isActionEnabled("homeTab")) {
+      throw new Error("Slack Home Tab updates are disabled.");
+    }
+    const userId = readStringParam(params, "userId", { required: true });
+    const blocks = params.blocks;
+    if (!Array.isArray(blocks)) {
+      throw new Error("blocks (array) is required for updateHomeTab.");
+    }
+    if (writeOpts) {
+      await publishSlackHomeTab(userId, blocks as Record<string, unknown>[], writeOpts);
+    } else {
+      await publishSlackHomeTab(userId, blocks as Record<string, unknown>[]);
+    }
+    return jsonResult({ ok: true });
+  }
+
+  if (action === "resetHomeTab") {
+    if (!isActionEnabled("homeTab")) {
+      throw new Error("Slack Home Tab updates are disabled.");
+    }
+    const userId = readStringParam(params, "userId", { required: true });
+    resetSlackHomeTab(userId);
+    return jsonResult({
+      ok: true,
+      message: "Custom Home Tab cleared; default will restore on next visit.",
+    });
   }
 
   throw new Error(`Unknown action: ${action}`);
