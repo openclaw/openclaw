@@ -425,17 +425,71 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+            const runParams = {
+              command,
+              cwd,
+              env,
+              timeoutMs: commandTimeoutMs,
+              needsScreenRecording,
+              agentId,
+              sessionKey,
+            };
+
+            // First attempt without approval flags.
+            try {
+              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+                nodeId,
+                command: "system.run",
+                params: runParams,
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              });
+              return jsonResult(raw?.payload ?? {});
+            } catch (firstErr) {
+              const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+              if (!msg.includes("SYSTEM_RUN_DENIED: approval required")) {
+                throw firstErr;
+              }
+            }
+
+            // Node requires approval – create a pending approval request on
+            // the gateway and wait for the user to approve/deny via the UI.
+            const APPROVAL_TIMEOUT_MS = 120_000;
+            const cmdText = command.join(" ");
+            const approvalResult = (await callGatewayTool(
+              "exec.approval.request",
+              { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
+              {
+                command: cmdText,
+                cwd,
+                host: "node",
+                agentId,
+                sessionKey,
+                timeoutMs: APPROVAL_TIMEOUT_MS,
+              },
+            )) as { decision?: string; id?: string } | null;
+
+            const decision =
+              approvalResult && typeof approvalResult === "object"
+                ? (approvalResult.decision ?? null)
+                : null;
+
+            if (!decision || decision === "deny") {
+              throw new Error(
+                decision === "deny"
+                  ? "exec denied: user denied"
+                  : "exec denied: approval timed out",
+              );
+            }
+
+            // Retry with the approval decision.
+            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "system.run",
               params: {
-                command,
-                cwd,
-                env,
-                timeoutMs: commandTimeoutMs,
-                needsScreenRecording,
-                agentId,
-                sessionKey,
+                ...runParams,
+                approved: true,
+                approvalDecision: decision,
               },
               timeoutMs: invokeTimeoutMs,
               idempotencyKey: crypto.randomUUID(),
