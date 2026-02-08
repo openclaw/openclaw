@@ -294,6 +294,29 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Bind: loopback");
   });
 
+  it("does not overflow very large timeout values", async () => {
+    startMode = "silent";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    vi.useFakeTimers();
+    let err: Error | null = null;
+    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
+      err = caught as Error;
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(err).toBeNull();
+
+    lastClientOptions?.onClose?.(1006, "");
+    await promise;
+
+    expect(err?.message).toContain("gateway closed (1006");
+  });
+
   it("fails fast when remote mode is missing remote url", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },

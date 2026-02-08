@@ -17,7 +17,11 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
-import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import {
+  isEmbeddedPiRunActive,
+  queueEmbeddedPiMessage,
+  waitForEmbeddedPiRunEnd,
+} from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
@@ -288,6 +292,35 @@ async function buildSubagentStatsLine(params: {
   return `Stats: ${parts.join(" \u2022 ")}`;
 }
 
+function loadSessionEntryByKey(sessionKey: string) {
+  const cfg = loadConfig();
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  return store[sessionKey];
+}
+
+async function readLatestAssistantReplyWithRetry(params: {
+  sessionKey: string;
+  initialReply?: string;
+  maxWaitMs: number;
+}): Promise<string | undefined> {
+  let reply = params.initialReply?.trim() ? params.initialReply : undefined;
+  if (reply) {
+    return reply;
+  }
+
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey });
+    if (latest?.trim()) {
+      return latest;
+    }
+  }
+  return reply;
+}
+
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -345,6 +378,8 @@ export type SubagentRunOutcome = {
   error?: string;
 };
 
+export type SubagentAnnounceType = "subagent task" | "cron job";
+
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
@@ -360,14 +395,36 @@ export async function runSubagentAnnounceFlow(params: {
   endedAt?: number;
   label?: string;
   outcome?: SubagentRunOutcome;
+  announceType?: SubagentAnnounceType;
 }): Promise<boolean> {
   let didAnnounce = false;
+  let shouldDeleteChildSession = params.cleanup === "delete";
   try {
     const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+    const childSessionId = (() => {
+      const entry = loadSessionEntryByKey(params.childSessionKey);
+      return typeof entry?.sessionId === "string" && entry.sessionId.trim()
+        ? entry.sessionId.trim()
+        : undefined;
+    })();
+    const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
+    // Lifecycle "end" can arrive before auto-compaction retries finish. If the
+    // subagent is still active, wait for the embedded run to fully settle.
+    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
+      const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
+      if (!settled && isEmbeddedPiRunActive(childSessionId)) {
+        // The child run is still active (e.g., compaction retry still in progress).
+        // Defer announcement so we don't report stale/partial output.
+        // Keep the child session so output is not lost while the run is still active.
+        shouldDeleteChildSession = false;
+        return false;
+      }
+    }
+
     if (!reply && params.waitForCompletion !== false) {
-      const waitMs = Math.min(params.timeoutMs, 60_000);
+      const waitMs = settleTimeoutMs;
       const wait = await callGateway<{
         status?: string;
         startedAt?: number;
@@ -400,15 +457,25 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestAssistantReply({
-        sessionKey: params.childSessionKey,
-      });
+      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
     }
 
     if (!reply) {
-      reply = await readLatestAssistantReply({
+      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
+    }
+
+    if (!reply?.trim()) {
+      reply = await readLatestAssistantReplyWithRetry({
         sessionKey: params.childSessionKey,
+        initialReply: reply,
+        maxWaitMs: params.timeoutMs,
       });
+    }
+
+    if (!reply?.trim() && childSessionId && isEmbeddedPiRunActive(childSessionId)) {
+      // Avoid announcing "(no output)" while the child run is still producing output.
+      shouldDeleteChildSession = false;
+      return false;
     }
 
     if (!outcome) {
@@ -433,9 +500,10 @@ export async function runSubagentAnnounceFlow(params: {
             : "finished with unknown status";
 
     // Build instructional message for main agent
-    const taskLabel = params.label || params.task || "background task";
+    const announceType = params.announceType ?? "subagent task";
+    const taskLabel = params.label || params.task || "task";
     const triggerMessage = [
-      `A background task "${taskLabel}" just ${statusLabel}.`,
+      `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Findings:",
       reply || "(no output)",
@@ -443,7 +511,7 @@ export async function runSubagentAnnounceFlow(params: {
       statsLine,
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
-      "Do not mention technical details like tokens, stats, or that this was a background task.",
+      `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
 
@@ -504,7 +572,7 @@ export async function runSubagentAnnounceFlow(params: {
         // Best-effort
       }
     }
-    if (params.cleanup === "delete") {
+    if (shouldDeleteChildSession) {
       try {
         await callGateway({
           method: "sessions.delete",
