@@ -222,18 +222,35 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(configPath);
+      const lst = fs.lstatSync(configPath);
+      const isSymlink = lst.isSymbolicLink();
+      // Use stat (follow symlink) for permission bits; lstat always returns 0o777 for symlinks.
+      const stat = isSymlink ? fs.statSync(configPath) : lst;
       if ((stat.mode & 0o077) !== 0) {
-        warnings.push(
-          `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
-        );
-        const tighten = await prompter.confirmSkipInNonInteractive({
-          message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
+        // For symlinks to read-only targets (e.g. /nix/store), chmod would
+        // fail and the containing directory (typically mode 700) already
+        // protects access.  Skip the warning in that case.  #11307
+        let skipWarning = false;
+        if (isSymlink) {
+          try {
+            const resolved = fs.realpathSync(configPath);
+            fs.accessSync(resolved, fs.constants.W_OK);
+          } catch {
+            skipWarning = true;
+          }
+        }
+        if (!skipWarning) {
+          warnings.push(
+            `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
+          );
+          const tighten = await prompter.confirmSkipInNonInteractive({
+            message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
+            initialValue: true,
+          });
+          if (tighten) {
+            fs.chmodSync(configPath, 0o600);
+            changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
+          }
         }
       }
     } catch (err) {
