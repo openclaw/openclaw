@@ -37,11 +37,16 @@ import {
 
 export {
   archiveFileOnDisk,
+  archiveFileOnDiskAsync,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
+  readFirstUserMessageFromTranscriptAsync,
   readLastMessagePreviewFromTranscript,
+  readLastMessagePreviewFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
+  readSessionPreviewItemsFromTranscriptAsync,
   readSessionMessages,
+  readSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 export type {

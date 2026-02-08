@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import fs from "node:fs";
+import { createReadStream } from "node:fs";
+import { access, open, readFile, rename } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import os from "node:os";
 import path from "node:path";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -53,6 +57,53 @@ export function readSessionMessages(
   return messages;
 }
 
+/**
+ * Async version of readSessionMessages - non-blocking file I/O
+ */
+export async function readSessionMessagesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): Promise<unknown[]> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+  // Find first existing file asynchronously
+  let filePath: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      filePath = candidate;
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  if (!filePath) {
+    return [];
+  }
+
+  const messages: unknown[] = [];
+  const fileStream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: fileStream, crlfDelay: Infinity });
+
+  for await (const line of rl) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.message) {
+        messages.push(parsed.message);
+      }
+    } catch {
+      // ignore bad lines
+    }
+  }
+
+  return messages;
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -79,6 +130,16 @@ export function archiveFileOnDisk(filePath: string, reason: string): string {
   const ts = new Date().toISOString().replaceAll(":", "-");
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  return archived;
+}
+
+/**
+ * Async version of archiveFileOnDisk - non-blocking file I/O
+ */
+export async function archiveFileOnDiskAsync(filePath: string, reason: string): Promise<string> {
+  const ts = new Date().toISOString().replaceAll(":", "-");
+  const archived = `${filePath}.${reason}.${ts}`;
+  await rename(filePath, archived);
   return archived;
 }
 
@@ -186,6 +247,70 @@ export function readFirstUserMessageFromTranscript(
   return null;
 }
 
+/**
+ * Async version of readFirstUserMessageFromTranscript - non-blocking file I/O
+ */
+export async function readFirstUserMessageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+
+  // Find first existing file asynchronously
+  let filePath: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      filePath = candidate;
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const fd = await open(filePath, "r");
+    try {
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      if (bytesRead === 0) {
+        return null;
+      }
+      const chunk = buf.toString("utf-8", 0, bytesRead);
+      const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed?.message as TranscriptMessage | undefined;
+          if (msg?.role === "user") {
+            const text = extractTextFromContent(msg.content);
+            if (text) {
+              return text;
+            }
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    // file read error
+  }
+  return null;
+}
+
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
@@ -240,6 +365,75 @@ export function readLastMessagePreviewFromTranscript(
     if (fd !== null) {
       fs.closeSync(fd);
     }
+  }
+  return null;
+}
+
+/**
+ * Async version of readLastMessagePreviewFromTranscript - non-blocking file I/O
+ */
+export async function readLastMessagePreviewFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+
+  // Find first existing file asynchronously
+  let filePath: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      filePath = candidate;
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const fd = await open(filePath, "r");
+    try {
+      const stat = await fd.stat();
+      const size = stat.size;
+      if (size === 0) {
+        return null;
+      }
+
+      const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
+      const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
+      const buf = Buffer.alloc(readLen);
+      await fd.read(buf, 0, readLen, readStart);
+
+      const chunk = buf.toString("utf-8");
+      const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+      const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+      for (let i = tailLines.length - 1; i >= 0; i--) {
+        const line = tailLines[i];
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed?.message as TranscriptMessage | undefined;
+          if (msg?.role === "user" || msg?.role === "assistant") {
+            const text = extractTextFromContent(msg.content);
+            if (text) {
+              return text;
+            }
+          }
+        } catch {
+          // skip malformed
+        }
+      }
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    // file error
   }
   return null;
 }
@@ -443,6 +637,99 @@ export function readSessionPreviewItemsFromTranscript(
 
   for (const readSize of PREVIEW_READ_SIZES) {
     const messages = readRecentMessagesFromTranscript(filePath, boundedItems, readSize);
+    if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
+      return buildPreviewItems(messages, boundedItems, boundedChars);
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Async version of readRecentMessagesFromTranscript - non-blocking file I/O
+ */
+async function readRecentMessagesFromTranscriptAsync(
+  filePath: string,
+  maxMessages: number,
+  readBytes: number,
+): Promise<TranscriptPreviewMessage[]> {
+  try {
+    const fd = await open(filePath, "r");
+    try {
+      const stat = await fd.stat();
+      const size = stat.size;
+      if (size === 0) {
+        return [];
+      }
+
+      const readStart = Math.max(0, size - readBytes);
+      const readLen = Math.min(size, readBytes);
+      const buf = Buffer.alloc(readLen);
+      await fd.read(buf, 0, readLen, readStart);
+
+      const chunk = buf.toString("utf-8");
+      const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+      const tailLines = lines.slice(-PREVIEW_MAX_LINES);
+
+      const collected: TranscriptPreviewMessage[] = [];
+      for (let i = tailLines.length - 1; i >= 0; i--) {
+        const line = tailLines[i];
+        try {
+          const parsed = JSON.parse(line);
+          const msg = parsed?.message as TranscriptPreviewMessage | undefined;
+          if (msg && typeof msg === "object") {
+            collected.push(msg);
+            if (collected.length >= maxMessages) {
+              break;
+            }
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+      return collected.toReversed();
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Async version of readSessionPreviewItemsFromTranscript - non-blocking file I/O
+ */
+export async function readSessionPreviewItemsFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxItems: number,
+  maxChars: number,
+): Promise<SessionPreviewItem[]> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+
+  // Find first existing file asynchronously
+  let filePath: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      filePath = candidate;
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  if (!filePath) {
+    return [];
+  }
+
+  const boundedItems = Math.max(1, Math.min(maxItems, 50));
+  const boundedChars = Math.max(20, Math.min(maxChars, 2000));
+
+  for (const readSize of PREVIEW_READ_SIZES) {
+    const messages = await readRecentMessagesFromTranscriptAsync(filePath, boundedItems, readSize);
     if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
       return buildPreviewItems(messages, boundedItems, boundedChars);
     }

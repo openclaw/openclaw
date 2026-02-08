@@ -36,7 +36,11 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  createdAt: number;
 };
+
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const PENDING_CLEANUP_INTERVAL_MS = 30_000; // 30 seconds
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
@@ -90,12 +94,43 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private pendingCleanupTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,
       deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
     };
+    this.startPendingCleanupTimer();
+  }
+
+  private startPendingCleanupTimer() {
+    if (this.pendingCleanupTimer) {
+      clearInterval(this.pendingCleanupTimer);
+    }
+    this.pendingCleanupTimer = setInterval(() => {
+      this.cleanupStalePending();
+    }, PENDING_CLEANUP_INTERVAL_MS);
+  }
+
+  private cleanupStalePending() {
+    if (this.closed || this.pending.size === 0) {
+      return;
+    }
+    const now = Date.now();
+    const staleIds: string[] = [];
+    for (const [id, pending] of this.pending) {
+      if (now - pending.createdAt > REQUEST_TIMEOUT_MS) {
+        staleIds.push(id);
+      }
+    }
+    for (const id of staleIds) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        pending.reject(new Error(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`));
+        this.pending.delete(id);
+      }
+    }
   }
 
   start() {
@@ -169,6 +204,10 @@ export class GatewayClient {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+    if (this.pendingCleanupTimer) {
+      clearInterval(this.pendingCleanupTimer);
+      this.pendingCleanupTimer = null;
     }
     this.ws?.close();
     this.ws = null;
@@ -428,11 +467,13 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const createdAt = Date.now();
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
+        createdAt,
       });
     });
     this.ws.send(JSON.stringify(frame));
