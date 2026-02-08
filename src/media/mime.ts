@@ -32,6 +32,14 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
+  "text/css": ".css",
+  "text/javascript": ".js",
+  "application/javascript": ".mjs",
+  "image/svg+xml": ".svg",
+  "font/woff": ".woff",
+  "font/woff2": ".woff2",
+  "application/xml": ".xml",
+  "application/wasm": ".wasm",
 };
 
 const MIME_BY_EXT: Record<string, string> = {
