@@ -26,42 +26,6 @@ import {
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
-/**
- * Extract channel from sessionKey (supports both agent-prefixed and direct formats)
- * @param sessionKey - The session key to parse
- * @returns The extracted channel name, or undefined if not found
- */
-function extractChannelFromSessionKey(sessionKey: string | undefined): string | undefined {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) return undefined;
-
-  const parts = raw.split(":");
-
-  // Format 1: agent:agentId:channel:account:peer
-  // Example: agent:main:wecom:default:wangrui
-  if (parts[0] === "agent" && parts.length >= 3) {
-    const channel = parts[2]?.trim().toLowerCase();
-    // Exclude special keywords (not channels)
-    const nonChannelKeywords = ["main", "subagent", "acp", "thread", "topic"];
-    if (channel && !nonChannelKeywords.includes(channel)) {
-      return channel;
-    }
-  }
-
-  // Format 2: channel:account:peer
-  // Example: wecom:default:wangrui
-  if (parts.length >= 2) {
-    const channel = parts[0]?.trim().toLowerCase();
-    // Exclude special keywords (agent, main, etc.)
-    const nonChannelKeywords = ["main", "agent", "subagent", "acp", "thread", "topic"];
-    if (channel && !nonChannelKeywords.includes(channel)) {
-      return channel;
-    }
-  }
-
-  return undefined;
-}
-
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
@@ -289,15 +253,12 @@ export function createSessionsSendTool(opts?: {
         targetSessionKey: displayKey,
       });
 
-      // Extract channel from sessionKey, falling back to INTERNAL_MESSAGE_CHANNEL
-      const targetChannel = extractChannelFromSessionKey(resolvedKey) || INTERNAL_MESSAGE_CHANNEL;
-
       const sendParams = {
         message,
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        channel: targetChannel,
+        channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
       };
