@@ -243,7 +243,7 @@ export function registerGatewayCli(program: Command) {
           colorize(
             rich,
             theme.muted,
-            `restartCount=${state.restartCount}${state.lastCrashAtMs ? ` · lastCrash=${new Date(state.lastCrashAtMs).toISOString()}` : ""}`,
+            `restartCount=${state.restartCount}${state.lastRestartReason ? ` · lastRestartReason=${state.lastRestartReason}` : ""}${state.lastCrashAtMs ? ` · lastCrash=${new Date(state.lastCrashAtMs).toISOString()}` : ""}`,
           ),
         );
 
@@ -262,7 +262,7 @@ export function registerGatewayCli(program: Command) {
                 ? `status=${entry.status ?? "?"}${entry.detail ? ` · ${entry.detail}` : ""}`
                 : kind === "crash"
                   ? `${entry.errorName ?? "Error"}${entry.errorMessage ? `: ${entry.errorMessage}` : ""}`
-                  : `pid=${entry.pid ?? "?"}`;
+                  : `pid=${entry.pid ?? "?"}${entry.restartReason ? ` · reason=${entry.restartReason}` : ""}`;
           defaultRuntime.log(`${ts}  ${kind.padEnd(7)}  ${detail}`);
         }
       }, "gateway incidents failed");

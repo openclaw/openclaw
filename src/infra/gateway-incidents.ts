@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 
 export type GatewayIncidentKind = "start" | "signal" | "crash" | "recover";
 
@@ -11,6 +12,8 @@ export type GatewayIncidentEntry = {
   pid?: number;
   /** Restart count at time of incident (best-effort). */
   restartCount?: number;
+  /** Best-effort reason for the (re)start (e.g., crash/recover/config-apply). */
+  restartReason?: string;
 
   /** Signals (kind=signal). */
   signal?: string;
@@ -31,6 +34,7 @@ export type GatewayIncidentState = {
   version: 1;
   restartCount: number;
   lastStartAtMs?: number;
+  lastRestartReason?: string;
   lastSignalAtMs?: number;
   lastSignal?: string;
   lastCrashAtMs?: number;
@@ -58,6 +62,20 @@ function trimTail(input?: string | null, maxChars = 8000): string | undefined {
     return text;
   }
   return `…${text.slice(text.length - maxChars)}`;
+}
+
+function peekRestartReasonFromSentinelSync(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  try {
+    const sentinelPath = resolveRestartSentinelPath(env);
+    const raw = fs.readFileSync(sentinelPath, "utf-8");
+    const parsed = JSON.parse(raw) as { payload?: { kind?: unknown } } | null;
+    const kind = parsed?.payload?.kind;
+    return typeof kind === "string" && kind.trim() ? kind.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const writesByPath = new Map<string, Promise<void>>();
@@ -128,6 +146,8 @@ export async function readGatewayIncidentState(
       version: 1,
       restartCount,
       lastStartAtMs: typeof parsed.lastStartAtMs === "number" ? parsed.lastStartAtMs : undefined,
+      lastRestartReason:
+        typeof parsed.lastRestartReason === "string" ? parsed.lastRestartReason : undefined,
       lastSignalAtMs: typeof parsed.lastSignalAtMs === "number" ? parsed.lastSignalAtMs : undefined,
       lastSignal: typeof parsed.lastSignal === "string" ? parsed.lastSignal : undefined,
       lastCrashAtMs: typeof parsed.lastCrashAtMs === "number" ? parsed.lastCrashAtMs : undefined,
@@ -196,12 +216,14 @@ export async function recordGatewayStart(env: NodeJS.ProcessEnv = process.env) {
   const filePath = resolveGatewayIncidentsPath(env);
   const state = await readGatewayIncidentState(env);
   const restartCount = (state.restartCount ?? 0) + 1;
+  const restartReason = peekRestartReasonFromSentinelSync(env);
   const now = Date.now();
   const nextState: GatewayIncidentState = {
     ...state,
     version: 1,
     restartCount,
     lastStartAtMs: now,
+    lastRestartReason: restartReason,
   };
   await writeGatewayIncidentState(nextState, env);
   await appendGatewayIncident(filePath, {
@@ -209,6 +231,7 @@ export async function recordGatewayStart(env: NodeJS.ProcessEnv = process.env) {
     kind: "start",
     pid: process.pid,
     restartCount,
+    restartReason,
   });
   return nextState;
 }
@@ -240,11 +263,13 @@ export function recordGatewayStartSync(env: NodeJS.ProcessEnv = process.env) {
 
     const now = Date.now();
     const restartCount = (state.restartCount ?? 0) + 1;
+    const restartReason = peekRestartReasonFromSentinelSync(env);
     const nextState: GatewayIncidentState = {
       ...state,
       version: 1,
       restartCount,
       lastStartAtMs: now,
+      lastRestartReason: restartReason,
     };
 
     fs.writeFileSync(statePath, `${JSON.stringify(nextState, null, 2)}\n`, "utf-8");
@@ -253,6 +278,7 @@ export function recordGatewayStartSync(env: NodeJS.ProcessEnv = process.env) {
       kind: "start",
       pid: process.pid,
       restartCount,
+      restartReason,
     });
 
     return nextState;
