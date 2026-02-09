@@ -1,7 +1,7 @@
 name: Setup Node environment
 description: >
-  Checkout with submodule retry, install Node 22, pnpm, optionally Bun,
-  and run pnpm install. Used by CI gates and test jobs.
+  Initialize submodules with retry, install Node 22, pnpm, optionally Bun,
+  and run pnpm install. Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
