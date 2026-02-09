@@ -42,7 +42,7 @@ export async function postApprovalRequest(params: ApprovalRequest): Promise<void
 
   // Signal to gateway/broker that this message should be posted
   // This will be picked up by the message routing system
-  if (process.emit) {
+  if (typeof process?.emit === "function") {
     process.emit("approval-request", {
       channel,
       message,
@@ -67,16 +67,18 @@ export async function waitForApprovalReaction(params: {
     }, timeoutMs);
 
     // Listen for approval reactions from message broker
-    const handler = (reaction: { type: string; action: string }) => {
+    const handler = (reaction: Record<string, unknown>) => {
       if (reaction.type === "approval-reaction") {
         clearTimeout(timer);
-        process.removeListener("message", handler as any);
+        if (typeof process?.removeListener === "function") {
+          process.removeListener("message", handler as NodeJS.MessageListener);
+        }
         resolve(reaction.action === "approve" ? "approve" : "reject");
       }
     };
 
-    if (process.on) {
-      process.on("message", handler as any);
+    if (typeof process?.on === "function") {
+      process.on("message", handler as NodeJS.MessageListener);
     }
   });
 }

@@ -126,7 +126,7 @@ Auto-proceeds in 60 seconds if no response.`;
       console.log("[ApprovalInterlay] Approval request posted to #alfred-approvals");
     } else {
       // Fallback: emit event for gateway to pick up
-      if (process.emit) {
+      if (typeof process?.emit === "function") {
         process.emit("approval-request", {
           channel: _SLACK_CHANNEL,
           message,
@@ -161,7 +161,7 @@ export async function pauseAndPromptApproval(params: {
   event.sessionPauseSent = true;
 
   // Check if we're in a test environment (no real session communication)
-  const isTestEnv = process.env.NODE_ENV === "test" || !process.send;
+  const isTestEnv = process.env.NODE_ENV === "test" || typeof process?.send !== "function";
 
   return new Promise((resolve) => {
     const timeoutHandle = setTimeout(
@@ -173,15 +173,17 @@ export async function pauseAndPromptApproval(params: {
     ); // Fast timeout in tests
 
     // Only listen for messages if we have process communication
-    if (process.send && typeof process.on === "function") {
+    if (typeof process?.send === "function" && typeof process?.on === "function") {
       const messageHandler = (msg: Record<string, unknown>) => {
         if (msg.type === "approval-response") {
           clearTimeout(timeoutHandle);
-          process.removeListener("message", messageHandler);
+          if (typeof process?.removeListener === "function") {
+            process.removeListener("message", messageHandler as NodeJS.MessageListener);
+          }
           resolve(msg.decision as DivergenceDecision);
         }
       };
-      process.on("message", messageHandler);
+      process.on("message", messageHandler as NodeJS.MessageListener);
     }
   });
 }

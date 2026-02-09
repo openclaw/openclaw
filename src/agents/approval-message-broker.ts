@@ -54,13 +54,13 @@ export function registerApprovalBroker(router: Router): void {
       // Post to Slack via message system
       // This would normally be handled by OpenClaw's message routing
       // For now, we emit an event that the main process can handle
-      if (process.send) {
+      if (typeof process?.send === "function") {
         process.send({
           type: "post-message",
           channel,
           message,
           meta: { sessionKey, userId, approvalRequest: true },
-        });
+        } as NodeJS.SendHandle);
       }
 
       res.json({ success: true, sessionKey });
@@ -95,13 +95,13 @@ export function registerApprovalBroker(router: Router): void {
       );
 
       // Notify the session that a decision was made
-      if (process.send) {
+      if (typeof process?.send === "function") {
         process.send({
           type: "approval-response",
           sessionKey,
           decision,
           reaction,
-        });
+        } as NodeJS.SendHandle);
       }
 
       // Clean up
