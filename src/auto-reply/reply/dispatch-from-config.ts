@@ -145,9 +145,9 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
 
-  const inboundAudio = isInboundAudioContext(ctx);
-  const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
+
+  // Run message_received hook - allows plugins to modify or cancel incoming messages
   if (hookRunner?.hasHooks("message_received")) {
     const timestamp =
       typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
@@ -166,8 +166,8 @@ export async function dispatchReplyFromConfig(params: {
     const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
     const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
 
-    void hookRunner
-      .runMessageReceived(
+    try {
+      const hookResult = await hookRunner.runMessageReceived(
         {
           from: ctx.From ?? "",
           content,
@@ -191,11 +191,27 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           conversationId,
         },
-      )
-      .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
-      });
+      );
+
+      // If hook cancels the message, skip processing entirely
+      if (hookResult?.cancel) {
+        recordProcessed("skipped", { reason: "hook_cancelled" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+
+      // If hook provides modified content, apply it to context
+      if (hookResult?.content !== undefined) {
+        ctx.BodyForCommands = hookResult.content;
+        ctx.Body = hookResult.content;
+        // Note: ctx.RawBody is intentionally NOT modified to preserve original message
+      }
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+    }
   }
+
+  const inboundAudio = isInboundAudioContext(ctx);
+  const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.

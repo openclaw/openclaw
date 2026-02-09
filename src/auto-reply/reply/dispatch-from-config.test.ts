@@ -440,4 +440,98 @@ describe("dispatchReplyFromConfig", () => {
       }),
     );
   });
+
+  describe("message_received hook", () => {
+    it("allows hooks to cancel message processing", async () => {
+      mocks.tryFastAbortFromMessage.mockResolvedValue({
+        handled: false,
+        aborted: false,
+      });
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runMessageReceived.mockResolvedValue({ cancel: true });
+
+      const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        BodyForCommands: "original message",
+        MessageSid: "msg-cancel-test",
+      });
+      const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+      const result = await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: "skipped",
+          reason: "hook_cancelled",
+        }),
+      );
+    });
+
+    it("allows hooks to mutate message content", async () => {
+      mocks.tryFastAbortFromMessage.mockResolvedValue({
+        handled: false,
+        aborted: false,
+      });
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runMessageReceived.mockResolvedValue({
+        content: "modified message",
+      });
+
+      const cfg = {} as OpenClawConfig;
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        BodyForCommands: "original message",
+        Body: "original message",
+        MessageSid: "msg-mutate-test",
+      });
+      const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      // The context should have been mutated
+      expect(ctx.BodyForCommands).toBe("modified message");
+      expect(ctx.Body).toBe("modified message");
+      expect(replyResolver).toHaveBeenCalled();
+    });
+
+    it("processes normally when hook returns undefined", async () => {
+      mocks.tryFastAbortFromMessage.mockResolvedValue({
+        handled: false,
+        aborted: false,
+      });
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runMessageReceived.mockResolvedValue(undefined);
+
+      const cfg = {} as OpenClawConfig;
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        BodyForCommands: "original message",
+        MessageSid: "msg-normal-test",
+      });
+      const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(ctx.BodyForCommands).toBe("original message");
+      expect(replyResolver).toHaveBeenCalled();
+    });
+  });
 });
