@@ -2,10 +2,27 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+
+# Runtime data
 data/
-logs/audit/*.jsonl
+logs/
+vault/
+
+# Error system (keep structure, ignore content)
 errors/journal.jsonl
 errors/screenshots/
 errors/analysis/
 errors/proposals/
+
+# Memory daily logs (keep MEMORY.md template)
 memory/2*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

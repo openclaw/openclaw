@@ -10,6 +10,7 @@
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {

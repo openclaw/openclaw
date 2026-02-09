@@ -22,6 +22,7 @@ import { MonitorAgent } from "./agents/monitor.js";
 import type { AgentId, ModelsRegistry } from "./types.js";
 import type { RoutingConfig } from "./router/dispatcher.js";
 import type { AgentDeps } from "./agents/base-agent.js";
+import { createTelegramBot } from "./channels/telegram.js";
 import * as readline from "node:readline";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
@@ -226,7 +227,26 @@ async function main(): Promise<void> {
     : [];
   monitor.startHealthChecks(healthEndpoints);
 
-  // Run terminal channel
+  // Start Telegram bot if configured
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    const allowedUsers = (process.env.TELEGRAM_ALLOWED_USERS ?? "")
+      .split(",")
+      .map((id) => parseInt(id.trim(), 10))
+      .filter((id) => !isNaN(id));
+
+    const bot = createTelegramBot({
+      botToken: process.env.TELEGRAM_BOT_TOKEN,
+      allowedUsers,
+      router,
+    });
+
+    bot.start({
+      onStart: () => console.log("[init] Telegram bot started"),
+    });
+    console.log(`[init] Telegram: ${allowedUsers.length} allowed users`);
+  }
+
+  // Run terminal channel (blocks until quit)
   await runTerminal(router);
 }
 
