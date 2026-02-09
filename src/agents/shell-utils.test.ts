@@ -66,7 +66,9 @@ describe("getShellConfig", () => {
   });
 
   it("auto-detects args for powershell override", () => {
-    const { args } = getShellConfig({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" });
+    const { args } = getShellConfig({
+      shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    });
     expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
   });
 
@@ -79,6 +81,17 @@ describe("getShellConfig", () => {
     const customArgs = ["-l", "-c"];
     const { shell, args } = getShellConfig({ shell: "/bin/bash", shellArgs: customArgs });
     expect(shell).toBe("/bin/bash");
+    expect(args).toEqual(customArgs);
+  });
+
+  it("honors shellArgs override even when shell is not overridden", () => {
+    const customArgs = ["-l", "-c"];
+    const { shell, args } = getShellConfig({ shellArgs: customArgs });
+    if (isWin) {
+      expect(shell.toLowerCase()).toContain("powershell");
+    } else {
+      expect(typeof shell).toBe("string");
+    }
     expect(args).toEqual(customArgs);
   });
 

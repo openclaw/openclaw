@@ -24,7 +24,10 @@ function resolvePowerShellPath(): string {
  * Used when the user configures a custom shell path but omits shellArgs.
  */
 function detectShellArgs(shellPath: string): string[] {
-  const name = path.basename(shellPath).toLowerCase().replace(/\.exe$/, "");
+  const name = path
+    .basename(shellPath)
+    .toLowerCase()
+    .replace(/\.exe$/, "");
   if (name === "bash" || name === "sh" || name === "zsh") {
     return ["-c"];
   }
@@ -35,15 +38,19 @@ function detectShellArgs(shellPath: string): string[] {
   return ["-c"];
 }
 
-export function getShellConfig(overrides?: {
-  shell?: string;
-  shellArgs?: string[];
-}): { shell: string; args: string[] } {
+export function getShellConfig(overrides?: { shell?: string; shellArgs?: string[] }): {
+  shell: string;
+  args: string[];
+} {
   // When a custom shell is configured, use it directly.
   if (overrides?.shell) {
     const args = overrides.shellArgs ?? detectShellArgs(overrides.shell);
     return { shell: overrides.shell, args };
   }
+
+  // Resolve the platform-default shell and args.
+  let shell: string;
+  let args: string[];
 
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -51,27 +58,26 @@ export function getShellConfig(overrides?: {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return {
-      shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
+    shell = resolvePowerShellPath();
+    args = ["-NoProfile", "-NonInteractive", "-Command"];
+  } else {
+    const envShell = process.env.SHELL?.trim();
+    const shellName = envShell ? path.basename(envShell) : "";
+    // Fish rejects common bashisms used by tools, so prefer bash when detected.
+    if (shellName === "fish") {
+      shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh") ?? envShell!;
+    } else {
+      shell = envShell && envShell.length > 0 ? envShell : "sh";
+    }
+    args = ["-c"];
   }
 
-  const envShell = process.env.SHELL?.trim();
-  const shellName = envShell ? path.basename(envShell) : "";
-  // Fish rejects common bashisms used by tools, so prefer bash when detected.
-  if (shellName === "fish") {
-    const bash = resolveShellFromPath("bash");
-    if (bash) {
-      return { shell: bash, args: ["-c"] };
-    }
-    const sh = resolveShellFromPath("sh");
-    if (sh) {
-      return { shell: sh, args: ["-c"] };
-    }
+  // Honor shellArgs override even when shell is not overridden.
+  if (overrides?.shellArgs) {
+    args = overrides.shellArgs;
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
-  return { shell, args: ["-c"] };
+
+  return { shell, args };
 }
 
 function resolveShellFromPath(name: string): string | undefined {
