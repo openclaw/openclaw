@@ -12,11 +12,14 @@ import { Router, type RouterDeps } from "./router/index.js";
 import { AuditLog } from "./persistence/audit.js";
 import { ErrorJournal } from "./errors/journal.js";
 import { loadBootstrapFiles, buildBootstrapContext } from "./persistence/workspace.js";
+import { loadAllSkills, filterSkillsForAgent, formatSkillsForPrompt } from "./shared/skill-loader.js";
+import { TaskQueue } from "./shared/task-queue.js";
+import { callModelSimple } from "./shared/pi-bridge.js";
 import { CommsAgent } from "./agents/comms.js";
 import { BrowserAgent } from "./agents/browser-agent.js";
 import { CoderAgent } from "./agents/coder.js";
 import { MonitorAgent } from "./agents/monitor.js";
-import type { AgentId, ModelsRegistry, RouterConfig } from "./types.js";
+import type { AgentId, ModelsRegistry } from "./types.js";
 import type { RoutingConfig } from "./router/dispatcher.js";
 import type { AgentDeps } from "./agents/base-agent.js";
 import * as readline from "node:readline";
@@ -33,7 +36,7 @@ async function loadJsonConfig<T>(filePath: string): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Stub model caller (to be replaced with Pi integration)
+// Model caller via Pi bridge
 // ---------------------------------------------------------------------------
 
 async function callModel(
@@ -41,61 +44,7 @@ async function callModel(
   model: string,
   prompt: string,
 ): Promise<string> {
-  // TODO: Replace with Pi's streamSimple / completeSimple
-  // For now, stub that calls Ollama directly for local testing
-  if (provider === "ollama") {
-    try {
-      const response = await fetch("http://localhost:11434/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          prompt,
-          stream: false,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(`Ollama ${response.status}: ${response.statusText}`);
-      }
-      const data = (await response.json()) as { response: string };
-      return data.response;
-    } catch (err) {
-      throw new Error(
-        `Ollama call failed (${model}): ${err instanceof Error ? err.message : err}`,
-      );
-    }
-  }
-
-  if (provider === "anthropic") {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY not set");
-    }
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Anthropic ${response.status}: ${body}`);
-    }
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text: string }>;
-    };
-    const textBlock = data.content.find((c) => c.type === "text");
-    return textBlock?.text ?? "";
-  }
-
-  throw new Error(`Unknown provider: ${provider}`);
+  return callModelSimple({ provider, model }, prompt);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +114,18 @@ async function main(): Promise<void> {
     `[init] Loaded ${bootstrapFiles.filter((f) => !f.missing).length} bootstrap files`,
   );
 
+  // Load skills
+  const skillsDir = path.join(PROJECT_ROOT, "skills");
+  const allSkills = await loadAllSkills(skillsDir);
+  console.log(`[init] Loaded ${allSkills.size} skills`);
+
+  // Init task queue
+  const taskQueue = new TaskQueue(
+    path.join(PROJECT_ROOT, "data", "tasks.db"),
+  );
+  await fs.mkdir(path.join(PROJECT_ROOT, "data"), { recursive: true });
+  console.log("[init] Task queue ready");
+
   // Create persistence
   const auditLog = new AuditLog(path.join(PROJECT_ROOT, "logs", "audit"));
   const errorJournal = new ErrorJournal(path.join(PROJECT_ROOT, "errors"));
@@ -189,6 +150,19 @@ async function main(): Promise<void> {
     monitor: new MonitorAgent("monitor", agentsRaw.agents.monitor, agentDeps),
   };
 
+  // Log agent skill assignments
+  for (const [id, agent] of Object.entries(agents)) {
+    const agentConfig = agentsRaw.agents[id];
+    const agentSkills = filterSkillsForAgent(
+      allSkills,
+      agentConfig.tools,
+      agentConfig.skills,
+    );
+    console.log(
+      `[init] Agent '${id}': ${agentConfig.tools.length} tools, ${agentSkills.length} skills`,
+    );
+  }
+
   // Create router
   const routerDeps: RouterDeps = {
     modelsRegistry,
@@ -202,13 +176,15 @@ async function main(): Promise<void> {
   const router = new Router(routerDeps);
 
   console.log("[init] Router ready");
-  console.log(`[init] Models: ${Object.keys(modelsRegistry.local).length} local, ${Object.keys(modelsRegistry.cloud).length} cloud`);
+  console.log(
+    `[init] Models: ${Object.keys(modelsRegistry.local).length} local, ${Object.keys(modelsRegistry.cloud).length} cloud`,
+  );
 
-  // Start monitor agent background services
-  const monitor = agents.monitor as MonitorAgent;
-  // These will be implemented later — just log for now
-  // await monitor.startEmailMonitor();
-  // await monitor.startCronScheduler();
+  // Show task queue status
+  const counts = taskQueue.counts();
+  console.log(
+    `[init] Tasks: ${counts.done} done, ${counts.failed} failed, ${counts.pending} pending`,
+  );
 
   // Run terminal channel
   await runTerminal(router);

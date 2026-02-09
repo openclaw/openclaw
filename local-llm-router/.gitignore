@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+data/
 logs/audit/*.jsonl
 errors/journal.jsonl
 errors/screenshots/
