@@ -2,6 +2,7 @@ import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -272,6 +273,19 @@ export async function onTimer(state: CronServiceState) {
         recomputeNextRuns(state);
         await persist(state);
       });
+    }
+    // Piggyback session reaper on timer tick (self-throttled to every 5 min).
+    if (state.deps.sessionStorePath) {
+      try {
+        await sweepCronRunSessions({
+          cronConfig: state.deps.cronConfig,
+          sessionStorePath: state.deps.sessionStorePath,
+          nowMs: state.deps.nowMs(),
+          log: state.deps.log,
+        });
+      } catch (err) {
+        state.deps.log.warn({ err: String(err) }, "cron: session reaper sweep failed");
+      }
     }
   } finally {
     state.running = false;
