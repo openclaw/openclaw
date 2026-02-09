@@ -33,7 +33,7 @@ export async function startTelegramWebhook(opts: {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   const port = opts.port ?? 8787;
-  const host = opts.host ?? "0.0.0.0";
+  const host = opts.host ?? "127.0.0.1";
   const runtime = opts.runtime ?? defaultRuntime;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const bot = createTelegramBot({
