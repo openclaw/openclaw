@@ -69,8 +69,9 @@ echo "ant-your-key" | AGE_SECRET_KEY=<your-key> openclaw vault add ANTHROPIC_API
 AGE_SECRET_KEY=<your-key> openclaw vault add OPENAI_API_KEY sk-your-key-here
 ```
 
-For known providers (openai, anthropic, deepgram, openai-compat, google), the
-CLI automatically configures the proxy URL mapping in `openclaw.json`.
+For known providers (openai, anthropic, deepgram, openai-compat, google, groq,
+xai, mistral, brave, perplexity), the CLI automatically configures the proxy URL
+mapping in `openclaw.json`.
 
 ### 3. Deploy with Docker
 
@@ -246,6 +247,29 @@ The vault sidecar exposes health endpoints on port 5335:
 | Brave Search  | 8089 | `BRAVE_API_KEY`         | `X-Subscription-Token: <key>` |
 | Perplexity    | 8090 | `PERPLEXITY_API_KEY`    | `Authorization: Bearer <key>` |
 
+### SDK path routing
+
+Most provider SDKs (OpenAI, Anthropic, Groq, xAI, Mistral, Perplexity)
+preserve the `/v1/` prefix when `baseUrl` is overridden. Requests arrive
+as `{baseUrl}/v1/...` and match the nginx `location /v1/` blocks.
+
+Google's `@google/genai` SDK is an exception: it sets `apiVersion=""` when
+a custom `baseUrl` is provided, so requests arrive as `/models/{model}:method`
+without any version prefix. The vault nginx config handles this with a
+dedicated `location /models/` block that rewrites to `/v1beta/models/`
+upstream.
+
+### Local providers and SDK validation
+
+The SDK's `ModelRegistry.validateConfig()` requires `apiKey` for every
+provider that defines models. Local providers (ollama, autorouter) don't
+need auth, but omitting `apiKey` causes the entire `models.json` to fail
+validation silently -- dropping all provider-level `baseUrl` overrides,
+including vault proxy rewrites.
+
+`normalizeProviders()` prevents this by setting `apiKey: "no-key-required"`
+for providers that have models but no configured API key.
+
 ### Adding a new provider
 
 1. Add a `server` block to `vault/nginx.conf.template` with a new port
@@ -339,6 +363,15 @@ Check that:
 - Verify `vault.enabled: true` in config
 - Verify `vault.proxies` maps the provider to the correct port
 - Test the proxy directly: `curl -v http://vault:8081/v1/models`
+- For Google: requests use `/models/...` paths (not `/v1beta/`). Check that
+  the nginx config has a `location /models/` block (see "SDK path routing")
+
+### Model requests silently fail (no API call)
+
+If runs complete instantly with no upstream API traffic, check
+`ModelRegistry.getError()` inside the container. A common cause is a provider
+with models but no `apiKey` in `models.json`, which makes the SDK reject the
+entire file (see "Local providers and SDK validation").
 
 ## Related docs
 
