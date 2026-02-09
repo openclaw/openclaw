@@ -158,14 +158,6 @@ function parseOneHC(text: string, markerStart: number): ParsedHC | null {
   return { toolName, args, end: cur };
 }
 
-// ── ID generation ───────────────────────────────────────────
-
-let _seq = 0;
-
-function nextId(): string {
-  return `hist_${Date.now()}_${++_seq}`;
-}
-
 // ── helpers ─────────────────────────────────────────────────
 
 /** Strip `"""` fences that some models use around text blocks. */
@@ -245,11 +237,14 @@ export function promoteHistoricalContextToBlocks(message: AssistantMessage): voi
 
       const parsed = parseOneHC(src, idx);
       if (parsed) {
+        // Emit as a thinking block rather than a toolCall block.
+        // Historical tool calls from another model must not become real toolCall
+        // content blocks — those require matching toolResult messages, and the
+        // session tool-result guard would synthesise error results for them.
+        const argsJson = JSON.stringify(parsed.args, null, 2);
         next.push({
-          type: "toolCall",
-          id: nextId(),
-          name: parsed.toolName,
-          arguments: parsed.args,
+          type: "thinking",
+          thinking: `[Historical tool call: ${parsed.toolName}]\n${argsJson}`,
         } as never);
         cursor = parsed.end;
         // skip trailing whitespace / blank lines
