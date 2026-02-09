@@ -1,4 +1,5 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { coerceExpiresAt } from "./oauth-utils.js";
 
 /**
  * Anthropic OAuth token refresh using the Claude platform endpoint.
@@ -7,16 +8,10 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 
 const ANTHROPIC_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
 const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const DEFAULT_EXPIRES_BUFFER_MS = 5 * 60 * 1000;
 
 export type AnthropicStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
-
-function coerceExpiresAt(expiresInSeconds: number, now: number): number {
-  const value = now + Math.max(0, Math.floor(expiresInSeconds)) * 1000 - DEFAULT_EXPIRES_BUFFER_MS;
-  return Math.max(value, now + 30_000);
-}
 
 export async function refreshAnthropicTokens(params: {
   credential: AnthropicStoredOAuth;
@@ -50,7 +45,10 @@ export async function refreshAnthropicTokens(params: {
   if (!response.ok) {
     let detail = `status ${response.status}`;
     try {
-      const body = (await response.json()) as { error?: string; error_description?: string };
+      const body = (await response.json()) as {
+        error?: string;
+        error_description?: string;
+      };
       detail = body.error_description || body.error || detail;
     } catch {
       // response wasn't JSON; use status code only
