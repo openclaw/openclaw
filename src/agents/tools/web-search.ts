@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
+import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -142,8 +143,10 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
-  const fromEnv = (process.env.BRAVE_API_KEY ?? "").trim();
+    search && "apiKey" in search && typeof search.apiKey === "string"
+      ? normalizeSecretInput(search.apiKey)
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
 }
 
@@ -222,7 +225,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 }
 
 function normalizeApiKey(key: unknown): string {
-  return typeof key === "string" ? key.trim() : "";
+  return normalizeSecretInput(key);
 }
 
 function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
