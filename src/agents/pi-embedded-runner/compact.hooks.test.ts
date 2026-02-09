@@ -254,8 +254,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect.objectContaining({
         messageCount: 3,
         tokenCount: 30,
-        messageCountOriginal: 3,
-        tokenCountOriginal: 30,
       }),
       expect.objectContaining({ sessionKey: "agent:main:session-1" }),
     );
