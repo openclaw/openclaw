@@ -1255,9 +1255,9 @@ describe("Neo4jMemoryClient", () => {
     it("should count memories by extraction status", async () => {
       mockSession.run.mockResolvedValue({
         records: [
-          { get: vi.fn((key) => (key === "status" ? "pending" : { toNumber: () => 5 })) },
-          { get: vi.fn((key) => (key === "status" ? "complete" : { toNumber: () => 10 })) },
-          { get: vi.fn((key) => (key === "status" ? "failed" : { toNumber: () => 2 })) },
+          { get: vi.fn((key) => (key === "status" ? "pending" : 5)) },
+          { get: vi.fn((key) => (key === "status" ? "complete" : 10)) },
+          { get: vi.fn((key) => (key === "status" ? "failed" : 2)) },
         ],
       });
 

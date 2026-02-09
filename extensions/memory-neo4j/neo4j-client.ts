@@ -4,7 +4,7 @@
  * Handles connection management, index creation, CRUD operations,
  * and the three search signals (vector, BM25, graph).
  *
- * Patterns adapted from ~/Downloads/ontology/app/services/neo4j_client.py
+ * Patterns adapted from ontology project Neo4j client
  * with retry-on-transient and MERGE idempotency.
  */
 
@@ -159,6 +159,11 @@ export class Neo4jMemoryClient {
       await this.runSafe(
         session,
         "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
+      );
+      // Extraction status index for listPendingExtractions (sleep cycle)
+      await this.runSafe(
+        session,
+        "CREATE INDEX memory_extraction_status_index IF NOT EXISTS FOR (m:Memory) ON (m.extractionStatus)",
       );
 
       this.logger.info("memory-neo4j: indexes ensured");
@@ -488,10 +493,15 @@ export class Neo4jMemoryClient {
           if (records.length === 0) {
             return [];
           }
-          const maxScore = records[0].rawScore || 1;
+          // Min-max normalization with a floor: prevents a single weak BM25
+          // match from getting score 1.0 and inflating its RRF contribution.
+          const maxScore = records[0].rawScore;
+          const minScore = records[records.length - 1].rawScore;
+          const range = maxScore - minScore;
+          const FLOOR = 0.3; // Minimum normalized score for the lowest-ranked result
           return records.map((r) => ({
             ...r,
-            score: r.rawScore / maxScore,
+            score: range > 0 ? FLOOR + ((1 - FLOOR) * (r.rawScore - minScore)) / range : 1.0, // All scores identical → all get 1.0
           }));
         } finally {
           await session.close();
@@ -1082,7 +1092,7 @@ export class Neo4jMemoryClient {
       };
       for (const record of result.records) {
         const status = record.get("status") as string;
-        const count = (record.get("count") as { toNumber?: () => number })?.toNumber?.() ?? 0;
+        const count = (record.get("count") as number) ?? 0;
         if (status in counts) {
           counts[status] = count;
         }
@@ -1335,6 +1345,16 @@ export class Neo4jMemoryClient {
             { toDelete, survivorId },
           );
 
+          // Transfer TAGGED relationships from deleted memories to survivor
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (dead:Memory {id: deadId})-[r:TAGGED]->(t:Tag)
+             MATCH (survivor:Memory {id: $survivorId})
+             MERGE (survivor)-[:TAGGED]->(t)
+             DELETE r`,
+            { toDelete, survivorId },
+          );
+
           // Delete the duplicate memories
           await tx.run(
             `UNWIND $toDelete AS deadId
@@ -1398,18 +1418,25 @@ export class Neo4jMemoryClient {
     try {
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
 
-      // Build per-category half-life CASE expression if curves are configured
-      let halfLifeExpr = "$baseHalfLife";
-      if (decayCurves && Object.keys(decayCurves).length > 0) {
-        const cases = Object.entries(decayCurves)
-          .map(
-            ([cat, { halfLifeDays }]) =>
-              `WHEN m.category = '${cat.replace(/'/g, "\\'")}' THEN ${halfLifeDays}`,
-          )
-          .join(" ");
-        halfLifeExpr = `CASE ${cases} ELSE $baseHalfLife END`;
+      // Build per-category half-life using parameterized map lookup instead of
+      // string interpolation, avoiding any injection risk from category names.
+      const curveEntries = decayCurves ? Object.entries(decayCurves) : [];
+      const hasCurves = curveEntries.length > 0;
+
+      // Pass category→halfLife mapping as a Cypher map parameter
+      const curveMap: Record<string, number> = {};
+      for (const [cat, { halfLifeDays }] of curveEntries) {
+        curveMap[cat] = halfLifeDays;
       }
 
+      const halfLifeExpr = hasCurves
+        ? "CASE WHEN $curveMap[m.category] IS NOT NULL THEN $curveMap[m.category] ELSE $baseHalfLife END"
+        : "$baseHalfLife";
+
+      // Decay formula uses retrieval reinforcement: memories that are frequently
+      // accessed decay slower. The effective age is anchored to the most recent
+      // of createdAt or lastRetrievedAt, so recently recalled memories get a
+      // recency boost even if they were created long ago.
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.createdAt IS NOT NULL
@@ -1417,11 +1444,17 @@ export class Neo4jMemoryClient {
            ${agentFilter}
          WITH m,
               duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
-              m.importance AS importance
-         WITH m, ageDays, importance,
-              ${halfLifeExpr} * (1.0 + importance * $importanceMult) AS halfLife
+              CASE
+                WHEN m.lastRetrievedAt IS NOT NULL
+                THEN duration.between(datetime(m.lastRetrievedAt), datetime()).days
+                ELSE duration.between(datetime(m.createdAt), datetime()).days
+              END AS effectiveAgeDays,
+              m.importance AS importance,
+              coalesce(m.retrievalCount, 0) AS retrievalCount
+         WITH m, ageDays, effectiveAgeDays, importance, retrievalCount,
+              ${halfLifeExpr} * (1.0 + importance * $importanceMult) * (1.0 + log(1.0 + retrievalCount) * 0.2) AS halfLife
          WITH m, ageDays, importance, halfLife,
-              importance * exp(-1.0 * ageDays / halfLife) AS decayScore
+              importance * exp(-1.0 * effectiveAgeDays / halfLife) AS decayScore
          WHERE decayScore < $threshold
          RETURN m.id AS id, m.text AS text, importance, ageDays, decayScore
          ORDER BY decayScore ASC
@@ -1430,6 +1463,7 @@ export class Neo4jMemoryClient {
           threshold: retentionThreshold,
           baseHalfLife: baseHalfLifeDays,
           importanceMult: importanceMultiplier,
+          curveMap,
           agentId,
           limit: neo4j.int(limit),
         },
@@ -1490,9 +1524,11 @@ export class Neo4jMemoryClient {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
+      // Use EXISTS check as the authoritative source — mentionCount can go
+      // stale if crashes occur between decrement and delete operations.
       const result = await session.run(
         `MATCH (e:Entity)
-         WHERE coalesce(e.mentionCount, 0) <= 0
+         WHERE NOT EXISTS { MATCH (:Memory)-[:MENTIONS]->(e) }
          RETURN e.id AS id, e.name AS name, e.type AS type
          LIMIT $limit`,
         { limit: neo4j.int(limit) },

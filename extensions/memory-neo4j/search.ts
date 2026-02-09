@@ -9,7 +9,7 @@
  * Fused using confidence-weighted Reciprocal Rank Fusion (RRF)
  * with query-adaptive signal weights.
  *
- * Adapted from ~/Downloads/ontology/app/services/rrf.py
+ * Adapted from ontology project RRF implementation.
  */
 
 import type { Embeddings } from "./embeddings.js";
@@ -34,33 +34,30 @@ export function classifyQuery(query: string): QueryType {
   const words = query.trim().split(/\s+/);
   const wordCount = words.length;
 
-  // Short queries: 1-2 words → boost BM25
-  if (wordCount <= 2) {
-    return "short";
-  }
-
-  // Long queries: 5+ words → boost vector
-  if (wordCount >= 5) {
-    return "long";
-  }
-
   // Entity detection: check for capitalized words (proper nouns)
-  // Heuristic: if more than half of non-first words are capitalized
-  const capitalizedWords = words
-    .slice(1) // skip first word (often capitalized anyway)
-    .filter(
-      (w) =>
-        /^[A-Z]/.test(w) &&
-        !/^(I|A|An|The|Is|Are|Was|Were|What|Who|Where|When|How|Why|Do|Does|Did)$/.test(w),
-    );
+  // Runs before word count so "John" or "TypeScript" are classified as entity
+  const commonWords =
+    /^(I|A|An|The|Is|Are|Was|Were|What|Who|Where|When|How|Why|Do|Does|Did|Find|Show|Get|Tell|Me|My|About|For)$/;
+  const capitalizedWords = words.filter((w) => /^[A-Z]/.test(w) && !commonWords.test(w));
 
   if (capitalizedWords.length > 0) {
     return "entity";
   }
 
-  // Check for question patterns targeting entities
-  if (/^(who|where|what)\s+(is|does|did|was|were)\s/i.test(query)) {
+  // Short queries: 1-2 words → boost BM25
+  if (wordCount <= 2) {
+    return "short";
+  }
+
+  // Question patterns targeting entities (3-4 word queries only,
+  // so generic long questions like "what is the best framework" fall through to "long")
+  if (wordCount <= 4 && /^(who|where|what)\s+(is|does|did|was|were)\s/i.test(query)) {
     return "entity";
+  }
+
+  // Long queries: 5+ words → boost vector
+  if (wordCount >= 5) {
+    return "long";
   }
 
   return "default";
@@ -121,8 +118,7 @@ type FusedCandidate = {
  * score magnitude: rank-1 with score 0.99 contributes more than
  * rank-1 with score 0.55.
  *
- * Reference: Cormack et al. (2009), extended with confidence weighting
- * from ~/Downloads/ontology/app/services/rrf.py
+ * Reference: Cormack et al. (2009), extended with confidence weighting.
  */
 function fuseWithConfidenceRRF(
   signals: SearchSignalResult[][],
@@ -220,6 +216,11 @@ export async function hybridSearch(
     graphSearchDepth?: number;
   } = {},
 ): Promise<HybridSearchResult[]> {
+  // Guard against empty queries
+  if (!query.trim()) {
+    return [];
+  }
+
   const {
     rrfK = 60,
     candidateMultiplier = 4,
