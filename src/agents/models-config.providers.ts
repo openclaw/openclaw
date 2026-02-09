@@ -508,7 +508,7 @@ function buildSambanovaProvider(): ProviderConfig {
         cost: SAMBANOVA_DEFAULT_COST,
         contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
         maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
-        },
+      },
     ],
   };
 }
@@ -639,10 +639,8 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "sambanova", store: authStore });
   if (sambanovaKey) {
     providers.sambanova = { ...buildSambanovaProvider(), apiKey: sambanovaKey };
-    }
+  }
 
-  return providers;
-}
   const qianfanKey =
     resolveEnvApiKeyVarName("qianfan") ??
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
