@@ -258,6 +258,32 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
   });
 
+  it("does not mix runtime provider with override model", () => {
+    // When only modelProvider is set but model is missing, fall back to override pair
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "partial-runtime",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        modelProvider: "anthropic",
+        // model is NOT set — partial runtime
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    // Should use the override pair, not mix anthropic provider with gpt model
+    expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {
