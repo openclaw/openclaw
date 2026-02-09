@@ -4,17 +4,120 @@ import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
+/**
+ * Base ratio for chunk size relative to context window.
+ * 40% of context window is a safe default for most models.
+ */
 export const BASE_CHUNK_RATIO = 0.4;
+
+/**
+ * Minimum allowed chunk ratio to prevent chunks from becoming too small.
+ * 15% ensures chunks remain large enough to contain meaningful context.
+ */
 export const MIN_CHUNK_RATIO = 0.15;
-export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+
+/**
+ * Safety margin multiplier for token estimation.
+ * 20% buffer accounts for estimateTokens() inaccuracy across different tokenizers.
+ * This prevents chunk sizes from exceeding model limits due to estimation errors.
+ */
+export const SAFETY_MARGIN = 1.2;
+
+/**
+ * Maximum individual message size as ratio of context window.
+ * Messages larger than 50% of context cannot be safely summarized.
+ */
+export const MAX_SINGLE_MESSAGE_RATIO = 0.5;
+
+/**
+ * Minimum number of messages to consider for summarization.
+ * Summarizing fewer messages than this provides diminishing returns.
+ */
+export const MIN_MESSAGES_FOR_SUMMARY = 2;
+
+/**
+ * Default fallback message when summarization returns empty or fails.
+ */
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
+
+/**
+ * Default number of parts to split messages into for staged summarization.
+ */
 const DEFAULT_PARTS = 2;
+
+/**
+ * Instruction template for merging partial summaries.
+ */
 const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
 
+/**
+ * Safely estimates the total token count for an array of messages.
+ * Handles edge cases like null/undefined messages and estimation failures.
+ *
+ * @param messages - Array of messages to estimate
+ * @returns Total estimated token count with safety margin applied
+ */
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return 0;
+  }
+
+  try {
+    const rawEstimate = messages.reduce((sum, message) => {
+      // Handle null/undefined messages gracefully
+      if (!message) return sum;
+      return sum + estimateTokens(message);
+    }, 0);
+
+    // Apply safety margin and ensure non-negative, finite result
+    const safeEstimate = Math.floor(rawEstimate * SAFETY_MARGIN);
+    return Number.isFinite(safeEstimate) && safeEstimate >= 0 ? safeEstimate : 0;
+  } catch (error) {
+    console.warn("Token estimation failed, returning conservative estimate:", error);
+    // Fallback: rough estimate based on message count
+    return messages.length * 100;
+  }
+}
+
+/**
+ * Validates that a number is a positive, finite integer suitable for token counts.
+ * @param value - The value to validate
+ * @param defaultValue - Default to return if validation fails
+ * @returns Validated positive integer
+ */
+function validateTokenCount(value: unknown, defaultValue: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  const intValue = Math.max(0, Math.floor(value));
+  return Number.isFinite(intValue) ? intValue : defaultValue;
+}
+
+/**
+ * Calculates a safe chunk size based on context window with adaptive reduction.
+ * Reduces chunk size when dealing with large average message sizes.
+ *
+ * @param contextWindow - The total context window size in tokens
+ * @param avgMessageTokens - Average tokens per message
+ * @returns Safe chunk size in tokens
+ */
+export function calculateSafeChunkSize(contextWindow: number, avgMessageTokens: number): number {
+  const safeWindow = validateTokenCount(contextWindow, 8192);
+  const safeAvg = validateTokenCount(avgMessageTokens, 100);
+
+  // Start with base ratio
+  let chunkRatio = BASE_CHUNK_RATIO;
+
+  // Reduce ratio for large messages to avoid exceeding limits
+  const avgRatio = safeAvg / safeWindow;
+  if (avgRatio > 0.1) {
+    const reduction = Math.min(avgRatio * 2, BASE_CHUNK_RATIO - MIN_CHUNK_RATIO);
+    chunkRatio = Math.max(MIN_CHUNK_RATIO, BASE_CHUNK_RATIO - reduction);
+  }
+
+  return Math.floor(safeWindow * chunkRatio);
 }
 
 function normalizeParts(parts: number, messageCount: number): number {

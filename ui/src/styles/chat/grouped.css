@@ -81,19 +81,55 @@
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Date separator - slightly more prominent than compaction dividers */
+.chat-date-separator {
+  margin: 24px 8px 12px;
+}
+
+.chat-date-separator .chat-divider__label {
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  background: var(--panel-strong);
+  padding: 3px 12px;
+}
+
+/* Avatar Ring - Subtle ring around avatars for depth */
+.chat-avatar-ring {
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 4px;
+  padding: 2px;
+  border-radius: 10px;
+  background: transparent;
+  border: 2px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.chat-avatar-ring.assistant {
+  border-color: var(--accent-subtle);
+}
+
+.chat-avatar-ring.user {
+  border-color: rgba(59, 130, 246, 0.15);
+}
+
+.chat-avatar-ring.tool {
+  border-color: rgba(168, 85, 247, 0.15);
+}
+
 /* Avatar Styles */
 .chat-avatar {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 8px;
   background: var(--panel-strong);
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end; /* Align with last message in group */
-  margin-bottom: 4px; /* Optical alignment */
 }
 
 .chat-avatar.user {
@@ -278,6 +314,7 @@ img.chat-avatar {
   100% {
     border-color: var(--border);
   }
+
   50% {
     border-color: var(--accent);
   }
@@ -293,6 +330,7 @@ img.chat-avatar {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);

@@ -103,6 +103,38 @@ export function renderStreamingGroup(
   `;
 }
 
+/**
+ * Formats a relative date label for date separators.
+ * Returns "Today", "Yesterday", or a locale-formatted date string.
+ */
+function formatDateLabel(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.floor((today.getTime() - msgDay.getTime()) / 86400000);
+
+  if (diffDays === 0) {
+    return "Today";
+  }
+  if (diffDays === 1) {
+    return "Yesterday";
+  }
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** Tracks the last rendered date to avoid duplicate separators */
+let lastRenderedDate = "";
+
+/** Resets date separator tracking (call before rendering a chat thread) */
+export function resetDateTracking(): void {
+  lastRenderedDate = "";
+}
+
 export function renderMessageGroup(
   group: MessageGroup,
   opts: {
@@ -127,7 +159,22 @@ export function renderMessageGroup(
     minute: "2-digit",
   });
 
+  // Render date separator if this message is on a new day
+  const dateLabel = formatDateLabel(group.timestamp);
+  let dateSeparator: ReturnType<typeof html> | typeof nothing = nothing;
+  if (dateLabel !== lastRenderedDate) {
+    lastRenderedDate = dateLabel;
+    dateSeparator = html`
+      <div class="chat-divider chat-date-separator" role="separator">
+        <span class="chat-divider__line"></span>
+        <span class="chat-divider__label">${dateLabel}</span>
+        <span class="chat-divider__line"></span>
+      </div>
+    `;
+  }
+
   return html`
+    ${dateSeparator}
     <div class="chat-group ${roleClass}">
       ${renderAvatar(group.role, {
         name: assistantName,
@@ -176,16 +223,25 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
 
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
-      return html`<img
-        class="chat-avatar ${className}"
-        src="${assistantAvatar}"
-        alt="${assistantName}"
-      />`;
+      return html`
+        <div class="chat-avatar-ring ${className}">
+          <img
+            class="chat-avatar ${className}"
+            src="${assistantAvatar}"
+            alt="${assistantName}"
+          />
+        </div>`;
     }
-    return html`<div class="chat-avatar ${className}">${assistantAvatar}</div>`;
+    return html`
+      <div class="chat-avatar-ring ${className}">
+        <div class="chat-avatar ${className}">${assistantAvatar}</div>
+      </div>`;
   }
 
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
+  return html`
+    <div class="chat-avatar-ring ${className}">
+      <div class="chat-avatar ${className}">${initial}</div>
+    </div>`;
 }
 
 function isAvatarUrl(value: string): boolean {

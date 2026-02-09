@@ -8,6 +8,7 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  resetDateTracking,
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
@@ -185,6 +186,25 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+/** Renders a welcoming empty state when no messages exist yet */
+function renderEmptyState(assistantName: string, connected: boolean) {
+  return html`
+    <div class="chat-empty-state">
+      <div class="chat-empty-state__icon">${icons.messageSquare}</div>
+      <h3 class="chat-empty-state__title">Start a conversation</h3>
+      <p class="chat-empty-state__text">
+        ${
+          connected
+            ? html`Send a message to ${assistantName} to get started.`
+            : html`
+                Connect to the gateway to start chatting.
+              `
+        }
+      </p>
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -206,6 +226,10 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  // Reset date tracking so separators render correctly on each render pass
+  resetDateTracking();
+  const chatItems = buildChatItems(props);
+  const isEmpty = !props.loading && chatItems.length === 0;
   const thread = html`
     <div
       class="chat-thread"
@@ -215,13 +239,12 @@ export function renderChat(props: ChatProps) {
     >
       ${
         props.loading
-          ? html`
-              <div class="muted">Loading chat…</div>
-            `
+          ? html`<div class="chat-empty-state"><div class="chat-empty-state__spinner">${icons.loader}</div><span class="muted">Loading chat…</span></div>`
           : nothing
       }
+      ${isEmpty ? renderEmptyState(props.assistantName, props.connected) : nothing}
       ${repeat(
-        buildChatItems(props),
+        chatItems,
         (item) => item.key,
         (item) => {
           if (item.kind === "divider") {
@@ -409,14 +432,14 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected || (!canAbort && props.sending)}
               @click=${canAbort ? props.onAbort : props.onNewSession}
             >
-              ${canAbort ? "Stop" : "New session"}
+              ${canAbort ? html`${icons.stop} Stop` : html`${icons.plus} New session`}
             </button>
             <button
               class="btn primary"
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
-              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+              ${isBusy ? html`${icons.queue} Queue` : html`${icons.send} Send`}<kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
         </div>
