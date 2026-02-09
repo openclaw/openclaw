@@ -289,7 +289,7 @@ process env is missing the key (same non-overriding rule):
 }
 ```
 
-See [/environment](/environment) for full precedence and sources.
+See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
@@ -765,7 +765,7 @@ Inbound messages are routed to an agent via bindings.
 - `bindings[]`: routes inbound messages to an `agentId`.
   - `match.channel` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)
-  - `match.peer` (optional; `{ kind: dm|group|channel, id }`)
+  - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
   - `match.guildId` / `match.teamId` (optional; channel-specific)
 
 Deterministic match order:
@@ -788,7 +788,7 @@ levels in one gateway:
 - **Read-only** tools + workspace
 - **No filesystem access** (messaging/session tools only)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence and
 additional examples.
 
 Full access (no sandbox):
@@ -2760,7 +2760,7 @@ Controls session scoping, reset policy, reset triggers, and where the session st
     },
     resetByType: {
       thread: { mode: "daily", atHour: 4 },
-      dm: { mode: "idle", idleMinutes: 240 },
+      direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
@@ -2797,7 +2797,7 @@ Fields:
   - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
-- `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
+- `resetByType`: per-session overrides for `direct`, `group`, and `thread`. Legacy `dm` key is accepted as an alias for `direct`.
   - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, OpenClaw stays in idle-only mode for backward compatibility.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
@@ -2857,7 +2857,7 @@ Example:
 Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
 from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
 `plugins.load.paths` entries. **Config changes require a gateway restart.**
-See [/plugin](/plugin) for full usage.
+See [/plugin](/tools/plugin) for full usage.
 
 Fields:
 

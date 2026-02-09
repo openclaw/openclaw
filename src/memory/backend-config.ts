@@ -29,7 +29,11 @@ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
+  waitForBootSync: boolean;
   embedIntervalMs: number;
+  commandTimeoutMs: number;
+  updateTimeoutMs: number;
+  embedTimeoutMs: number;
 };
 
 export type ResolvedQmdLimitsConfig = {
@@ -61,6 +65,9 @@ const DEFAULT_QMD_INTERVAL = "5m";
 const DEFAULT_QMD_DEBOUNCE_MS = 15_000;
 const DEFAULT_QMD_TIMEOUT_MS = 4_000;
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
+const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
+const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
   maxSnippetChars: 700,
@@ -138,6 +145,13 @@ function resolveDebounceMs(raw: number | undefined): number {
     return Math.floor(raw);
   }
   return DEFAULT_QMD_DEBOUNCE_MS;
+}
+
+function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return fallback;
 }
 
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
@@ -258,7 +272,20 @@ export function resolveMemoryBackendConfig(params: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
       debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
       onBoot: qmdCfg?.update?.onBoot !== false,
+      waitForBootSync: qmdCfg?.update?.waitForBootSync === true,
       embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
+      commandTimeoutMs: resolveTimeoutMs(
+        qmdCfg?.update?.commandTimeoutMs,
+        DEFAULT_QMD_COMMAND_TIMEOUT_MS,
+      ),
+      updateTimeoutMs: resolveTimeoutMs(
+        qmdCfg?.update?.updateTimeoutMs,
+        DEFAULT_QMD_UPDATE_TIMEOUT_MS,
+      ),
+      embedTimeoutMs: resolveTimeoutMs(
+        qmdCfg?.update?.embedTimeoutMs,
+        DEFAULT_QMD_EMBED_TIMEOUT_MS,
+      ),
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,
