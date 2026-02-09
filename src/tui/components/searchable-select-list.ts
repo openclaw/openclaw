@@ -119,8 +119,12 @@ export class SearchableSelectList implements Component {
     a: { item: SelectItem; tier: number; score: number },
     b: { item: SelectItem; tier: number; score: number },
   ) => {
-    if (a.tier !== b.tier) return a.tier - b.tier;
-    if (a.score !== b.score) return a.score - b.score;
+    if (a.tier !== b.tier) {
+      return a.tier - b.tier;
+    }
+    if (a.score !== b.score) {
+      return a.score - b.score;
+    }
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
 
@@ -134,9 +138,11 @@ export class SearchableSelectList implements Component {
       .split(/\s+/)
       .map((token) => token.toLowerCase())
       .filter((token) => token.length > 0);
-    if (tokens.length === 0) return text;
+    if (tokens.length === 0) {
+      return text;
+    }
 
-    const uniqueTokens = Array.from(new Set(tokens)).sort((a, b) => b.length - a.length);
+    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
     let result = text;
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);
@@ -186,7 +192,9 @@ export class SearchableSelectList implements Component {
     // Render visible items
     for (let i = startIndex; i < endIndex; i++) {
       const item = this.filteredItems[i];
-      if (!item) continue;
+      if (!item) {
+        continue;
+      }
       const isSelected = i === this.selectedIndex;
       lines.push(this.renderItemLine(item, isSelected, width, query));
     }
@@ -220,9 +228,9 @@ export class SearchableSelectList implements Component {
       const remainingWidth = width - descriptionStart - 2;
       if (remainingWidth > 10) {
         const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        const descText = isSelected
-          ? this.highlightMatch(truncatedDesc, query)
-          : this.highlightMatch(this.theme.description(truncatedDesc), query);
+        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
         const line = `${prefix}${valueText}${spacing}${descText}`;
         return isSelected ? this.theme.selectedText(line) : line;
       }
@@ -236,7 +244,9 @@ export class SearchableSelectList implements Component {
   }
 
   handleInput(keyData: string): void {
-    if (isKeyRelease(keyData)) return;
+    if (isKeyRelease(keyData)) {
+      return;
+    }
 
     const allowVimNav = !this.searchInput.getValue().trim();
 

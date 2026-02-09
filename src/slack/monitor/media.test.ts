@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../infra/net/ssrf.js";
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
@@ -38,6 +39,17 @@ describe("fetchWithSlackAuth", () => {
       headers: { Authorization: "Bearer xoxb-test-token" },
       redirect: "manual",
     });
+  });
+
+  it("rejects non-Slack hosts to avoid leaking tokens", async () => {
+    const { fetchWithSlackAuth } = await import("./media.js");
+
+    await expect(
+      fetchWithSlackAuth("https://example.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/non-Slack host|non-Slack/i);
+
+    // Should fail fast without attempting a fetch.
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("follows redirects without Authorization header", async () => {
@@ -160,11 +172,21 @@ describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
     globalThis.fetch = mockFetch as typeof fetch;
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.resetModules();
+    vi.restoreAllMocks();
   });
 
   it("prefers url_private_download over url_private", async () => {

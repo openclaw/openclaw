@@ -1,13 +1,13 @@
-import { createActionGate, readNumberParam, readStringParam } from "../../agents/tools/common.js";
-import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
-import { listEnabledSlackAccounts } from "../../slack/accounts.js";
-import { resolveSlackChannelId } from "../../slack/targets.js";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelToolSend,
 } from "./types.js";
+import { createActionGate, readNumberParam, readStringParam } from "../../agents/tools/common.js";
+import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
+import { listEnabledSlackAccounts } from "../../slack/accounts.js";
+import { resolveSlackChannelId } from "../../slack/targets.js";
 
 export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
   return {
@@ -15,7 +15,9 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       const accounts = listEnabledSlackAccounts(cfg).filter(
         (account) => account.botTokenSource !== "none",
       );
-      if (accounts.length === 0) return [];
+      if (accounts.length === 0) {
+        return [];
+      }
       const isActionEnabled = (key: string, defaultValue = true) => {
         for (const account of accounts) {
           const gate = createActionGate(
@@ -24,7 +26,9 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
               boolean | undefined
             >,
           );
-          if (gate(key, defaultValue)) return true;
+          if (gate(key, defaultValue)) {
+            return true;
+          }
         }
         return false;
       };
@@ -44,15 +48,23 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         actions.add("unpin");
         actions.add("list-pins");
       }
-      if (isActionEnabled("memberInfo")) actions.add("member-info");
-      if (isActionEnabled("emojiList")) actions.add("emoji-list");
+      if (isActionEnabled("memberInfo")) {
+        actions.add("member-info");
+      }
+      if (isActionEnabled("emojiList")) {
+        actions.add("emoji-list");
+      }
       return Array.from(actions);
     },
     extractToolSend: ({ args }): ChannelToolSend | null => {
       const action = typeof args.action === "string" ? args.action.trim() : "";
-      if (action !== "sendMessage") return null;
+      if (action !== "sendMessage") {
+        return null;
+      }
       const to = typeof args.to === "string" ? args.to : undefined;
-      if (!to) return null;
+      if (!to) {
+        return null;
+      }
       const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
       return { to, accountId };
     },

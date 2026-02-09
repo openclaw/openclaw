@@ -169,10 +169,10 @@ type BuildTemplateMessageFromPayload =
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
 export type RuntimeLogger = {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+  error: (message: string, meta?: Record<string, unknown>) => void;
 };
 
 export type PluginRuntime = {

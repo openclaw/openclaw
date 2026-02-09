@@ -84,8 +84,12 @@ describe("gateway --force helpers", () => {
     (execFileSync as unknown as vi.Mock).mockImplementation(() => {
       call += 1;
       // 1st call: initial listeners to kill; 2nd call: still listed; 3rd call: gone.
-      if (call === 1) return ["p42", "cnode", ""].join("\n");
-      if (call === 2) return ["p42", "cnode", ""].join("\n");
+      if (call === 1) {
+        return ["p42", "cnode", ""].join("\n");
+      }
+      if (call === 2) {
+        return ["p42", "cnode", ""].join("\n");
+      }
       return "";
     });
 
@@ -116,7 +120,9 @@ describe("gateway --force helpers", () => {
     (execFileSync as unknown as vi.Mock).mockImplementation(() => {
       call += 1;
       // 1st call: initial kill list; then keep showing until after SIGKILL.
-      if (call <= 6) return ["p42", "cnode", ""].join("\n");
+      if (call <= 6) {
+        return ["p42", "cnode", ""].join("\n");
+      }
       return "";
     });
 

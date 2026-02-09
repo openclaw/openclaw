@@ -26,7 +26,9 @@ export function buildFtsQuery(raw: string): string | null {
       .match(/[A-Za-z0-9_]+/g)
       ?.map((t) => t.trim())
       .filter(Boolean) ?? [];
-  if (tokens.length === 0) return null;
+  if (tokens.length === 0) {
+    return null;
+  }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" AND ");
 }
@@ -80,7 +82,9 @@ export function mergeHybridResults(params: {
     const existing = byId.get(r.id);
     if (existing) {
       existing.textScore = r.textScore;
-      if (r.snippet && r.snippet.length > 0) existing.snippet = r.snippet;
+      if (r.snippet && r.snippet.length > 0) {
+        existing.snippet = r.snippet;
+      }
     } else {
       byId.set(r.id, {
         id: r.id,
@@ -107,5 +111,5 @@ export function mergeHybridResults(params: {
     };
   });
 
-  return merged.sort((a, b) => b.score - a.score);
+  return merged.toSorted((a, b) => b.score - a.score);
 }

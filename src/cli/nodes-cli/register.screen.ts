@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
@@ -9,8 +11,6 @@ import {
 import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
-import { shortenHomePath } from "../../utils.js";
 
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
@@ -54,7 +54,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const parsed = parseScreenRecordPayload(res.payload);
           const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });

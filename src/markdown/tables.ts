@@ -11,7 +11,9 @@ const MARKDOWN_STYLE_MARKERS = {
 } as const;
 
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
-  if (!markdown || mode === "off") return markdown;
+  if (!markdown || mode === "off") {
+    return markdown;
+  }
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,
     autolink: false,
@@ -19,15 +21,21 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
     blockquotePrefix: "",
     tableMode: mode,
   });
-  if (!hasTables) return markdown;
+  if (!hasTables) {
+    return markdown;
+  }
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: MARKDOWN_STYLE_MARKERS,
     escapeText: (text) => text,
     buildLink: (link, text) => {
       const href = link.href.trim();
-      if (!href) return null;
+      if (!href) {
+        return null;
+      }
       const label = text.slice(link.start, link.end);
-      if (!label) return null;
+      if (!label) {
+        return null;
+      }
       return { start: link.start, end: link.end, open: "[", close: `](${href})` };
     },
   });

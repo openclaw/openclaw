@@ -1,7 +1,7 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { RuntimeEnv } from "../runtime.js";
 
 export type TelegramApiLogger = (message: string) => void;
 
@@ -16,8 +16,12 @@ type TelegramApiLoggingParams<T> = {
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
 function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
-  if (logger) return logger;
-  if (runtime?.error) return runtime.error;
+  if (logger) {
+    return logger;
+  }
+  if (runtime?.error) {
+    return runtime.error;
+  }
   return (message: string) => fallbackLogger.error(message);
 }
 

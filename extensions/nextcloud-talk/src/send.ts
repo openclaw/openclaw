@@ -1,7 +1,7 @@
+import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
   baseUrl?: string;
@@ -34,7 +34,9 @@ function resolveCredentials(
 
 function normalizeRoomToken(to: string): string {
   const trimmed = to.trim();
-  if (!trimmed) throw new Error("Room token is required for Nextcloud Talk sends");
+  if (!trimmed) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
 
   let normalized = trimmed;
   if (normalized.startsWith("nextcloud-talk:")) {
@@ -47,7 +49,9 @@ function normalizeRoomToken(to: string): string {
     normalized = normalized.slice("room:".length).trim();
   }
 
-  if (!normalized) throw new Error("Room token is required for Nextcloud Talk sends");
+  if (!normalized) {
+    throw new Error("Room token is required for Nextcloud Talk sends");
+  }
   return normalized;
 }
 
@@ -89,8 +93,12 @@ export async function sendMessageNextcloudTalk(
   }
   const bodyStr = JSON.stringify(body);
 
+  // Nextcloud Talk verifies signature against the extracted message text,
+  // not the full JSON body. See ChecksumVerificationService.php:
+  //   hash_hmac('sha256', $random . $data, $secret)
+  // where $data is the "message" parameter, not the raw request body.
   const { random, signature } = generateNextcloudTalkSignature({
-    body: bodyStr,
+    body: message,
     secret,
   });
 
@@ -179,8 +187,9 @@ export async function sendReactionNextcloudTalk(
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
+  // Sign only the reaction string, not the full JSON body
   const { random, signature } = generateNextcloudTalkSignature({
-    body,
+    body: reaction,
     secret,
   });
 

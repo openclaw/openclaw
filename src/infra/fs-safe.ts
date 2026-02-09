@@ -1,6 +1,6 @@
-import { constants as fsConstants } from "node:fs";
 import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -55,7 +55,7 @@ export async function openFileWithinRoot(params: {
   }
 
   const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? (fsConstants.O_NOFOLLOW as number) : 0);
+  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
 
   let handle: FileHandle;
   try {
@@ -94,7 +94,9 @@ export async function openFileWithinRoot(params: {
     return { handle, realPath, stat };
   } catch (err) {
     await handle.close().catch(() => {});
-    if (err instanceof SafeOpenError) throw err;
+    if (err instanceof SafeOpenError) {
+      throw err;
+    }
     if (isNotFoundError(err)) {
       throw new SafeOpenError("not-found", "file not found");
     }

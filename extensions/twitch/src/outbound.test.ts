@@ -9,9 +9,9 @@
  * - Abort signal handling
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { twitchOutbound } from "./outbound.js";
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
 
 // Mock dependencies
 vi.mock("./config.js", () => ({
@@ -36,7 +36,7 @@ vi.mock("./utils/twitch.js", () => ({
 describe("outbound", () => {
   const mockAccount = {
     username: "testbot",
-    token: "oauth:test123",
+    accessToken: "oauth:test123",
     clientId: "test-client-id",
     channel: "#testchannel",
   };
@@ -49,7 +49,7 @@ describe("outbound", () => {
         },
       },
     },
-  } as unknown as MoltbotConfig;
+  } as unknown as OpenClawConfig;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -196,7 +196,14 @@ describe("outbound", () => {
 
       expect(result.channel).toBe("twitch");
       expect(result.messageId).toBe("twitch-msg-123");
-      expect(result.to).toBe("testchannel");
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
+        "testchannel",
+        "Hello Twitch!",
+        mockConfig,
+        "default",
+        true,
+        console,
+      );
       expect(result.timestamp).toBeGreaterThan(0);
     });
 

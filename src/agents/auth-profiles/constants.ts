@@ -7,6 +7,7 @@ export const LEGACY_AUTH_FILENAME = "auth.json";
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
 export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
 export const QWEN_CLI_PROFILE_ID = "qwen-portal:qwen-cli";
+export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 
 export const AUTH_STORE_LOCK_OPTIONS = {
   retries: {

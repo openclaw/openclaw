@@ -88,10 +88,7 @@ describe("gateway server hooks", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: "Query auth" }),
       });
-      expect(resQuery.status).toBe(200);
-      const queryEvents = await waitForSystemEvent();
-      expect(queryEvents.some((e) => e.includes("Query auth"))).toBe(true);
-      drainSystemEvents(resolveMainKey());
+      expect(resQuery.status).toBe(400);
 
       const resBadChannel = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
         method: "POST",
@@ -108,7 +105,7 @@ describe("gateway server hooks", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-moltbot-token": "hook-secret",
+          "x-openclaw-token": "hook-secret",
         },
         body: JSON.stringify({ text: "Header auth" }),
       });

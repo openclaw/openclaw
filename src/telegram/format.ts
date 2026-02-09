@@ -1,3 +1,4 @@
+import type { MarkdownTableMode } from "../config/types.base.js";
 import {
   chunkMarkdownIR,
   markdownToIR,
@@ -5,7 +6,6 @@ import {
   type MarkdownIR,
 } from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
-import type { MarkdownTableMode } from "../config/types.base.js";
 
 export type TelegramFormattedChunk = {
   html: string;
@@ -22,8 +22,12 @@ function escapeHtmlAttr(text: string): string {
 
 function buildTelegramLink(link: MarkdownLinkSpan, _text: string) {
   const href = link.href.trim();
-  if (!href) return null;
-  if (link.start === link.end) return null;
+  if (!href) {
+    return null;
+  }
+  if (link.start === link.end) {
+    return null;
+  }
   const safeHref = escapeHtmlAttr(href);
   return {
     start: link.start,
@@ -41,6 +45,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       strikethrough: { open: "<s>", close: "</s>" },
       code: { open: "<code>", close: "</code>" },
       code_block: { open: "<pre><code>", close: "</code></pre>" },
+      spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
     },
     escapeText: escapeHtml,
     buildLink: buildTelegramLink,
@@ -53,6 +58,7 @@ export function markdownToTelegramHtml(
 ): string {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
+    enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
     tableMode: options.tableMode,
@@ -65,7 +71,9 @@ export function renderTelegramHtmlText(
   options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
 ): string {
   const textMode = options.textMode ?? "markdown";
-  if (textMode === "html") return text;
+  if (textMode === "html") {
+    return text;
+  }
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 
@@ -76,6 +84,7 @@ export function markdownToTelegramChunks(
 ): TelegramFormattedChunk[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
+    enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
     tableMode: options.tableMode,

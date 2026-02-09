@@ -3,22 +3,20 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
 async function makeEnv() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-gateway-lock-"));
-  const configPath = path.join(dir, "moltbot.json");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
+  const configPath = path.join(dir, "openclaw.json");
   await fs.writeFile(configPath, "{}", "utf8");
   await fs.mkdir(resolveGatewayLockDir(), { recursive: true });
   return {
     env: {
       ...process.env,
-      CLAWDBOT_STATE_DIR: dir,
-      CLAWDBOT_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: dir,
+      OPENCLAW_CONFIG_PATH: configPath,
     },
     cleanup: async () => {
       await fs.rm(dir, { recursive: true, force: true });

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -18,13 +17,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
+  const firstCall = deliver.mock.calls[0]?.[0] as
+    | { payloads?: Array<{ text?: string }> }
+    | undefined;
+  return firstCall?.payloads?.[0]?.text ?? "";
+}
+
 describe("exec approval forwarder", () => {
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
     const deliver = vi.fn().mockResolvedValue([]);
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -59,7 +65,7 @@ describe("exec approval forwarder", () => {
           targets: [{ channel: "telegram", to: "123" }],
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const forwarder = createExecApprovalForwarder({
       getConfig: () => cfg,
@@ -73,5 +79,92 @@ describe("exec approval forwarder", () => {
 
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("formats single-line commands as inline code", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested(baseRequest);
+
+    expect(getFirstDeliveryText(deliver)).toContain("Command: `echo hello`");
+  });
+
+  it("formats complex commands as fenced code blocks", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        command: "echo `uname`\necho done",
+      },
+    });
+
+    expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
+  });
+
+  it("uses a longer fence when command already contains triple backticks", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        command: "echo ```danger```",
+      },
+    });
+
+    expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
   });
 });

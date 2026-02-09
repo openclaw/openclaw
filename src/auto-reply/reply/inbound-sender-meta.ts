@@ -1,13 +1,20 @@
 import type { MsgContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { listSenderLabelCandidates, resolveSenderLabel } from "../../channels/sender-label.js";
+import { escapeRegExp } from "../../utils.js";
 
 export function formatInboundBodyWithSenderMeta(params: { body: string; ctx: MsgContext }): string {
   const body = params.body;
-  if (!body.trim()) return body;
+  if (!body.trim()) {
+    return body;
+  }
   const chatType = normalizeChatType(params.ctx.ChatType);
-  if (!chatType || chatType === "direct") return body;
-  if (hasSenderMetaLine(body, params.ctx)) return body;
+  if (!chatType || chatType === "direct") {
+    return body;
+  }
+  if (hasSenderMetaLine(body, params.ctx)) {
+    return body;
+  }
 
   const senderLabel = resolveSenderLabel({
     name: params.ctx.SenderName,
@@ -16,13 +23,17 @@ export function formatInboundBodyWithSenderMeta(params: { body: string; ctx: Msg
     e164: params.ctx.SenderE164,
     id: params.ctx.SenderId,
   });
-  if (!senderLabel) return body;
+  if (!senderLabel) {
+    return body;
+  }
 
   return `${body}\n[from: ${senderLabel}]`;
 }
 
 function hasSenderMetaLine(body: string, ctx: MsgContext): boolean {
-  if (/(^|\n)\[from:/i.test(body)) return true;
+  if (/(^|\n)\[from:/i.test(body)) {
+    return true;
+  }
   const candidates = listSenderLabelCandidates({
     name: ctx.SenderName,
     username: ctx.SenderUsername,
@@ -30,7 +41,9 @@ function hasSenderMetaLine(body: string, ctx: MsgContext): boolean {
     e164: ctx.SenderE164,
     id: ctx.SenderId,
   });
-  if (candidates.length === 0) return false;
+  if (candidates.length === 0) {
+    return false;
+  }
   return candidates.some((candidate) => {
     const escaped = escapeRegExp(candidate);
     // Envelope bodies look like "[Signal ...] Alice: hi".
@@ -38,8 +51,4 @@ function hasSenderMetaLine(body: string, ctx: MsgContext): boolean {
     const pattern = new RegExp(`(^|\\n|\\]\\s*)${escaped}:\\s`, "i");
     return pattern.test(body);
   });
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

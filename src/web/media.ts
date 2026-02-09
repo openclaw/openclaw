@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
-import { resolveUserPath } from "../utils.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
@@ -13,6 +12,7 @@ import {
   resizeToJpeg,
 } from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
+import { resolveUserPath } from "../utils.js";
 
 export type WebMediaResult = {
   buffer: Buffer;
@@ -24,6 +24,7 @@ export type WebMediaResult = {
 type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
@@ -43,15 +44,23 @@ function formatCapReduce(label: string, cap: number, size: number): string {
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
-  if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) return true;
-  if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) return true;
+  if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
+    return true;
+  }
+  if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) {
+    return true;
+  }
   return false;
 }
 
 function toJpegFileName(fileName?: string): string | undefined {
-  if (!fileName) return undefined;
+  if (!fileName) {
+    return undefined;
+  }
   const trimmed = fileName.trim();
-  if (!trimmed) return fileName;
+  if (!trimmed) {
+    return fileName;
+  }
   const parsed = path.parse(trimmed);
   if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
     return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
@@ -69,8 +78,12 @@ type OptimizedImage = {
 };
 
 function logOptimizedImage(params: { originalSize: number; optimized: OptimizedImage }): void {
-  if (!shouldLogVerbose()) return;
-  if (params.optimized.optimizedSize >= params.originalSize) return;
+  if (!shouldLogVerbose()) {
+    return;
+  }
+  if (params.optimized.optimizedSize >= params.originalSize) {
+    return;
+  }
   if (params.optimized.format === "png") {
     logVerbose(
       `Optimized PNG (preserving alpha) from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side≤${params.optimized.resizeSide}px)`,
@@ -111,7 +124,7 @@ async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
-  const { maxBytes, optimizeImages = true } = options;
+  const { maxBytes, optimizeImages = true, ssrfPolicy } = options;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -189,7 +202,16 @@ async function loadWebMediaInternal(
   };
 
   if (/^https?:\/\//i.test(mediaUrl)) {
-    const fetched = await fetchRemoteMedia({ url: mediaUrl });
+    // Enforce a download cap during fetch to avoid unbounded memory usage.
+    // For optimized images, allow fetching larger payloads before compression.
+    const defaultFetchCap = maxBytesForKind("unknown");
+    const fetchCap =
+      maxBytes === undefined
+        ? defaultFetchCap
+        : optimizeImages
+          ? Math.max(maxBytes, defaultFetchCap)
+          : maxBytes;
+    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
     const { buffer, contentType, fileName } = fetched;
     const kind = mediaKindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
@@ -207,7 +229,9 @@ async function loadWebMediaInternal(
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
-    if (ext) fileName = `${fileName}${ext}`;
+    if (ext) {
+      fileName = `${fileName}${ext}`;
+    }
   }
   return await clampAndFinalize({
     buffer: data,
@@ -217,20 +241,27 @@ async function loadWebMediaInternal(
   });
 }
 
-export async function loadWebMedia(mediaUrl: string, maxBytes?: number): Promise<WebMediaResult> {
+export async function loadWebMedia(
+  mediaUrl: string,
+  maxBytes?: number,
+  options?: { ssrfPolicy?: SsrFPolicy },
+): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: true,
+    ssrfPolicy: options?.ssrfPolicy,
   });
 }
 
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytes?: number,
+  options?: { ssrfPolicy?: SsrFPolicy },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: false,
+    ssrfPolicy: options?.ssrfPolicy,
   });
 }
 
@@ -250,7 +281,7 @@ export async function optimizeImageToJpeg(
     try {
       source = await convertHeicToJpeg(buffer);
     } catch (err) {
-      throw new Error(`HEIC image conversion failed: ${String(err)}`);
+      throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
     }
   }
   const sides = [2048, 1536, 1280, 1024, 800];

@@ -20,6 +20,8 @@ import {
   sendStickerDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
+import { resolveDiscordChannelId } from "../../discord/targets.js";
+import { withNormalizedTimestamp } from "../date-time.js";
 import {
   type ActionGate,
   jsonResult,
@@ -27,8 +29,6 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
-import { withNormalizedTimestamp } from "../date-time.js";
-import { resolveDiscordChannelId } from "../../discord/targets.js";
 
 function parseDiscordMessageLink(link: string) {
   const normalized = link.trim();
@@ -60,7 +60,9 @@ export async function handleDiscordMessagingAction(
     );
   const accountId = readStringParam(params, "accountId");
   const normalizeMessage = (message: unknown) => {
-    if (!message || typeof message !== "object") return message;
+    if (!message || typeof message !== "object") {
+      return message;
+    }
     return withNormalizedTimestamp(
       message as Record<string, unknown>,
       (message as { timestamp?: unknown }).timestamp,
@@ -279,6 +281,7 @@ export async function handleDiscordMessagingAction(
       const channelId = resolveChannelId();
       const name = readStringParam(params, "name", { required: true });
       const messageId = readStringParam(params, "messageId");
+      const content = readStringParam(params, "content");
       const autoArchiveMinutesRaw = params.autoArchiveMinutes;
       const autoArchiveMinutes =
         typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
@@ -287,10 +290,10 @@ export async function handleDiscordMessagingAction(
       const thread = accountId
         ? await createThreadDiscord(
             channelId,
-            { name, messageId, autoArchiveMinutes },
+            { name, messageId, autoArchiveMinutes, content },
             { accountId },
           )
-        : await createThreadDiscord(channelId, { name, messageId, autoArchiveMinutes });
+        : await createThreadDiscord(channelId, { name, messageId, autoArchiveMinutes, content });
       return jsonResult({ ok: true, thread });
     }
     case "threadList": {

@@ -4,8 +4,9 @@
  * Detects and reports configuration issues for Twitch accounts.
  */
 
+import type { ChannelStatusIssue } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "./types.js";
 import { getAccountConfig } from "./config.js";
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "./types.js";
 import { resolveTwitchToken } from "./token.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
@@ -35,7 +36,9 @@ export function collectTwitchStatusIssues(
   for (const entry of accounts) {
     const accountId = entry.accountId;
 
-    if (!accountId) continue;
+    if (!accountId) {
+      continue;
+    }
 
     let account: ReturnType<typeof getAccountConfig> | null = null;
     let cfg: Parameters<typeof resolveTwitchToken>[0] | undefined;

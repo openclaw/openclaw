@@ -1,7 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
-import { analyzeConfigSchema, renderConfigForm } from "./views/config-form";
+import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
 
 const rootSchema = {
   type: "object",
@@ -29,12 +28,7 @@ const rootSchema = {
       type: "boolean",
     },
     bind: {
-      anyOf: [
-        { const: "auto" },
-        { const: "lan" },
-        { const: "tailnet" },
-        { const: "loopback" },
-      ],
+      anyOf: [{ const: "auto" }, { const: "lan" }, { const: "tailnet" }, { const: "loopback" }],
     },
   },
 };
@@ -57,17 +51,14 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tokenInput = container.querySelector(
-      "input[type='password']",
-    ) as HTMLInputElement | null;
+    const tokenInput: HTMLInputElement | null = container.querySelector("input[type='password']");
     expect(tokenInput).not.toBeNull();
-    if (!tokenInput) return;
+    if (!tokenInput) {
+      return;
+    }
     tokenInput.value = "abc123";
     tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(
-      ["gateway", "auth", "token"],
-      "abc123",
-    );
+    expect(onPatch).toHaveBeenCalledWith(["gateway", "auth", "token"], "abc123");
 
     const tokenButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".cfg-segmented__btn"),
@@ -76,11 +67,11 @@ describe("config form renderer", () => {
     tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox = container.querySelector(
-      "input[type='checkbox']",
-    ) as HTMLInputElement | null;
+    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
     expect(checkbox).not.toBeNull();
-    if (!checkbox) return;
+    if (!checkbox) {
+      return;
+    }
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
@@ -101,16 +92,12 @@ describe("config form renderer", () => {
       container,
     );
 
-    const addButton = container.querySelector(
-      ".cfg-array__add",
-    ) as HTMLButtonElement | null;
+    const addButton = container.querySelector(".cfg-array__add");
     expect(addButton).not.toBeUndefined();
     addButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], ["+1", ""]);
 
-    const removeButton = container.querySelector(
-      ".cfg-array__item-remove",
-    ) as HTMLButtonElement | null;
+    const removeButton = container.querySelector(".cfg-array__item-remove");
     expect(removeButton).not.toBeUndefined();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
@@ -165,9 +152,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    const removeButton = container.querySelector(
-      ".cfg-map__item-remove",
-    ) as HTMLButtonElement | null;
+    const removeButton = container.querySelector(".cfg-map__item-remove");
     expect(removeButton).not.toBeUndefined();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["slack"], {});

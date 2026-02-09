@@ -7,7 +7,9 @@ let maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
 export const getMaxChatHistoryMessagesBytes = () => maxChatHistoryMessagesBytes;
 
 export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
-  if (!process.env.VITEST && process.env.NODE_ENV !== "test") return;
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
   if (value === undefined) {
     maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
     return;
@@ -18,9 +20,11 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const getHandshakeTimeoutMs = () => {
-  if (process.env.VITEST && process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS) {
-    const parsed = Number(process.env.CLAWDBOT_TEST_HANDSHAKE_TIMEOUT_MS);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  if (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS) {
+    const parsed = Number(process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
   }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };

@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-import { resolveConfigSnapshotHash } from "../config/config.js";
-
+import { CONFIG_PATH, resolveConfigSnapshotHash } from "../config/config.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -117,7 +115,82 @@ describe("gateway config.patch", () => {
     }>(ws, (o) => o.type === "res" && o.id === get2Id);
     expect(get2Res.ok).toBe(true);
     expect(get2Res.payload?.config?.gateway?.mode).toBe("local");
-    expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("token-1");
+    expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("__OPENCLAW_REDACTED__");
+
+    const storedRaw = await fs.readFile(CONFIG_PATH, "utf-8");
+    const stored = JSON.parse(storedRaw) as {
+      channels?: { telegram?: { botToken?: string } };
+    };
+    expect(stored.channels?.telegram?.botToken).toBe("token-1");
+  });
+
+  it("preserves credentials on config.set when raw contains redacted sentinels", async () => {
+    const setId = "req-set-sentinel-1";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            channels: { telegram: { botToken: "token-1" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-sentinel-1";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+    const rawRedacted = getRes.payload?.raw;
+    expect(typeof rawRedacted).toBe("string");
+    expect(rawRedacted).toContain("__OPENCLAW_REDACTED__");
+
+    const set2Id = "req-set-sentinel-2";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: set2Id,
+        method: "config.set",
+        params: {
+          raw: rawRedacted,
+          baseHash,
+        },
+      }),
+    );
+    const set2Res = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === set2Id,
+    );
+    expect(set2Res.ok).toBe(true);
+
+    const storedRaw = await fs.readFile(CONFIG_PATH, "utf-8");
+    const stored = JSON.parse(storedRaw) as {
+      channels?: { telegram?: { botToken?: string } };
+    };
+    expect(stored.channels?.telegram?.botToken).toBe("token-1");
   });
 
   it("writes config, stores sentinel, and schedules restart", async () => {
@@ -190,7 +263,7 @@ describe("gateway config.patch", () => {
     );
     expect(patchRes.ok).toBe(true);
 
-    const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
@@ -288,7 +361,7 @@ describe("gateway config.patch", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-agents-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -332,7 +405,7 @@ describe("gateway server sessions", () => {
       agentId: "home",
     });
     expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).sort()).toEqual([
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
       "agent:home:discord:group:dev",
       "agent:home:main",
     ]);
@@ -349,7 +422,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };

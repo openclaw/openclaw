@@ -1,4 +1,4 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+// oxlint-disable-next-line typescript/no-explicit-any
 export type AnyAgentTool = AgentTool<any, unknown>;

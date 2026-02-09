@@ -1,5 +1,5 @@
-import { visibleWidth } from "./ansi.js";
 import { displayString } from "../utils.js";
+import { visibleWidth } from "./ansi.js";
 
 type Align = "left" | "right" | "center";
 
@@ -21,15 +21,21 @@ export type RenderTableOptions = {
 };
 
 function repeat(ch: string, n: number): string {
-  if (n <= 0) return "";
+  if (n <= 0) {
+    return "";
+  }
   return ch.repeat(n);
 }
 
 function padCell(text: string, width: number, align: Align): string {
   const w = visibleWidth(text);
-  if (w >= width) return text;
+  if (w >= width) {
+    return text;
+  }
   const pad = width - w;
-  if (align === "right") return `${repeat(" ", pad)}${text}`;
+  if (align === "right") {
+    return `${repeat(" ", pad)}${text}`;
+  }
   if (align === "center") {
     const left = Math.floor(pad / 2);
     const right = pad - left;
@@ -39,7 +45,9 @@ function padCell(text: string, width: number, align: Align): string {
 }
 
 function wrapLine(text: string, width: number): string[] {
-  if (width <= 0) return [text];
+  if (width <= 0) {
+    return [text];
+  }
 
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
   // We don't attempt to re-open styling per line; terminals keep SGR state
@@ -55,7 +63,9 @@ function wrapLine(text: string, width: number): string[] {
         let j = i + 2;
         while (j < text.length) {
           const ch = text[j];
-          if (ch === "m") break;
+          if (ch === "m") {
+            break;
+          }
           if (ch && ch >= "0" && ch <= "9") {
             j += 1;
             continue;
@@ -85,14 +95,18 @@ function wrapLine(text: string, width: number): string[] {
     }
 
     const cp = text.codePointAt(i);
-    if (!cp) break;
+    if (!cp) {
+      break;
+    }
     const ch = String.fromCodePoint(cp);
     tokens.push({ kind: "char", value: ch });
     i += ch.length;
   }
 
   const firstCharIndex = tokens.findIndex((t) => t.kind === "char");
-  if (firstCharIndex < 0) return [text];
+  if (firstCharIndex < 0) {
+    return [text];
+  }
   let lastCharIndex = -1;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
     if (tokens[i]?.kind === "char") {
@@ -129,12 +143,16 @@ function wrapLine(text: string, width: number): string[] {
 
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
-    if (cleaned.trim().length === 0) return;
+    if (cleaned.trim().length === 0) {
+      return;
+    }
     lines.push(cleaned);
   };
 
   const flushAt = (breakAt: number | null) => {
-    if (buf.length === 0) return;
+    if (buf.length === 0) {
+      return;
+    }
     if (breakAt == null || breakAt <= 0) {
       pushLine(bufToString());
       buf.length = 0;
@@ -166,11 +184,15 @@ function wrapLine(text: string, width: number): string[] {
     const ch = token.value;
     if (skipNextLf) {
       skipNextLf = false;
-      if (ch === "\n") continue;
+      if (ch === "\n") {
+        continue;
+      }
     }
     if (ch === "\n" || ch === "\r") {
       flushAt(buf.length);
-      if (ch === "\r") skipNextLf = true;
+      if (ch === "\r") {
+        skipNextLf = true;
+      }
       continue;
     }
     if (bufVisible + 1 > width && bufVisible > 0) {
@@ -179,21 +201,33 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.push(token);
     bufVisible += 1;
-    if (isBreakChar(ch)) lastBreakIndex = buf.length;
+    if (isBreakChar(ch)) {
+      lastBreakIndex = buf.length;
+    }
   }
 
   flushAt(buf.length);
-  if (!lines.length) return [""];
-  if (!prefixAnsi && !suffixAnsi) return lines;
+  if (!lines.length) {
+    return [""];
+  }
+  if (!prefixAnsi && !suffixAnsi) {
+    return lines;
+  }
   return lines.map((line) => {
-    if (!line) return line;
+    if (!line) {
+      return line;
+    }
     return `${prefixAnsi}${line}${suffixAnsi}`;
   });
 }
 
 function normalizeWidth(n: number | undefined): number | undefined {
-  if (n == null) return undefined;
-  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (n == null) {
+    return undefined;
+  }
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
   return Math.floor(n);
 }
 
@@ -246,26 +280,32 @@ export function renderTable(opts: RenderTableOptions): string {
     const flexOrder = columns
       .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
       .filter(({ i }) => Boolean(columns[i]?.flex))
-      .sort((a, b) => b.w - a.w)
+      .toSorted((a, b) => b.w - a.w)
       .map((x) => x.i);
 
     const nonFlexOrder = columns
       .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
       .filter(({ i }) => !columns[i]?.flex)
-      .sort((a, b) => b.w - a.w)
+      .toSorted((a, b) => b.w - a.w)
       .map((x) => x.i);
 
     const shrink = (order: number[], minWidths: number[]) => {
       while (over > 0) {
         let progressed = false;
         for (const i of order) {
-          if ((widths[i] ?? 0) <= (minWidths[i] ?? 0)) continue;
+          if ((widths[i] ?? 0) <= (minWidths[i] ?? 0)) {
+            continue;
+          }
           widths[i] = (widths[i] ?? 0) - 1;
           over -= 1;
           progressed = true;
-          if (over <= 0) break;
+          if (over <= 0) {
+            break;
+          }
         }
-        if (!progressed) break;
+        if (!progressed) {
+          break;
+        }
       }
     };
 
@@ -298,13 +338,19 @@ export function renderTable(opts: RenderTableOptions): string {
         while (extra > 0) {
           let progressed = false;
           for (const i of flexCols) {
-            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY)) continue;
+            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY)) {
+              continue;
+            }
             widths[i] = (widths[i] ?? 0) + 1;
             extra -= 1;
             progressed = true;
-            if (extra <= 0) break;
+            if (extra <= 0) {
+              break;
+            }
           }
-          if (!progressed) break;
+          if (!progressed) {
+            break;
+          }
         }
       }
     }

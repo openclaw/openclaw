@@ -1,9 +1,10 @@
 import type { Command } from "commander";
+import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
-import type { ProgramContext } from "./context.js";
 import { createMessageCliHelpers } from "./message/helpers.js";
+import { registerMessageBroadcastCommand } from "./message/register.broadcast.js";
 import { registerMessageDiscordAdminCommands } from "./message/register.discord-admin.js";
 import {
   registerMessageEmojiCommands,
@@ -19,7 +20,6 @@ import { registerMessageReactionsCommands } from "./message/register.reactions.j
 import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
-import { registerMessageBroadcastCommand } from "./message/register.broadcast.js";
 
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
@@ -31,22 +31,22 @@ export function registerMessageCommands(program: Command, ctx: ProgramContext) {
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
-  ['moltbot message send --target +15555550123 --message "Hi"', "Send a text message."],
+  ['openclaw message send --target +15555550123 --message "Hi"', "Send a text message."],
   [
-    'moltbot message send --target +15555550123 --message "Hi" --media photo.jpg',
+    'openclaw message send --target +15555550123 --message "Hi" --media photo.jpg',
     "Send a message with media.",
   ],
   [
-    'moltbot message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi',
+    'openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi',
     "Create a Discord poll.",
   ],
   [
-    'moltbot message react --channel discord --target 123 --message-id 456 --emoji "✅"',
+    'openclaw message react --channel discord --target 123 --message-id 456 --emoji "✅"',
     "React to a message.",
   ],
 ])}
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.molt.bot/cli/message")}`,
+${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
     )
     .action(() => {
       message.help({ error: true });

@@ -88,7 +88,9 @@ export async function dragViaPlaywright(opts: {
 }): Promise<void> {
   const startRef = requireRef(opts.startRef);
   const endRef = requireRef(opts.endRef);
-  if (!startRef || !endRef) throw new Error("startRef and endRef are required");
+  if (!startRef || !endRef) {
+    throw new Error("startRef and endRef are required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -109,7 +111,9 @@ export async function selectOptionViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<void> {
   const ref = requireRef(opts.ref);
-  if (!opts.values?.length) throw new Error("values are required");
+  if (!opts.values?.length) {
+    throw new Error("values are required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -129,7 +133,9 @@ export async function pressKeyViaPlaywright(opts: {
   delayMs?: number;
 }): Promise<void> {
   const key = String(opts.key ?? "").trim();
-  if (!key) throw new Error("key is required");
+  if (!key) {
+    throw new Error("key is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.keyboard.press(key, {
@@ -188,7 +194,9 @@ export async function fillFormViaPlaywright(opts: {
         : typeof rawValue === "number" || typeof rawValue === "boolean"
           ? String(rawValue)
           : "";
-    if (!ref || !type) continue;
+    if (!ref || !type) {
+      continue;
+    }
     const locator = refLocator(page, ref);
     if (type === "checkbox" || type === "radio") {
       const checked =
@@ -215,7 +223,9 @@ export async function evaluateViaPlaywright(opts: {
   ref?: string;
 }): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
-  if (!fnText) throw new Error("function is required");
+  if (!fnText) {
+    throw new Error("function is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -344,13 +354,17 @@ export async function takeScreenshotViaPlaywright(opts: {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
   if (opts.ref) {
-    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) {
+      throw new Error("fullPage is not supported for element screenshots");
+    }
     const locator = refLocator(page, opts.ref);
     const buffer = await locator.screenshot({ type });
     return { buffer };
   }
   if (opts.element) {
-    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) {
+      throw new Error("fullPage is not supported for element screenshots");
+    }
     const locator = page.locator(opts.element).first();
     const buffer = await locator.screenshot({ type });
     return { buffer };
@@ -427,11 +441,11 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   try {
     if (boxes.length > 0) {
       await page.evaluate((labels) => {
-        const existing = document.querySelectorAll("[data-moltbot-labels]");
+        const existing = document.querySelectorAll("[data-openclaw-labels]");
         existing.forEach((el) => el.remove());
 
         const root = document.createElement("div");
-        root.setAttribute("data-moltbot-labels", "1");
+        root.setAttribute("data-openclaw-labels", "1");
         root.style.position = "fixed";
         root.style.left = "0";
         root.style.top = "0";
@@ -445,7 +459,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 
         for (const label of labels) {
           const box = document.createElement("div");
-          box.setAttribute("data-moltbot-labels", "1");
+          box.setAttribute("data-openclaw-labels", "1");
           box.style.position = "absolute";
           box.style.left = `${label.x}px`;
           box.style.top = `${label.y}px`;
@@ -455,7 +469,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
           box.style.boxSizing = "border-box";
 
           const tag = document.createElement("div");
-          tag.setAttribute("data-moltbot-labels", "1");
+          tag.setAttribute("data-openclaw-labels", "1");
           tag.textContent = label.ref;
           tag.style.position = "absolute";
           tag.style.left = `${label.x}px`;
@@ -482,7 +496,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   } finally {
     await page
       .evaluate(() => {
-        const existing = document.querySelectorAll("[data-moltbot-labels]");
+        const existing = document.querySelectorAll("[data-openclaw-labels]");
         existing.forEach((el) => el.remove());
       })
       .catch(() => {});
@@ -499,7 +513,9 @@ export async function setInputFilesViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  if (!opts.paths.length) throw new Error("paths are required");
+  if (!opts.paths.length) {
+    throw new Error("paths are required");
+  }
   const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
   const element = typeof opts.element === "string" ? opts.element.trim() : "";
   if (inputRef && element) {

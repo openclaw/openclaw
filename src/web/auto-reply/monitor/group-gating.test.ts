@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { applyGroupGating } from "./group-gating.js";
 
 const baseConfig = {
@@ -9,7 +8,7 @@ const baseConfig = {
       groups: { "*": { requireMention: true } },
     },
   },
-  session: { store: "/tmp/moltbot-sessions.json" },
+  session: { store: "/tmp/openclaw-sessions.json" },
 } as const;
 
 describe("applyGroupGating", () => {

@@ -1,9 +1,10 @@
+import type { CronJob, CronSchedule } from "../../cron/types.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
-import type { CronJob, CronSchedule } from "../../cron/types.js";
+import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
-import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
 export const getCronChannelOptions = () =>
@@ -15,7 +16,9 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       enabled?: boolean;
       storePath?: string;
     };
-    if (res?.enabled === true) return;
+    if (res?.enabled === true) {
+      return;
+    }
     const store = typeof res?.storePath === "string" ? res.storePath : "";
     defaultRuntime.error(
       [
@@ -33,11 +36,17 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
 
 export function parseDurationMs(input: string): number | null {
   const raw = input.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const n = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!Number.isFinite(n) || n <= 0) {
+    return null;
+  }
   const unit = (match[2] ?? "").toLowerCase();
   const factor =
     unit === "ms"
@@ -52,13 +61,19 @@ export function parseDurationMs(input: string): number | null {
   return Math.floor(n * factor);
 }
 
-export function parseAtMs(input: string): number | null {
+export function parseAt(input: string): string | null {
   const raw = input.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const absolute = parseAbsoluteTimeMs(raw);
-  if (absolute) return absolute;
+  if (absolute !== null) {
+    return new Date(absolute).toISOString();
+  }
   const dur = parseDurationMs(raw);
-  if (dur) return Date.now() + dur;
+  if (dur !== null) {
+    return new Date(Date.now() + dur).toISOString();
+  }
   return null;
 }
 
@@ -74,48 +89,64 @@ const CRON_AGENT_PAD = 10;
 const pad = (value: string, width: number) => value.padEnd(width);
 
 const truncate = (value: string, width: number) => {
-  if (value.length <= width) return value;
-  if (width <= 3) return value.slice(0, width);
+  if (value.length <= width) {
+    return value;
+  }
+  if (width <= 3) {
+    return value.slice(0, width);
+  }
   return `${value.slice(0, width - 3)}...`;
 };
 
-const formatIsoMinute = (ms: number) => {
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "-";
-  const iso = d.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
-};
-
-const formatDuration = (ms: number) => {
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
-  return `${Math.round(ms / 86_400_000)}d`;
+const formatIsoMinute = (iso: string) => {
+  const parsed = parseAbsoluteTimeMs(iso);
+  const d = new Date(parsed ?? NaN);
+  if (Number.isNaN(d.getTime())) {
+    return "-";
+  }
+  const isoStr = d.toISOString();
+  return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
 };
 
 const formatSpan = (ms: number) => {
-  if (ms < 60_000) return "<1m";
-  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  if (ms < 60_000) {
+    return "<1m";
+  }
+  if (ms < 3_600_000) {
+    return `${Math.round(ms / 60_000)}m`;
+  }
+  if (ms < 86_400_000) {
+    return `${Math.round(ms / 3_600_000)}h`;
+  }
   return `${Math.round(ms / 86_400_000)}d`;
 };
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
-  if (!ms) return "-";
+  if (!ms) {
+    return "-";
+  }
   const delta = ms - nowMs;
   const label = formatSpan(Math.abs(delta));
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
 const formatSchedule = (schedule: CronSchedule) => {
-  if (schedule.kind === "at") return `at ${formatIsoMinute(schedule.atMs)}`;
-  if (schedule.kind === "every") return `every ${formatDuration(schedule.everyMs)}`;
+  if (schedule.kind === "at") {
+    return `at ${formatIsoMinute(schedule.at)}`;
+  }
+  if (schedule.kind === "every") {
+    return `every ${formatDurationHuman(schedule.everyMs)}`;
+  }
   return schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
 };
 
 const formatStatus = (job: CronJob) => {
-  if (!job.enabled) return "disabled";
-  if (job.state.runningAtMs) return "running";
+  if (!job.enabled) {
+    return "disabled";
+  }
+  if (job.state.runningAtMs) {
+    return "running";
+  }
   return job.state.lastStatus ?? "idle";
 };
 
@@ -154,14 +185,22 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
-    const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
+    const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "default", CRON_AGENT_PAD), CRON_AGENT_PAD);
 
     const coloredStatus = (() => {
-      if (statusRaw === "ok") return colorize(rich, theme.success, statusLabel);
-      if (statusRaw === "error") return colorize(rich, theme.error, statusLabel);
-      if (statusRaw === "running") return colorize(rich, theme.warn, statusLabel);
-      if (statusRaw === "skipped") return colorize(rich, theme.muted, statusLabel);
+      if (statusRaw === "ok") {
+        return colorize(rich, theme.success, statusLabel);
+      }
+      if (statusRaw === "error") {
+        return colorize(rich, theme.error, statusLabel);
+      }
+      if (statusRaw === "running") {
+        return colorize(rich, theme.warn, statusLabel);
+      }
+      if (statusRaw === "skipped") {
+        return colorize(rich, theme.muted, statusLabel);
+      }
       return colorize(rich, theme.muted, statusLabel);
     })();
 

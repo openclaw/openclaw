@@ -1,6 +1,5 @@
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   deleteMessageDiscord,
   editMessageDiscord,

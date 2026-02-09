@@ -2,10 +2,9 @@
  * Tests for Nostr Profile Import
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-import { mergeProfiles, type ProfileImportOptions } from "./nostr-profile-import.js";
+import { describe, it, expect } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
+import { mergeProfiles } from "./nostr-profile-import.js";
 
 // Note: importProfileFromRelays requires real network calls or complex mocking
 // of nostr-tools SimplePool, so we focus on unit testing mergeProfiles

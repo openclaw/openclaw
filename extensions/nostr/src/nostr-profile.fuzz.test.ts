@@ -1,18 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { getPublicKey } from "nostr-tools";
+import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
   profileToContent,
   validateProfile,
   sanitizeProfileForDisplay,
 } from "./nostr-profile.js";
-import type { NostrProfile } from "./config-schema.js";
 
 // Test private key
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_SK = new Uint8Array(
-  TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16))
-);
+const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
 
 // ============================================================================
 // Unicode Attack Vectors
@@ -101,8 +98,7 @@ describe("profile unicode attacks", () => {
     });
 
     it("handles excessive combining characters (Zalgo text)", () => {
-      const zalgo =
-        "t̷̢̧̨̡̛̛̛͎̩̝̪̲̲̞̠̹̗̩͓̬̱̪̦͙̬̲̤͙̱̫̝̪̱̫̯̬̭̠̖̲̥̖̫̫̤͇̪̣̫̪̖̱̯̣͎̯̲̱̤̪̣̖̲̪̯͓̖̤̫̫̲̱̲̫̲̖̫̪̯̱̱̪̖̯e̶̡̧̨̧̛̛̛̖̪̯̱̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪s̶̨̧̛̛̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯t";
+      const zalgo = "t̷̢̧̨̡̛̛̛͎̩̝̪̲̲̞̠̹̗̩͓̬̱̪̦͙̬̲̤͙̱̫̝̪̱̫̯̬̭̠̖̲̥̖̫̫̤͇̪̣̫̪̖̱̯̣͎̯̲̱̤̪̣̖̲̪̯͓̖̤̫̫̲̱̲̫̲̖̫̪̯̱̱̪̖̯e̶̡̧̨̧̛̛̛̖̪̯̱̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪s̶̨̧̛̛̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯t";
       const profile: NostrProfile = {
         name: zalgo.slice(0, 256), // Truncate to fit limit
       };
@@ -402,7 +398,9 @@ describe("profile type confusion", () => {
   });
 
   it("rejects object as picture", () => {
-    const result = validateProfile({ picture: { url: "https://example.com" } as unknown as string });
+    const result = validateProfile({
+      picture: { url: "https://example.com" } as unknown as string,
+    });
     expect(result.valid).toBe(false);
   });
 
@@ -423,7 +421,7 @@ describe("profile type confusion", () => {
 
   it("handles prototype pollution attempt", () => {
     const malicious = JSON.parse('{"__proto__": {"polluted": true}}') as unknown;
-    const result = validateProfile(malicious);
+    validateProfile(malicious);
     // Should not pollute Object.prototype
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });

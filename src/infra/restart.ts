@@ -19,8 +19,12 @@ let sigusr1AuthorizedUntil = 0;
 let sigusr1ExternalAllowed = false;
 
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
-  if (sigusr1AuthorizedCount <= 0) return;
-  if (now <= sigusr1AuthorizedUntil) return;
+  if (sigusr1AuthorizedCount <= 0) {
+    return;
+  }
+  if (now <= sigusr1AuthorizedUntil) {
+    return;
+  }
   sigusr1AuthorizedCount = 0;
   sigusr1AuthorizedUntil = 0;
 }
@@ -44,7 +48,9 @@ export function authorizeGatewaySigusr1Restart(delayMs = 0) {
 
 export function consumeGatewaySigusr1RestartAuthorization(): boolean {
   resetSigusr1AuthorizationIfExpired();
-  if (sigusr1AuthorizedCount <= 0) return false;
+  if (sigusr1AuthorizedCount <= 0) {
+    return false;
+  }
   sigusr1AuthorizedCount -= 1;
   if (sigusr1AuthorizedCount <= 0) {
     sigusr1AuthorizedUntil = 0;
@@ -63,8 +69,12 @@ function formatSpawnDetail(result: {
     return text.replace(/\s+/g, " ").trim();
   };
   if (result.error) {
-    if (result.error instanceof Error) return result.error.message;
-    if (typeof result.error === "string") return result.error;
+    if (result.error instanceof Error) {
+      return result.error.message;
+    }
+    if (typeof result.error === "string") {
+      return result.error;
+    }
     try {
       return JSON.stringify(result.error);
     } catch {
@@ -72,10 +82,16 @@ function formatSpawnDetail(result: {
     }
   }
   const stderr = clean(result.stderr);
-  if (stderr) return stderr;
+  if (stderr) {
+    return stderr;
+  }
   const stdout = clean(result.stdout);
-  if (stdout) return stdout;
-  if (typeof result.status === "number") return `exit ${result.status}`;
+  if (stdout) {
+    return stdout;
+  }
+  if (typeof result.status === "number") {
+    return `exit ${result.status}`;
+  }
   return "unknown error";
 }
 
@@ -87,7 +103,7 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
-export function triggerMoltbotRestart(): RestartAttempt {
+export function triggerOpenClawRestart(): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
@@ -95,8 +111,8 @@ export function triggerMoltbotRestart(): RestartAttempt {
   if (process.platform !== "darwin") {
     if (process.platform === "linux") {
       const unit = normalizeSystemdUnit(
-        process.env.CLAWDBOT_SYSTEMD_UNIT,
-        process.env.CLAWDBOT_PROFILE,
+        process.env.OPENCLAW_SYSTEMD_UNIT,
+        process.env.OPENCLAW_PROFILE,
       );
       const userArgs = ["--user", "restart", unit];
       tried.push(`systemctl ${userArgs.join(" ")}`);
@@ -130,8 +146,8 @@ export function triggerMoltbotRestart(): RestartAttempt {
   }
 
   const label =
-    process.env.CLAWDBOT_LAUNCHD_LABEL ||
-    resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
+    process.env.OPENCLAW_LAUNCHD_LABEL ||
+    resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
   const args = ["kickstart", "-k", target];

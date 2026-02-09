@@ -1,7 +1,7 @@
+import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { logWebSelfId, sendMessageWhatsApp } from "../channels/web/index.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";

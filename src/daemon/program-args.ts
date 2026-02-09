@@ -20,7 +20,9 @@ function isBunRuntime(execPath: string): boolean {
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
-  if (!argv1) throw new Error("Unable to resolve CLI entrypoint path");
+  if (!argv1) {
+    throw new Error("Unable to resolve CLI entrypoint path");
+  }
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await resolveRealpathSafe(normalized);
@@ -29,7 +31,7 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
     await fs.access(resolvedPath);
     // Prefer the original (possibly symlinked) path over the resolved realpath.
     // This keeps LaunchAgent/systemd paths stable across package version updates,
-    // since symlinks like node_modules/moltbot -> .pnpm/moltbot@X.Y.Z/...
+    // since symlinks like node_modules/openclaw -> .pnpm/openclaw@X.Y.Z/...
     // are automatically updated by pnpm, while the resolved path contains
     // version-specific directories that break after updates.
     const normalizedLooksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(normalized);
@@ -73,7 +75,9 @@ function buildDistCandidates(...inputs: string[]): string[] {
   const seen = new Set<string>();
 
   for (const inputPath of inputs) {
-    if (!inputPath) continue;
+    if (!inputPath) {
+      continue;
+    }
     const baseDir = path.dirname(inputPath);
     appendDistCandidates(candidates, seen, path.resolve(baseDir, ".."));
     appendDistCandidates(candidates, seen, baseDir);
@@ -92,7 +96,9 @@ function appendDistCandidates(candidates: string[], seen: Set<string>, baseDir: 
     path.join(distDir, "entry.mjs"),
   ];
   for (const entry of distEntries) {
-    if (seen.has(entry)) continue;
+    if (seen.has(entry)) {
+      continue;
+    }
     seen.add(entry);
     candidates.push(entry);
   }
@@ -105,8 +111,12 @@ function appendNodeModulesBinCandidates(
 ): void {
   const parts = inputPath.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0) return;
-  if (parts[binIndex - 1] !== "node_modules") return;
+  if (binIndex <= 0) {
+    return;
+  }
+  if (parts[binIndex - 1] !== "node_modules") {
+    return;
+  }
   const binName = path.basename(inputPath);
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   const packageRoot = path.join(nodeModulesDir, binName);
@@ -115,7 +125,9 @@ function appendNodeModulesBinCandidates(
 
 function resolveRepoRootForDev(): string {
   const argv1 = process.argv[1];
-  if (!argv1) throw new Error("Unable to resolve repo root");
+  if (!argv1) {
+    throw new Error("Unable to resolve repo root");
+  }
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
   const srcIndex = parts.lastIndexOf("src");
@@ -141,7 +153,9 @@ async function resolveBinaryPath(binary: string): Promise<string> {
   try {
     const output = execSync(`${cmd} ${binary}`, { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
-    if (!resolved) throw new Error("empty");
+    if (!resolved) {
+      throw new Error("empty");
+    }
     await fs.access(resolved);
     return resolved;
   } catch {
@@ -252,10 +266,18 @@ export async function resolveNodeProgramArguments(params: {
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls || params.tlsFingerprint) args.push("--tls");
-  if (params.tlsFingerprint) args.push("--tls-fingerprint", params.tlsFingerprint);
-  if (params.nodeId) args.push("--node-id", params.nodeId);
-  if (params.displayName) args.push("--display-name", params.displayName);
+  if (params.tls || params.tlsFingerprint) {
+    args.push("--tls");
+  }
+  if (params.tlsFingerprint) {
+    args.push("--tls-fingerprint", params.tlsFingerprint);
+  }
+  if (params.nodeId) {
+    args.push("--node-id", params.nodeId);
+  }
+  if (params.displayName) {
+    args.push("--display-name", params.displayName);
+  }
   return resolveCliProgramArguments({
     args,
     dev: params.dev,

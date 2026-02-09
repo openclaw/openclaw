@@ -1,3 +1,9 @@
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageSummary,
+} from "./provider-usage.types.js";
+import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchAntigravityUsage,
@@ -15,12 +21,6 @@ import {
   usageProviders,
   withTimeout,
 } from "./provider-usage.shared.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageProviderId,
-  UsageSummary,
-} from "./provider-usage.types.js";
-import { resolveFetch } from "./fetch.js";
 
 type UsageSummaryOptions = {
   now?: number;
@@ -95,8 +95,12 @@ export async function loadProviderUsageSummary(
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) return true;
-    if (!entry.error) return true;
+    if (entry.windows.length > 0) {
+      return true;
+    }
+    if (!entry.error) {
+      return true;
+    }
     return !ignoredErrors.has(entry.error);
   });
 

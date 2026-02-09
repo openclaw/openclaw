@@ -6,14 +6,20 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed) return "/";
-  if (trimmed === "./") return "./";
-  if (trimmed.endsWith("/")) return trimmed;
+  if (!trimmed) {
+    return "/";
+  }
+  if (trimmed === "./") {
+    return "./";
+  }
+  if (trimmed.endsWith("/")) {
+    return trimmed;
+  }
   return `${trimmed}/`;
 }
 
-export default defineConfig(({ command }) => {
-  const envBase = process.env.CLAWDBOT_CONTROL_UI_BASE_PATH?.trim();
+export default defineConfig(() => {
+  const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   return {
     base,

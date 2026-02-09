@@ -1,7 +1,7 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
@@ -9,7 +9,7 @@ import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./arch
 const tempDirs: string[] = [];
 
 async function makeTempDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-archive-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-archive-"));
   tempDirs.push(dir);
   return dir;
 }

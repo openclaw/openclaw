@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-
 import { createSlackWebClient } from "./client.js";
 
 export type SlackUserLookup = {
@@ -43,12 +42,20 @@ type SlackListUsersResponse = {
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) return {};
+  if (!trimmed) {
+    return {};
+  }
   const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-  if (mention) return { id: mention[1]?.toUpperCase() };
+  if (mention) {
+    return { id: mention[1]?.toUpperCase() };
+  }
   const prefixed = trimmed.replace(/^(slack:|user:)/i, "");
-  if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) return { id: prefixed.toUpperCase() };
-  if (trimmed.includes("@") && !trimmed.startsWith("@")) return { email: trimmed.toLowerCase() };
+  if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) {
+    return { id: prefixed.toUpperCase() };
+  }
+  if (trimmed.includes("@") && !trimmed.startsWith("@")) {
+    return { email: trimmed.toLowerCase() };
+  }
   const name = trimmed.replace(/^@/, "").trim();
   return name ? { name } : {};
 }
@@ -64,7 +71,9 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
     for (const member of res.members ?? []) {
       const id = member.id?.trim();
       const name = member.name?.trim();
-      if (!id || !name) continue;
+      if (!id || !name) {
+        continue;
+      }
       const profile = member.profile ?? {};
       users.push({
         id,
@@ -85,15 +94,23 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
 
 function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: string }): number {
   let score = 0;
-  if (!user.deleted) score += 3;
-  if (!user.isBot && !user.isAppUser) score += 2;
-  if (match.email && user.email === match.email) score += 5;
+  if (!user.deleted) {
+    score += 3;
+  }
+  if (!user.isBot && !user.isAppUser) {
+    score += 2;
+  }
+  if (match.email && user.email === match.email) {
+    score += 5;
+  }
   if (match.name) {
     const target = match.name.toLowerCase();
     const candidates = [user.name, user.displayName, user.realName]
       .map((value) => value?.toLowerCase())
       .filter(Boolean) as string[];
-    if (candidates.some((value) => value === target)) score += 2;
+    if (candidates.some((value) => value === target)) {
+      score += 2;
+    }
   }
   return score;
 }
@@ -127,7 +144,7 @@ export async function resolveSlackUserAllowlist(params: {
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .sort((a, b) => b.score - a.score);
+          .toSorted((a, b) => b.score - a.score);
         const best = scored[0]?.user ?? matches[0];
         results.push({
           input,
@@ -153,7 +170,7 @@ export async function resolveSlackUserAllowlist(params: {
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .sort((a, b) => b.score - a.score);
+          .toSorted((a, b) => b.score - a.score);
         const best = scored[0]?.user ?? matches[0];
         results.push({
           input,

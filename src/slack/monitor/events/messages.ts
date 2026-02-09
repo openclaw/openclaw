@@ -1,10 +1,5 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-
-import { danger } from "../../../globals.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
-import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type {
@@ -12,6 +7,9 @@ import type {
   SlackMessageDeletedEvent,
   SlackThreadBroadcastEvent,
 } from "../types.js";
+import { danger } from "../../../globals.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { resolveSlackChannelLabel } from "../channel-config.js";
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
@@ -21,7 +19,9 @@ export function registerSlackMessageEvents(params: {
 
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
 
       const message = event as SlackMessageEvent;
       if (message.subtype === "message_changed") {
@@ -119,7 +119,9 @@ export function registerSlackMessageEvents(params: {
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
 
       const mention = event as SlackAppMentionEvent;
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {

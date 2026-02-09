@@ -1,8 +1,8 @@
 import net from "node:net";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { resolveLsofCommand } from "./ports-lsof.js";
-import { buildPortHints } from "./ports-format.js";
 import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { buildPortHints } from "./ports-format.js";
+import { resolveLsofCommand } from "./ports-lsof.js";
 
 type CommandResult = {
   stdout: string;
@@ -39,7 +39,9 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   let current: PortListener = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      if (current.pid || current.command) listeners.push(current);
+      if (current.pid || current.command) {
+        listeners.push(current);
+      }
       const pid = Number.parseInt(line.slice(1), 10);
       current = Number.isFinite(pid) ? { pid } : {};
     } else if (line.startsWith("c")) {
@@ -47,23 +49,31 @@ function parseLsofFieldOutput(output: string): PortListener[] {
     } else if (line.startsWith("n")) {
       // TCP 127.0.0.1:18789 (LISTEN)
       // TCP *:18789 (LISTEN)
-      if (!current.address) current.address = line.slice(1);
+      if (!current.address) {
+        current.address = line.slice(1);
+      }
     }
   }
-  if (current.pid || current.command) listeners.push(current);
+  if (current.pid || current.command) {
+    listeners.push(current);
+  }
   return listeners;
 }
 
 async function resolveUnixCommandLine(pid: number): Promise<string | undefined> {
   const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "command="]);
-  if (res.code !== 0) return undefined;
+  if (res.code !== 0) {
+    return undefined;
+  }
   const line = res.stdout.trim();
   return line || undefined;
 }
 
 async function resolveUnixUser(pid: number): Promise<string | undefined> {
   const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "user="]);
-  if (res.code !== 0) return undefined;
+  if (res.code !== 0) {
+    return undefined;
+  }
   const line = res.stdout.trim();
   return line || undefined;
 }
@@ -78,13 +88,19 @@ async function readUnixListeners(
     const listeners = parseLsofFieldOutput(res.stdout);
     await Promise.all(
       listeners.map(async (listener) => {
-        if (!listener.pid) return;
+        if (!listener.pid) {
+          return;
+        }
         const [commandLine, user] = await Promise.all([
           resolveUnixCommandLine(listener.pid),
           resolveUnixUser(listener.pid),
         ]);
-        if (commandLine) listener.commandLine = commandLine;
-        if (user) listener.user = user;
+        if (commandLine) {
+          listener.commandLine = commandLine;
+        }
+        if (user) {
+          listener.user = user;
+        }
       }),
     );
     return { listeners, detail: res.stdout.trim() || undefined, errors };
@@ -93,9 +109,13 @@ async function readUnixListeners(
   if (res.code === 1 && !res.error && !stderr) {
     return { listeners: [], detail: undefined, errors };
   }
-  if (res.error) errors.push(res.error);
+  if (res.error) {
+    errors.push(res.error);
+  }
   const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
-  if (detail) errors.push(detail);
+  if (detail) {
+    errors.push(detail);
+  }
   return { listeners: [], detail: undefined, errors };
 }
 
@@ -104,17 +124,29 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
   const portToken = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line) continue;
-    if (!line.toLowerCase().includes("listen")) continue;
-    if (!line.includes(portToken)) continue;
+    if (!line) {
+      continue;
+    }
+    if (!line.toLowerCase().includes("listen")) {
+      continue;
+    }
+    if (!line.includes(portToken)) {
+      continue;
+    }
     const parts = line.split(/\s+/);
-    if (parts.length < 4) continue;
+    if (parts.length < 4) {
+      continue;
+    }
     const pidRaw = parts.at(-1);
     const pid = pidRaw ? Number.parseInt(pidRaw, 10) : NaN;
     const localAddr = parts[1];
     const listener: PortListener = {};
-    if (Number.isFinite(pid)) listener.pid = pid;
-    if (localAddr?.includes(portToken)) listener.address = localAddr;
+    if (Number.isFinite(pid)) {
+      listener.pid = pid;
+    }
+    if (localAddr?.includes(portToken)) {
+      listener.address = localAddr;
+    }
     listeners.push(listener);
   }
   return listeners;
@@ -122,10 +154,14 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
 
 async function resolveWindowsImageName(pid: number): Promise<string | undefined> {
   const res = await runCommandSafe(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "LIST"]);
-  if (res.code !== 0) return undefined;
+  if (res.code !== 0) {
+    return undefined;
+  }
   for (const rawLine of res.stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line.toLowerCase().startsWith("image name:")) continue;
+    if (!line.toLowerCase().startsWith("image name:")) {
+      continue;
+    }
     const value = line.slice("image name:".length).trim();
     return value || undefined;
   }
@@ -142,10 +178,14 @@ async function resolveWindowsCommandLine(pid: number): Promise<string | undefine
     "CommandLine",
     "/value",
   ]);
-  if (res.code !== 0) return undefined;
+  if (res.code !== 0) {
+    return undefined;
+  }
   for (const rawLine of res.stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line.toLowerCase().startsWith("commandline=")) continue;
+    if (!line.toLowerCase().startsWith("commandline=")) {
+      continue;
+    }
     const value = line.slice("commandline=".length).trim();
     return value || undefined;
   }
@@ -158,21 +198,31 @@ async function readWindowsListeners(
   const errors: string[] = [];
   const res = await runCommandSafe(["netstat", "-ano", "-p", "tcp"]);
   if (res.code !== 0) {
-    if (res.error) errors.push(res.error);
+    if (res.error) {
+      errors.push(res.error);
+    }
     const detail = [res.stderr.trim(), res.stdout.trim()].filter(Boolean).join("\n");
-    if (detail) errors.push(detail);
+    if (detail) {
+      errors.push(detail);
+    }
     return { listeners: [], errors };
   }
   const listeners = parseNetstatListeners(res.stdout, port);
   await Promise.all(
     listeners.map(async (listener) => {
-      if (!listener.pid) return;
+      if (!listener.pid) {
+        return;
+      }
       const [imageName, commandLine] = await Promise.all([
         resolveWindowsImageName(listener.pid),
         resolveWindowsCommandLine(listener.pid),
       ]);
-      if (imageName) listener.command = imageName;
-      if (commandLine) listener.commandLine = commandLine;
+      if (imageName) {
+        listener.command = imageName;
+      }
+      if (commandLine) {
+        listener.commandLine = commandLine;
+      }
     }),
   );
   return { listeners, detail: res.stdout.trim() || undefined, errors };
@@ -191,7 +241,9 @@ async function tryListenOnHost(port: number, host: string): Promise<PortUsageSta
     });
     return "free";
   } catch (err) {
-    if (isErrno(err) && err.code === "EADDRINUSE") return "busy";
+    if (isErrno(err) && err.code === "EADDRINUSE") {
+      return "busy";
+    }
     if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
       return "skip";
     }
@@ -204,8 +256,12 @@ async function checkPortInUse(port: number): Promise<PortUsageStatus> {
   let sawUnknown = false;
   for (const host of hosts) {
     const result = await tryListenOnHost(port, host);
-    if (result === "busy") return "busy";
-    if (result === "unknown") sawUnknown = true;
+    if (result === "busy") {
+      return "busy";
+    }
+    if (result === "unknown") {
+      sawUnknown = true;
+    }
   }
   return sawUnknown ? "unknown" : "free";
 }

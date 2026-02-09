@@ -1,9 +1,9 @@
-import crypto from "node:crypto";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Type } from "@sinclair/typebox";
-
+import crypto from "node:crypto";
+import path from "node:path";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -28,6 +28,7 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo, logWarn } from "../logger.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   type ProcessSession,
   type SessionStdin,
@@ -38,12 +39,11 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildDockerExecArgs,
   buildSandboxEnv,
   chunkString,
-  clampNumber,
+  clampWithDefault,
   coerceEnv,
   killSession,
   readEnvInt,
@@ -51,20 +51,68 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
-import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
-const DEFAULT_MAX_OUTPUT = clampNumber(
+// Security: Blocklist of environment variables that could alter execution flow
+// or inject code when running on non-sandboxed hosts (Gateway/Node).
+const DANGEROUS_HOST_ENV_VARS = new Set([
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "LD_AUDIT",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "RUBYLIB",
+  "PERL5LIB",
+  "BASH_ENV",
+  "ENV",
+  "GCONV_PATH",
+  "IFS",
+  "SSLKEYLOGFILE",
+]);
+const DANGEROUS_HOST_ENV_PREFIXES = ["DYLD_", "LD_"];
+
+// Centralized sanitization helper.
+// Throws an error if dangerous variables or PATH modifications are detected on the host.
+function validateHostEnv(env: Record<string, string>): void {
+  for (const key of Object.keys(env)) {
+    const upperKey = key.toUpperCase();
+
+    // 1. Block known dangerous variables (Fail Closed)
+    if (DANGEROUS_HOST_ENV_PREFIXES.some((prefix) => upperKey.startsWith(prefix))) {
+      throw new Error(
+        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
+      );
+    }
+    if (DANGEROUS_HOST_ENV_VARS.has(upperKey)) {
+      throw new Error(
+        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
+      );
+    }
+
+    // 2. Strictly block PATH modification on host
+    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
+    if (upperKey === "PATH") {
+      throw new Error(
+        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
+      );
+    }
+  }
+}
+const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
 );
-const DEFAULT_PENDING_MAX_OUTPUT = clampNumber(
-  readEnvInt("CLAWDBOT_BASH_PENDING_MAX_OUTPUT_CHARS"),
+const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
+  readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
@@ -252,13 +300,19 @@ function normalizeNotifyOutput(value: string) {
 }
 
 function normalizePathPrepend(entries?: string[]) {
-  if (!Array.isArray(entries)) return [];
+  if (!Array.isArray(entries)) {
+    return [];
+  }
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const entry of entries) {
-    if (typeof entry !== "string") continue;
+    if (typeof entry !== "string") {
+      continue;
+    }
     const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
     seen.add(trimmed);
     normalized.push(trimmed);
   }
@@ -266,7 +320,9 @@ function normalizePathPrepend(entries?: string[]) {
 }
 
 function mergePathPrepend(existing: string | undefined, prepend: string[]) {
-  if (prepend.length === 0) return existing;
+  if (prepend.length === 0) {
+    return existing;
+  }
   const partsExisting = (existing ?? "")
     .split(path.delimiter)
     .map((part) => part.trim())
@@ -274,7 +330,9 @@ function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   const merged: string[] = [];
   const seen = new Set<string>();
   for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) continue;
+    if (seen.has(part)) {
+      continue;
+    }
     seen.add(part);
     merged.push(part);
   }
@@ -286,27 +344,43 @@ function applyPathPrepend(
   prepend: string[],
   options?: { requireExisting?: boolean },
 ) {
-  if (prepend.length === 0) return;
-  if (options?.requireExisting && !env.PATH) return;
+  if (prepend.length === 0) {
+    return;
+  }
+  if (options?.requireExisting && !env.PATH) {
+    return;
+  }
   const merged = mergePathPrepend(env.PATH, prepend);
-  if (merged) env.PATH = merged;
+  if (merged) {
+    env.PATH = merged;
+  }
 }
 
 function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
-  if (!shellPath) return;
+  if (!shellPath) {
+    return;
+  }
   const entries = shellPath
     .split(path.delimiter)
     .map((part) => part.trim())
     .filter(Boolean);
-  if (entries.length === 0) return;
+  if (entries.length === 0) {
+    return;
+  }
   const merged = mergePathPrepend(env.PATH, entries);
-  if (merged) env.PATH = merged;
+  if (merged) {
+    env.PATH = merged;
+  }
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) return;
+  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+    return;
+  }
   const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) return;
+  if (!sessionKey) {
+    return;
+  }
   session.exitNotified = true;
   const exitLabel = session.exitSignal
     ? `signal ${session.exitSignal}`
@@ -329,13 +403,17 @@ function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
   }
-  if (value <= 0) return 0;
+  if (value <= 0) {
+    return 0;
+  }
   return Math.floor(value);
 }
 
 function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextKey?: string }) {
   const sessionKey = opts.sessionKey?.trim();
-  if (!sessionKey) return;
+  if (!sessionKey) {
+    return;
+  }
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
   requestHeartbeatNow({ reason: "exec-event" });
 }
@@ -528,13 +606,17 @@ async function runExecProcess(opts: {
   let resolveFn: ((outcome: ExecProcessOutcome) => void) | null = null;
 
   const settle = (outcome: ExecProcessOutcome) => {
-    if (settled) return;
+    if (settled) {
+      return;
+    }
     settled = true;
     resolveFn?.(outcome);
   };
 
   const finalizeTimeout = () => {
-    if (session.exited) return;
+    if (session.exited) {
+      return;
+    }
     markExited(session, null, "SIGKILL", "failed");
     maybeNotifyOnExit(session, "failed");
     const aggregated = session.aggregated.trim();
@@ -567,7 +649,9 @@ async function runExecProcess(opts: {
   }
 
   const emitUpdate = () => {
-    if (!opts.onUpdate) return;
+    if (!opts.onUpdate) {
+      return;
+    }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
     opts.onUpdate({
@@ -619,8 +703,12 @@ async function runExecProcess(opts: {
   const promise = new Promise<ExecProcessOutcome>((resolve) => {
     resolveFn = resolve;
     const handleExit = (code: number | null, exitSignal: NodeJS.Signals | number | null) => {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      if (timeoutFinalizeTimer) clearTimeout(timeoutFinalizeTimer);
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+      if (timeoutFinalizeTimer) {
+        clearTimeout(timeoutFinalizeTimer);
+      }
       const durationMs = Date.now() - startedAt;
       const wasSignal = exitSignal != null;
       const isSuccess = code === 0 && !wasSignal && !timedOut;
@@ -631,7 +719,9 @@ async function runExecProcess(opts: {
         session.stdin.destroyed = true;
       }
 
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       const aggregated = session.aggregated.trim();
       if (!isSuccess) {
         const reason = timedOut
@@ -675,8 +765,12 @@ async function runExecProcess(opts: {
       });
 
       child.once("error", (err) => {
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        if (timeoutFinalizeTimer) clearTimeout(timeoutFinalizeTimer);
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
+        if (timeoutFinalizeTimer) {
+          clearTimeout(timeoutFinalizeTimer);
+        }
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
         const aggregated = session.aggregated.trim();
@@ -705,9 +799,9 @@ async function runExecProcess(opts: {
 
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
-  const defaultBackgroundMs = clampNumber(
+  const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
     10,
@@ -766,7 +860,12 @@ export function createExecTool(
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
-          : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
+          : clampWithDefault(
+              params.yieldMs ?? defaultBackgroundMs,
+              defaultBackgroundMs,
+              10,
+              120_000,
+            )
         : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
@@ -795,8 +894,12 @@ export function createExecTool(
           const contextParts: string[] = [];
           const provider = defaults?.messageProvider?.trim();
           const sessionKey = defaults?.sessionKey?.trim();
-          if (provider) contextParts.push(`provider=${provider}`);
-          if (sessionKey) contextParts.push(`session=${sessionKey}`);
+          if (provider) {
+            contextParts.push(`provider=${provider}`);
+          }
+          if (sessionKey) {
+            contextParts.push(`session=${sessionKey}`);
+          }
           if (!elevatedDefaults?.enabled) {
             gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
           } else {
@@ -867,7 +970,15 @@ export function createExecTool(
       }
 
       const baseEnv = coerceEnv(process.env);
+
+      // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
+      // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
+      if (host !== "sandbox" && params.env) {
+        validateHostEnv(params.env);
+      }
+
       const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
@@ -876,6 +987,7 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
@@ -912,6 +1024,7 @@ export function createExecTool(
           if (!nodeQuery && String(err).includes("node required")) {
             throw new Error(
               "exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).",
+              { cause: err },
             );
           }
           throw err;
@@ -926,7 +1039,9 @@ export function createExecTool(
           );
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+
         const nodeEnv = params.env ? { ...params.env } : undefined;
+
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
         }
@@ -936,16 +1051,17 @@ export function createExecTool(
           safeBins: new Set(),
           cwd: workdir,
           env,
+          platform: nodeInfo?.platform,
         });
         let analysisOk = baseAllowlistEval.analysisOk;
         let allowlistSatisfied = false;
         if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
           try {
-            const approvalsSnapshot = (await callGatewayTool(
+            const approvalsSnapshot = await callGatewayTool<{ file: string }>(
               "exec.approvals.node.get",
               { timeoutMs: 10_000 },
               { nodeId },
-            )) as { file?: unknown } | null;
+            );
             const approvalsFile =
               approvalsSnapshot && typeof approvalsSnapshot === "object"
                 ? approvalsSnapshot.file
@@ -963,6 +1079,7 @@ export function createExecTool(
                 safeBins: new Set(),
                 cwd: workdir,
                 env,
+                platform: nodeInfo?.platform,
               });
               allowlistSatisfied = allowlistEval.allowlistSatisfied;
               analysisOk = allowlistEval.analysisOk;
@@ -1016,7 +1133,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = (await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1031,11 +1148,12 @@ export function createExecTool(
                   sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
-              )) as { decision?: string } | null;
-              decision =
+              );
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${commandText}`,
@@ -1097,7 +1215,9 @@ export function createExecTool(
                 { sessionKey: notifySessionKey, contextKey },
               );
             } finally {
-              if (runningTimer) clearTimeout(runningTimer);
+              if (runningTimer) {
+                clearTimeout(runningTimer);
+              }
             }
           })();
 
@@ -1124,33 +1244,32 @@ export function createExecTool(
         }
 
         const startedAt = Date.now();
-        const raw = (await callGatewayTool(
+        const raw = await callGatewayTool(
           "node.invoke",
           { timeoutMs: invokeTimeoutMs },
           buildInvokeParams(false, null),
-        )) as {
-          payload?: {
-            exitCode?: number;
-            timedOut?: boolean;
-            success?: boolean;
-            stdout?: string;
-            stderr?: string;
-            error?: string | null;
-          };
-        };
-        const payload = raw?.payload ?? {};
+        );
+        const payload =
+          raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
+        const payloadObj =
+          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+        const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
+        const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
+        const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+        const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+        const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
         return {
           content: [
             {
               type: "text",
-              text: payload.stdout || payload.stderr || payload.error || "",
+              text: stdout || stderr || errorText || "",
             },
           ],
           details: {
-            status: payload.success ? "completed" : "failed",
-            exitCode: payload.exitCode ?? null,
+            status: success ? "completed" : "failed",
+            exitCode,
             durationMs: Date.now() - startedAt,
-            aggregated: [payload.stdout, payload.stderr, payload.error].filter(Boolean).join("\n"),
+            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
             cwd: workdir,
           } satisfies ExecToolDetails,
         };
@@ -1170,6 +1289,7 @@ export function createExecTool(
           safeBins,
           cwd: workdir,
           env,
+          platform: process.platform,
         });
         const allowlistMatches = allowlistEval.allowlistMatches;
         const analysisOk = allowlistEval.analysisOk;
@@ -1197,7 +1317,7 @@ export function createExecTool(
           void (async () => {
             let decision: string | null = null;
             try {
-              const decisionResult = (await callGatewayTool(
+              const decisionResult = await callGatewayTool<{ decision: string }>(
                 "exec.approval.request",
                 { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
                 {
@@ -1212,11 +1332,12 @@ export function createExecTool(
                   sessionKey: defaults?.sessionKey,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
-              )) as { decision?: string } | null;
-              decision =
+              );
+              const decisionValue =
                 decisionResult && typeof decisionResult === "object"
-                  ? (decisionResult.decision ?? null)
-                  : null;
+                  ? (decisionResult as { decision?: unknown }).decision
+                  : undefined;
+              decision = typeof decisionValue === "string" ? decisionValue : null;
             } catch {
               emitExecSystemEvent(
                 `Exec denied (gateway id=${approvalId}, approval-request-failed): ${commandText}`,
@@ -1275,7 +1396,9 @@ export function createExecTool(
             if (allowlistMatches.length > 0) {
               const seen = new Set<string>();
               for (const match of allowlistMatches) {
-                if (seen.has(match.pattern)) continue;
+                if (seen.has(match.pattern)) {
+                  continue;
+                }
                 seen.add(match.pattern);
                 recordAllowlistUse(
                   approvals.file,
@@ -1325,7 +1448,9 @@ export function createExecTool(
             }
 
             const outcome = await run.promise;
-            if (runningTimer) clearTimeout(runningTimer);
+            if (runningTimer) {
+              clearTimeout(runningTimer);
+            }
             const output = normalizeNotifyOutput(
               tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
             );
@@ -1341,8 +1466,7 @@ export function createExecTool(
               {
                 type: "text",
                 text:
-                  `${warningText}` +
-                  `Approval required (id ${approvalSlug}). ` +
+                  `${warningText}Approval required (id ${approvalSlug}). ` +
                   "Approve to run; updates will arrive after completion.",
               },
             ],
@@ -1365,7 +1489,9 @@ export function createExecTool(
         if (allowlistMatches.length > 0) {
           const seen = new Set<string>();
           for (const match of allowlistMatches) {
-            if (seen.has(match.pattern)) continue;
+            if (seen.has(match.pattern)) {
+              continue;
+            }
             seen.add(match.pattern);
             recordAllowlistUse(
               approvals.file,
@@ -1404,12 +1530,15 @@ export function createExecTool(
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
-        if (yielded || run.session.backgrounded) return;
+        if (yielded || run.session.backgrounded) {
+          return;
+        }
         run.kill();
       };
 
-      if (signal?.aborted) onAbortSignal();
-      else if (signal) {
+      if (signal?.aborted) {
+        onAbortSignal();
+      } else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
       }
 
@@ -1419,12 +1548,9 @@ export function createExecTool(
             content: [
               {
                 type: "text",
-                text:
-                  `${getWarningText()}` +
-                  `Command still running (session ${run.session.id}, pid ${
-                    run.session.pid ?? "n/a"
-                  }). ` +
-                  "Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
+                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                  run.session.pid ?? "n/a"
+                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
               },
             ],
             details: {
@@ -1438,8 +1564,12 @@ export function createExecTool(
           });
 
         const onYieldNow = () => {
-          if (yieldTimer) clearTimeout(yieldTimer);
-          if (yielded) return;
+          if (yieldTimer) {
+            clearTimeout(yieldTimer);
+          }
+          if (yielded) {
+            return;
+          }
           yielded = true;
           markBackgrounded(run.session);
           resolveRunning();
@@ -1450,7 +1580,9 @@ export function createExecTool(
             onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) return;
+              if (yielded) {
+                return;
+              }
               yielded = true;
               markBackgrounded(run.session);
               resolveRunning();
@@ -1460,8 +1592,12 @@ export function createExecTool(
 
         run.promise
           .then((outcome) => {
-            if (yieldTimer) clearTimeout(yieldTimer);
-            if (yielded || run.session.backgrounded) return;
+            if (yieldTimer) {
+              clearTimeout(yieldTimer);
+            }
+            if (yielded || run.session.backgrounded) {
+              return;
+            }
             if (outcome.status === "failed") {
               reject(new Error(outcome.reason ?? "Command failed."));
               return;
@@ -1483,8 +1619,12 @@ export function createExecTool(
             });
           })
           .catch((err) => {
-            if (yieldTimer) clearTimeout(yieldTimer);
-            if (yielded || run.session.backgrounded) return;
+            if (yieldTimer) {
+              clearTimeout(yieldTimer);
+            }
+            if (yielded || run.session.backgrounded) {
+              return;
+            }
             reject(err as Error);
           });
       });

@@ -1,4 +1,4 @@
-import MoltbotKit
+import OpenClawKit
 import Observation
 import SwiftUI
 import WebKit
@@ -13,7 +13,7 @@ final class ScreenController {
     var urlString: String = ""
     var errorText: String?
 
-    /// Callback invoked when a moltbot:// deep link is tapped in the canvas
+    /// Callback invoked when an openclaw:// deep link is tapped in the canvas
     var onDeepLink: ((URL) -> Void)?
 
     /// Callback invoked when the user clicks an A2UI action (e.g. button) inside the canvas web UI.
@@ -52,6 +52,20 @@ final class ScreenController {
 
     func navigate(to urlString: String) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            self.urlString = ""
+            self.reload()
+            return
+        }
+        if let url = URL(string: trimmed),
+           !url.isFileURL,
+           let host = url.host,
+           Self.isLoopbackHost(host)
+        {
+            // Never try to load loopback URLs from a remote gateway.
+            self.showDefaultCanvas()
+            return
+        }
         self.urlString = (trimmed == "/" ? "" : trimmed)
         self.reload()
     }
@@ -101,7 +115,7 @@ final class ScreenController {
         let js = """
         (() => {
           try {
-            const api = globalThis.__moltbot;
+            const api = globalThis.__openclaw;
             if (!api) return;
             if (typeof api.setDebugStatusEnabled === 'function') {
               api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
@@ -124,7 +138,8 @@ final class ScreenController {
                 let res = try await self.eval(javaScript: """
                 (() => {
                   try {
-                    return !!globalThis.clawdbotA2UI && typeof globalThis.clawdbotA2UI.applyMessages === 'function';
+                    const host = globalThis.openclawA2UI;
+                    return !!host && typeof host.applyMessages === 'function';
                   } catch (_) { return false; }
                 })()
                 """)
@@ -184,7 +199,7 @@ final class ScreenController {
 
     func snapshotBase64(
         maxWidth: CGFloat? = nil,
-        format: MoltbotCanvasSnapshotFormat,
+        format: OpenClawCanvasSnapshotFormat,
         quality: Double? = nil) async throws -> String
     {
         let config = WKSnapshotConfiguration()
@@ -229,7 +244,7 @@ final class ScreenController {
         subdirectory: String)
         -> URL?
     {
-        let bundle = MoltbotKitResources.bundle
+        let bundle = OpenClawKitResources.bundle
         return bundle.url(forResource: name, withExtension: ext, subdirectory: subdirectory)
             ?? bundle.url(forResource: name, withExtension: ext)
     }
@@ -238,6 +253,18 @@ final class ScreenController {
         name: "scaffold",
         ext: "html",
         subdirectory: "CanvasScaffold")
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.isEmpty { return true }
+        if normalized == "localhost" || normalized == "::1" || normalized == "0.0.0.0" {
+            return true
+        }
+        if normalized == "127.0.0.1" || normalized.hasPrefix("127.") {
+            return true
+        }
+        return false
+    }
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
         let std = url.standardizedFileURL
@@ -342,7 +369,7 @@ extension Double {
 
 // MARK: - Navigation Delegate
 
-/// Handles navigation policy to intercept moltbot:// deep links from canvas
+/// Handles navigation policy to intercept openclaw:// deep links from canvas
 @MainActor
 private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
     weak var controller: ScreenController?
@@ -357,8 +384,8 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
-        // Intercept moltbot:// deep links
-        if url.scheme == "moltbot" {
+        // Intercept openclaw:// deep links.
+        if url.scheme?.lowercased() == "openclaw" {
             decisionHandler(.cancel)
             self.controller?.onDeepLink?(url)
             return
@@ -386,14 +413,13 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
 }
 
 private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
-    static let messageName = "moltbotCanvasA2UIAction"
-    static let legacyMessageNames = ["canvas", "a2ui", "userAction", "action"]
-    static let handlerNames = [messageName] + legacyMessageNames
+    static let messageName = "openclawCanvasA2UIAction"
+    static let handlerNames = [messageName]
 
     weak var controller: ScreenController?
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == Self.messageName else { return }
+        guard Self.handlerNames.contains(message.name) else { return }
         guard let controller else { return }
 
         guard let url = message.webView?.url else { return }

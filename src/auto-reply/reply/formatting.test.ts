@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { createReplyReferencePlanner } from "./reply-reference.js";
@@ -69,6 +68,81 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ text: "message" });
     await vi.advanceTimersByTimeAsync(50);
     expect(flushes).toEqual(["short message"]);
+    coalescer.stop();
+  });
+
+  it("flushes each enqueued payload separately when flushOnEnqueue is set", async () => {
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+    coalescer.enqueue({ text: "Third paragraph" });
+
+    await Promise.resolve();
+    expect(flushes).toEqual(["First paragraph", "Second paragraph", "Third paragraph"]);
+    coalescer.stop();
+  });
+
+  it("still accumulates when flushOnEnqueue is not set (default)", async () => {
+    vi.useFakeTimers();
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 2000, idleMs: 100, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("flushes short payloads immediately when flushOnEnqueue is set", async () => {
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 10, maxChars: 200, idleMs: 50, joiner: "\n\n", flushOnEnqueue: true },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    coalescer.enqueue({ text: "Hi" });
+    await Promise.resolve();
+    expect(flushes).toEqual(["Hi"]);
+    coalescer.stop();
+  });
+
+  it("resets char budget per paragraph with flushOnEnqueue", async () => {
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 30, idleMs: 100, joiner: "\n\n", flushOnEnqueue: true },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    // Each 20-char payload fits within maxChars=30 individually
+    coalescer.enqueue({ text: "12345678901234567890" });
+    coalescer.enqueue({ text: "abcdefghijklmnopqrst" });
+
+    await Promise.resolve();
+    // Without flushOnEnqueue, these would be joined to 40+ chars and trigger maxChars split.
+    // With flushOnEnqueue, each is sent independently within budget.
+    expect(flushes).toEqual(["12345678901234567890", "abcdefghijklmnopqrst"]);
     coalescer.stop();
   });
 

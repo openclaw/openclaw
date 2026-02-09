@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createPinnedLookup, resolvePinnedHostname } from "./ssrf.js";
 
 describe("ssrf pinning", () => {
@@ -15,8 +14,11 @@ describe("ssrf pinning", () => {
 
     const first = await new Promise<{ address: string; family?: number }>((resolve, reject) => {
       pinned.lookup("example.com", (err, address, family) => {
-        if (err) reject(err);
-        else resolve({ address: address as string, family });
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ address: address, family });
+        }
       });
     });
     expect(first.address).toBe("93.184.216.34");
@@ -24,8 +26,11 @@ describe("ssrf pinning", () => {
 
     const all = await new Promise<unknown>((resolve, reject) => {
       pinned.lookup("example.com", { all: true }, (err, addresses) => {
-        if (err) reject(err);
-        else resolve(addresses);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(addresses);
+        }
       });
     });
     expect(Array.isArray(all)).toBe(true);
@@ -52,8 +57,11 @@ describe("ssrf pinning", () => {
 
     const result = await new Promise<{ address: string }>((resolve, reject) => {
       lookup("other.test", (err, address) => {
-        if (err) reject(err);
-        else resolve({ address: address as string });
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ address: address });
+        }
       });
     });
 

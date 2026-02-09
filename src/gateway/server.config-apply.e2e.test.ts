@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-
 import {
   connectOk,
   getFreePort,
@@ -19,16 +18,19 @@ let port = 0;
 let previousToken: string | undefined;
 
 beforeAll(async () => {
-  previousToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
-  delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
   port = await getFreePort();
   server = await startGatewayServer(port);
 });
 
 afterAll(async () => {
   await server.close();
-  if (previousToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
-  else process.env.CLAWDBOT_GATEWAY_TOKEN = previousToken;
+  if (previousToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  }
 });
 
 const openClient = async () => {
@@ -49,7 +51,7 @@ describe("gateway config.apply", () => {
           id,
           method: "config.apply",
           params: {
-            raw: '{ "agents": { "list": [{ "id": "main", "workspace": "~/clawd" }] } }',
+            raw: '{ "agents": { "list": [{ "id": "main", "workspace": "~/openclaw" }] } }',
             sessionKey: "agent:main:whatsapp:dm:+15555550123",
             restartDelayMs: 0,
           },
@@ -62,7 +64,7 @@ describe("gateway config.apply", () => {
       expect(res.ok).toBe(true);
 
       // Verify sentinel file was created (restart was scheduled)
-      const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
 
       // Wait for file to be written
       await new Promise((resolve) => setTimeout(resolve, 100));

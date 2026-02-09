@@ -44,14 +44,14 @@ function replaceBlockLines(
   ];
 
   const replacement = replacementLines.join("\n");
-  if (!after) return `${before}${replacement}`;
+  if (!after) {
+    return `${before}${replacement}`;
+  }
   return `${before}${replacement}\n${after}`;
 }
 
 function renderKimiK2Ids(prefix: string) {
-  return MOONSHOT_KIMI_K2_MODELS.map(
-    (model) => `- \`${prefix}${model.id}\``,
-  );
+  return MOONSHOT_KIMI_K2_MODELS.map((model) => `- \`${prefix}${model.id}\``);
 }
 
 function renderMoonshotAliases() {
@@ -85,16 +85,13 @@ function renderMoonshotModels() {
 
 async function syncMoonshotDocs() {
   const moonshotDoc = path.join(repoRoot, "docs/providers/moonshot.md");
-  const conceptsDoc = path.join(
-    repoRoot,
-    "docs/concepts/model-providers.md",
-  );
+  const conceptsDoc = path.join(repoRoot, "docs/concepts/model-providers.md");
 
   let moonshotText = await readFile(moonshotDoc, "utf8");
   moonshotText = replaceBlockLines(
     moonshotText,
-    "<!-- moonshot-kimi-k2-ids:start -->",
-    "<!-- moonshot-kimi-k2-ids:end -->",
+    "{/_ moonshot-kimi-k2-ids:start _/ && null}",
+    "{/_ moonshot-kimi-k2-ids:end _/ && null}",
     renderKimiK2Ids(""),
   );
   moonshotText = replaceBlockLines(
@@ -113,8 +110,8 @@ async function syncMoonshotDocs() {
   let conceptsText = await readFile(conceptsDoc, "utf8");
   conceptsText = replaceBlockLines(
     conceptsText,
-    "<!-- moonshot-kimi-k2-model-refs:start -->",
-    "<!-- moonshot-kimi-k2-model-refs:end -->",
+    "{/_ moonshot-kimi-k2-model-refs:start _/ && null}",
+    "{/_ moonshot-kimi-k2-model-refs:end _/ && null}",
     renderKimiK2Ids("moonshot/"),
   );
 

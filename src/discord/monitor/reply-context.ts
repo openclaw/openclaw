@@ -1,7 +1,7 @@
 import type { Guild, Message, User } from "@buape/carbon";
-
 import { formatAgentEnvelope, type EnvelopeFormatOptions } from "../../auto-reply/envelope.js";
-import { formatDiscordUserTag, resolveTimestampMs } from "./format.js";
+import { resolveTimestampMs } from "./format.js";
+import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
 export function resolveReplyContext(
   message: Message,
@@ -9,13 +9,21 @@ export function resolveReplyContext(
   options?: { envelope?: EnvelopeFormatOptions },
 ): string | null {
   const referenced = message.referencedMessage;
-  if (!referenced?.author) return null;
+  if (!referenced?.author) {
+    return null;
+  }
   const referencedText = resolveDiscordMessageText(referenced, {
     includeForwarded: true,
   });
-  if (!referencedText) return null;
-  const fromLabel = referenced.author ? buildDirectLabel(referenced.author) : "Unknown";
-  const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${formatDiscordUserTag(referenced.author)} user id:${referenced.author?.id ?? "unknown"}]`;
+  if (!referencedText) {
+    return null;
+  }
+  const sender = resolveDiscordSenderIdentity({
+    author: referenced.author,
+    pluralkitInfo: null,
+  });
+  const fromLabel = referenced.author ? buildDirectLabel(referenced.author, sender.tag) : "Unknown";
+  const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${sender.tag ?? sender.label} user id:${sender.id}]`;
   return formatAgentEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -25,9 +33,10 @@ export function resolveReplyContext(
   });
 }
 
-export function buildDirectLabel(author: User) {
-  const username = formatDiscordUserTag(author);
-  return `${username} user id:${author.id}`;
+export function buildDirectLabel(author: User, tagOverride?: string) {
+  const username =
+    tagOverride?.trim() || resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
+  return `${username ?? "unknown"} user id:${author.id}`;
 }
 
 export function buildGuildLabel(params: { guild?: Guild; channelName: string; channelId: string }) {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   deliveryContextKey,
   deliveryContextFromSession,
@@ -74,6 +73,33 @@ describe("delivery context helpers", () => {
       to: "123",
       accountId: undefined,
       threadId: "999",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "telegram",
+        lastTo: " -1001 ",
+        origin: { threadId: 42 },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "-1001",
+      accountId: undefined,
+      threadId: 42,
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "telegram",
+        lastTo: " -1001 ",
+        deliveryContext: { threadId: " 777 " },
+        origin: { threadId: 42 },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "-1001",
+      accountId: undefined,
+      threadId: "777",
     });
   });
 

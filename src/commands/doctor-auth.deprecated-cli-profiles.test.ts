@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 
 let originalAgentDir: string | undefined;
 let originalPiAgentDir: string | undefined;
@@ -24,18 +22,18 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
 }
 
 beforeEach(() => {
-  originalAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
   originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-auth-"));
-  process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
+  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 });
 
 afterEach(() => {
   if (originalAgentDir === undefined) {
-    delete process.env.CLAWDBOT_AGENT_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
   } else {
-    process.env.CLAWDBOT_AGENT_DIR = originalAgentDir;
+    process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
   }
   if (originalPiAgentDir === undefined) {
     delete process.env.PI_CODING_AGENT_DIR;
@@ -50,7 +48,9 @@ afterEach(() => {
 
 describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
   it("removes deprecated CLI auth profiles from store + config", async () => {
-    if (!tempAgentDir) throw new Error("Missing temp agent dir");
+    if (!tempAgentDir) {
+      throw new Error("Missing temp agent dir");
+    }
     const authPath = path.join(tempAgentDir, "auth-profiles.json");
     fs.writeFileSync(
       authPath,

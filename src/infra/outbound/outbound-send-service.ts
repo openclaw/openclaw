@@ -1,11 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { throwIfAborted } from "./abort.js";
 import { sendMessage, sendPoll } from "./message.js";
 
 export type OutboundGatewayContext = {
@@ -18,7 +19,7 @@ export type OutboundGatewayContext = {
 };
 
 export type OutboundSendContext = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
   accountId?: string | null;
@@ -36,7 +37,9 @@ export type OutboundSendContext = {
 };
 
 function extractToolPayload(result: AgentToolResult<unknown>): unknown {
-  if (result.details !== undefined) return result.details;
+  if (result.details !== undefined) {
+    return result.details;
+  }
   const textBlock = Array.isArray(result.content)
     ? result.content.find(
         (block) =>
@@ -55,14 +58,6 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
     }
   }
   return result.content ?? result;
-}
-
-function throwIfAborted(abortSignal?: AbortSignal): void {
-  if (abortSignal?.aborted) {
-    const err = new Error("Message send aborted");
-    err.name = "AbortError";
-    throw err;
-  }
 }
 
 export async function executeSendAction(params: {

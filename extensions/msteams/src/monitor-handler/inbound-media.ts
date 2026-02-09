@@ -1,3 +1,4 @@
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
@@ -7,10 +8,9 @@ import {
   type MSTeamsHtmlAttachmentSummary,
   type MSTeamsInboundMedia,
 } from "../attachments.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 type MSTeamsLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
 export async function resolveMSTeamsInboundMedia(params: {
@@ -18,6 +18,7 @@ export async function resolveMSTeamsInboundMedia(params: {
   htmlSummary?: MSTeamsHtmlAttachmentSummary;
   maxBytes: number;
   allowHosts?: string[];
+  authAllowHosts?: string[];
   tokenProvider: MSTeamsAccessTokenProvider;
   conversationType: string;
   conversationId: string;
@@ -46,6 +47,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     maxBytes,
     tokenProvider,
     allowHosts,
+    authAllowHosts: params.authAllowHosts,
     preserveFilenames,
   });
 
@@ -64,7 +66,7 @@ export async function resolveMSTeamsInboundMedia(params: {
         channelData: activity.channelData,
       });
       if (messageUrls.length === 0) {
-        log.debug("graph message url unavailable", {
+        log.debug?.("graph message url unavailable", {
           conversationType,
           hasChannelData: Boolean(activity.channelData),
           messageId: activity.id ?? undefined,
@@ -85,6 +87,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             tokenProvider,
             maxBytes,
             allowHosts,
+            authAllowHosts: params.authAllowHosts,
             preserveFilenames,
           });
           attempts.push({
@@ -99,19 +102,21 @@ export async function resolveMSTeamsInboundMedia(params: {
             mediaList = graphMedia.media;
             break;
           }
-          if (graphMedia.tokenError) break;
+          if (graphMedia.tokenError) {
+            break;
+          }
         }
         if (mediaList.length === 0) {
-          log.debug("graph media fetch empty", { attempts });
+          log.debug?.("graph media fetch empty", { attempts });
         }
       }
     }
   }
 
   if (mediaList.length > 0) {
-    log.debug("downloaded attachments", { count: mediaList.length });
+    log.debug?.("downloaded attachments", { count: mediaList.length });
   } else if (htmlSummary?.imgTags) {
-    log.debug("inline images detected but none downloaded", {
+    log.debug?.("inline images detected but none downloaded", {
       imgTags: htmlSummary.imgTags,
       srcHosts: htmlSummary.srcHosts,
       dataImages: htmlSummary.dataImages,

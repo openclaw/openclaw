@@ -8,15 +8,14 @@
  * - Auto-capture filtering
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
-const liveEnabled = HAS_OPENAI_KEY && process.env.CLAWDBOT_LIVE_TEST === "1";
+const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
 describe("memory plugin e2e", () => {
@@ -24,7 +23,7 @@ describe("memory plugin e2e", () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-memory-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-test-"));
     dbPath = path.join(tmpDir, "lancedb");
   });
 
@@ -42,6 +41,7 @@ describe("memory plugin e2e", () => {
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
     expect(memoryPlugin.configSchema).toBeDefined();
+    // oxlint-disable-next-line typescript/unbound-method
     expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
@@ -92,70 +92,28 @@ describe("memory plugin e2e", () => {
     }).toThrow("embedding.apiKey is required");
   });
 
-  test("shouldCapture filters correctly", async () => {
-    // Test the capture filtering logic by checking the rules
-    const triggers = [
-      { text: "I prefer dark mode", shouldMatch: true },
-      { text: "Remember that my name is John", shouldMatch: true },
-      { text: "My email is test@example.com", shouldMatch: true },
-      { text: "Call me at +1234567890123", shouldMatch: true },
-      { text: "We decided to use TypeScript", shouldMatch: true },
-      { text: "I always want verbose output", shouldMatch: true },
-      { text: "Just a random short message", shouldMatch: false },
-      { text: "x", shouldMatch: false }, // Too short
-      { text: "<relevant-memories>injected</relevant-memories>", shouldMatch: false }, // Skip injected
-    ];
+  test("shouldCapture applies real capture rules", async () => {
+    const { shouldCapture } = await import("./index.js");
 
-    // The shouldCapture function is internal, but we can test via the capture behavior
-    // For now, just verify the patterns we expect to match
-    for (const { text, shouldMatch } of triggers) {
-      const hasPreference = /prefer|radši|like|love|hate|want/i.test(text);
-      const hasRemember = /zapamatuj|pamatuj|remember/i.test(text);
-      const hasEmail = /[\w.-]+@[\w.-]+\.\w+/.test(text);
-      const hasPhone = /\+\d{10,}/.test(text);
-      const hasDecision = /rozhodli|decided|will use|budeme/i.test(text);
-      const hasAlways = /always|never|important/i.test(text);
-      const isInjected = text.includes("<relevant-memories>");
-      const isTooShort = text.length < 10;
-
-      const wouldCapture =
-        !isTooShort &&
-        !isInjected &&
-        (hasPreference || hasRemember || hasEmail || hasPhone || hasDecision || hasAlways);
-
-      if (shouldMatch) {
-        expect(wouldCapture).toBe(true);
-      }
-    }
+    expect(shouldCapture("I prefer dark mode")).toBe(true);
+    expect(shouldCapture("Remember that my name is John")).toBe(true);
+    expect(shouldCapture("My email is test@example.com")).toBe(true);
+    expect(shouldCapture("Call me at +1234567890123")).toBe(true);
+    expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("x")).toBe(false);
+    expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
+    expect(shouldCapture("<system>status</system>")).toBe(false);
+    expect(shouldCapture("Here is a short **summary**\n- bullet")).toBe(false);
   });
 
-  test("detectCategory classifies correctly", async () => {
-    // Test category detection patterns
-    const cases = [
-      { text: "I prefer dark mode", expected: "preference" },
-      { text: "We decided to use React", expected: "decision" },
-      { text: "My email is test@example.com", expected: "entity" },
-      { text: "The server is running on port 3000", expected: "fact" },
-    ];
+  test("detectCategory classifies using production logic", async () => {
+    const { detectCategory } = await import("./index.js");
 
-    for (const { text, expected } of cases) {
-      const lower = text.toLowerCase();
-      let category: string;
-
-      if (/prefer|radši|like|love|hate|want/i.test(lower)) {
-        category = "preference";
-      } else if (/rozhodli|decided|will use|budeme/i.test(lower)) {
-        category = "decision";
-      } else if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
-        category = "entity";
-      } else if (/is|are|has|have|je|má|jsou/i.test(lower)) {
-        category = "fact";
-      } else {
-        category = "other";
-      }
-
-      expect(category).toBe(expected);
-    }
+    expect(detectCategory("I prefer dark mode")).toBe("preference");
+    expect(detectCategory("We decided to use React")).toBe("decision");
+    expect(detectCategory("My email is test@example.com")).toBe("entity");
+    expect(detectCategory("The server is running on port 3000")).toBe("fact");
+    expect(detectCategory("Random note")).toBe("other");
   });
 });
 
@@ -165,7 +123,7 @@ describeLive("memory plugin live tests", () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-memory-live-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-live-"));
     dbPath = path.join(tmpDir, "lancedb");
   });
 
@@ -180,9 +138,13 @@ describeLive("memory plugin live tests", () => {
     const liveApiKey = process.env.OPENAI_API_KEY ?? "";
 
     // Mock plugin API
+    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredTools: any[] = [];
+    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredClis: any[] = [];
+    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredServices: any[] = [];
+    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredHooks: Record<string, any[]> = {};
     const logs: string[] = [];
 
@@ -207,24 +169,31 @@ describeLive("memory plugin live tests", () => {
         error: (msg: string) => logs.push(`[error] ${msg}`),
         debug: (msg: string) => logs.push(`[debug] ${msg}`),
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
       registerTool: (tool: any, opts: any) => {
         registeredTools.push({ tool, opts });
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
       registerCli: (registrar: any, opts: any) => {
         registeredClis.push({ registrar, opts });
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
       registerService: (service: any) => {
         registeredServices.push(service);
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
       on: (hookName: string, handler: any) => {
-        if (!registeredHooks[hookName]) registeredHooks[hookName] = [];
+        if (!registeredHooks[hookName]) {
+          registeredHooks[hookName] = [];
+        }
         registeredHooks[hookName].push(handler);
       },
       resolvePath: (p: string) => p,
     };
 
     // Register plugin
-    await memoryPlugin.register(mockApi as any);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
 
     // Check registration
     expect(registeredTools.length).toBe(3);

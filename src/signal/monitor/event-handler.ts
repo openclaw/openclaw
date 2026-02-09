@@ -1,5 +1,7 @@
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -9,15 +11,15 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
@@ -31,7 +33,6 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
-import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -42,8 +43,6 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -78,7 +77,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       channel: "signal",
       accountId: deps.accountId,
       peer: {
-        kind: entry.isGroup ? "group" : "dm",
+        kind: entry.isGroup ? "group" : "direct",
         id: entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId,
       },
     });
@@ -172,11 +171,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const prefixContext = createReplyPrefixContext({ cfg: deps.cfg, agentId: route.agentId });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg: deps.cfg,
+      agentId: route.agentId,
+      channel: "signal",
+      accountId: route.accountId,
+    });
 
     const typingCallbacks = createTypingCallbacks({
       start: async () => {
-        if (!ctxPayload.To) return;
+        if (!ctxPayload.To) {
+          return;
+        }
         await sendTypingSignal(ctxPayload.To, {
           baseUrl: deps.baseUrl,
           account: deps.account,
@@ -194,8 +200,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       deliver: async (payload) => {
         await deps.deliverReplies({
@@ -223,9 +228,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ...replyOptions,
         disableBlockStreaming:
           typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected: (ctx) => {
-          prefixContext.onModelSelected(ctx);
-        },
+        onModelSelected,
       },
     });
     markDispatchIdle();
@@ -252,17 +255,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
       const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-      if (!conversationId || !entry.senderPeerId) return null;
+      if (!conversationId || !entry.senderPeerId) {
+        return null;
+      }
       return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
     },
     shouldDebounce: (entry) => {
-      if (!entry.bodyText.trim()) return false;
-      if (entry.mediaPath || entry.mediaType) return false;
+      if (!entry.bodyText.trim()) {
+        return false;
+      }
+      if (entry.mediaPath || entry.mediaType) {
+        return false;
+      }
       return !hasControlCommand(entry.bodyText, deps.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await handleSignalInboundMessage(last);
         return;
@@ -271,7 +282,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.bodyText)
         .filter(Boolean)
         .join("\\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -285,7 +298,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   });
 
   return async (event: { event?: string; data?: string }) => {
-    if (event.event !== "receive" || !event.data) return;
+    if (event.event !== "receive" || !event.data) {
+      return;
+    }
 
     let payload: SignalReceivePayload | null = null;
     try {
@@ -298,13 +313,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
     }
     const envelope = payload?.envelope;
-    if (!envelope) return;
-    if (envelope.syncMessage) return;
+    if (!envelope) {
+      return;
+    }
+    if (envelope.syncMessage) {
+      return;
+    }
 
     const sender = resolveSignalSender(envelope);
-    if (!sender) return;
+    if (!sender) {
+      return;
+    }
     if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) return;
+      if (sender.e164 === normalizeE164(deps.account)) {
+        return;
+      }
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
@@ -319,7 +342,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (reaction && !hasBodyContent) {
-      if (reaction.isRemove) return; // Ignore reaction removals
+      if (reaction.isRemove) {
+        return;
+      } // Ignore reaction removals
       const emojiLabel = reaction.emoji?.trim() || "emoji";
       const senderDisplay = formatSignalSenderDisplay(sender);
       const senderName = envelope.sourceName ?? senderDisplay;
@@ -332,7 +357,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         sender,
         allowlist: deps.reactionAllowlist,
       });
-      if (!shouldNotify) return;
+      if (!shouldNotify) {
+        return;
+      }
 
       const groupId = reaction.groupInfo?.groupId ?? undefined;
       const groupName = reaction.groupInfo?.groupName ?? undefined;
@@ -343,7 +370,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: deps.accountId,
         peer: {
-          kind: isGroup ? "group" : "dm",
+          kind: isGroup ? "group" : "direct",
           id: isGroup ? (groupId ?? "unknown") : senderPeerId,
         },
       });
@@ -373,13 +400,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
       return;
     }
-    if (!dataMessage) return;
+    if (!dataMessage) {
+      return;
+    }
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const senderRecipient = resolveSignalRecipient(sender);
     const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
-    if (!senderRecipient) return;
+    if (!senderRecipient) {
+      return;
+    }
     const senderIdLine = formatSignalPairingIdLine(sender);
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
@@ -391,7 +422,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
 
     if (!isGroup) {
-      if (deps.dmPolicy === "disabled") return;
+      if (deps.dmPolicy === "disabled") {
+        return;
+      }
       if (!dmAllowed) {
         if (deps.dmPolicy === "pairing") {
           const senderId = senderAllowId;
@@ -490,11 +523,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const kind = mediaKindFromMime(mediaType ?? undefined);
-    if (kind) placeholder = `<media:${kind}>`;
-    else if (dataMessage.attachments?.length) placeholder = "<media:attachment>";
+    if (kind) {
+      placeholder = `<media:${kind}>`;
+    } else if (dataMessage.attachments?.length) {
+      placeholder = "<media:attachment>";
+    }
 
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
-    if (!bodyText) return;
+    if (!bodyText) {
+      return;
+    }
 
     const receiptTimestamp =
       typeof envelope.timestamp === "number"

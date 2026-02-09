@@ -21,6 +21,8 @@ export interface LineConfig {
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
   accounts?: Record<string, LineAccountConfig>;
@@ -38,6 +40,8 @@ export interface LineAccountConfig {
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
+  /** Outbound response prefix override for this account. */
+  responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
   groups?: Record<string, LineGroupConfig>;

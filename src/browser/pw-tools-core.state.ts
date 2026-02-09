@@ -1,6 +1,5 @@
 import type { CDPSession, Page } from "playwright-core";
 import { devices as playwrightDevices } from "playwright-core";
-
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
 async function withCdpSession<T>(page: Page, fn: (session: CDPSession) => Promise<T>): Promise<T> {
@@ -47,7 +46,9 @@ export async function setHttpCredentialsViaPlaywright(opts: {
   }
   const username = String(opts.username ?? "");
   const password = String(opts.password ?? "");
-  if (!username) throw new Error("username is required (or set clear=true)");
+  if (!username) {
+    throw new Error("username is required (or set clear=true)");
+  }
   await page.context().setHTTPCredentials({ username, password });
 }
 
@@ -108,7 +109,9 @@ export async function setLocaleViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const locale = String(opts.locale ?? "").trim();
-  if (!locale) throw new Error("locale is required");
+  if (!locale) {
+    throw new Error("locale is required");
+  }
   await withCdpSession(page, async (session) => {
     try {
       await session.send("Emulation.setLocaleOverride", { locale });
@@ -129,14 +132,20 @@ export async function setTimezoneViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const timezoneId = String(opts.timezoneId ?? "").trim();
-  if (!timezoneId) throw new Error("timezoneId is required");
+  if (!timezoneId) {
+    throw new Error("timezoneId is required");
+  }
   await withCdpSession(page, async (session) => {
     try {
       await session.send("Emulation.setTimezoneOverride", { timezoneId });
     } catch (err) {
       const msg = String(err);
-      if (msg.includes("Timezone override is already in effect")) return;
-      if (msg.includes("Invalid timezone")) throw new Error(`Invalid timezone ID: ${timezoneId}`);
+      if (msg.includes("Timezone override is already in effect")) {
+        return;
+      }
+      if (msg.includes("Invalid timezone")) {
+        throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+      }
       throw err;
     }
   });
@@ -150,7 +159,9 @@ export async function setDeviceViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const name = String(opts.name ?? "").trim();
-  if (!name) throw new Error("device name is required");
+  if (!name) {
+    throw new Error("device name is required");
+  }
   const descriptor = (playwrightDevices as Record<string, unknown>)[name] as
     | {
         userAgent?: string;

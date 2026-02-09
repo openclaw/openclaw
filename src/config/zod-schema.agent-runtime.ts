@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   GroupChatSchema,
@@ -25,12 +24,15 @@ export const HeartbeatSchema = z
     includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
     to: z.string().optional(),
+    accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) return;
+    if (!val.every) {
+      return;
+    }
     try {
       parseDurationMs(val.every, { defaultUnit: "m" });
     } catch {
@@ -42,10 +44,14 @@ export const HeartbeatSchema = z
     }
 
     const active = val.activeHours;
-    if (!active) return;
+    if (!active) {
+      return;
+    }
     const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
     const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
-      if (!raw) return;
+      if (!raw) {
+        return;
+      }
       if (!timePattern.test(raw)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -165,7 +171,7 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z.union([z.literal("brave"), z.literal("perplexity")]).optional(),
+    provider: z.union([z.literal("brave"), z.literal("perplexity"), z.literal("grok")]).optional(),
     apiKey: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
@@ -178,6 +184,14 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    grok: z
+      .object({
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+        inlineCitations: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -186,6 +200,7 @@ export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
+    maxCharsCap: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -311,7 +326,9 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z.union([z.literal("openai"), z.literal("local"), z.literal("gemini")]).optional(),
+    provider: z
+      .union([z.literal("openai"), z.literal("local"), z.literal("gemini"), z.literal("voyage")])
+      .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -331,7 +348,13 @@ export const MemorySearchSchema = z
       .strict()
       .optional(),
     fallback: z
-      .union([z.literal("openai"), z.literal("gemini"), z.literal("local"), z.literal("none")])
+      .union([
+        z.literal("openai"),
+        z.literal("gemini"),
+        z.literal("local"),
+        z.literal("voyage"),
+        z.literal("none"),
+      ])
       .optional(),
     model: z.string().optional(),
     local: z
@@ -422,6 +445,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
@@ -441,6 +465,7 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+        thinking: z.string().optional(),
       })
       .strict()
       .optional(),

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
+import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { callBrowserAct, requireRef, resolveBrowserActionContext } from "./shared.js";
 
 export function registerBrowserElementCommands(
@@ -19,7 +19,9 @@ export function registerBrowserElementCommands(
     .action(async (ref: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
-      if (!refValue) return;
+      if (!refValue) {
+        return;
+      }
       const modifiers = opts.modifiers
         ? String(opts.modifiers)
             .split(",")
@@ -62,7 +64,9 @@ export function registerBrowserElementCommands(
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
-      if (!refValue) return;
+      if (!refValue) {
+        return;
+      }
       try {
         const result = await callBrowserAct({
           parent,
@@ -146,7 +150,9 @@ export function registerBrowserElementCommands(
     .action(async (ref: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
-      if (!refValue) return;
+      if (!refValue) {
+        return;
+      }
       try {
         const result = await callBrowserAct({
           parent,

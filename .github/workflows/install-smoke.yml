@@ -6,8 +6,28 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: install-smoke-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
+  docs-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only changes
+        id: check
+        uses: ./.github/actions/detect-docs-only
+
   install-smoke:
+    needs: [docs-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout CLI
@@ -32,8 +52,8 @@ jobs:
 
       - name: Run installer docker tests
         env:
-          CLAWDBOT_INSTALL_URL: https://clawd.bot/install.sh
-          CLAWDBOT_INSTALL_CLI_URL: https://clawd.bot/install-cli.sh
+          CLAWDBOT_INSTALL_URL: https://openclaw.ai/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}

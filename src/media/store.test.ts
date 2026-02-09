@@ -1,10 +1,9 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 
 describe("media store", () => {
@@ -13,24 +12,27 @@ describe("media store", () => {
   const envSnapshot: Record<string, string | undefined> = {};
 
   const snapshotEnv = () => {
-    for (const key of ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "CLAWDBOT_STATE_DIR"]) {
+    for (const key of ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "OPENCLAW_STATE_DIR"]) {
       envSnapshot[key] = process.env[key];
     }
   };
 
   const restoreEnv = () => {
     for (const [key, value] of Object.entries(envSnapshot)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   };
 
   beforeAll(async () => {
     snapshotEnv();
-    home = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-test-home-"));
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-home-"));
     process.env.HOME = home;
     process.env.USERPROFILE = home;
-    process.env.CLAWDBOT_STATE_DIR = path.join(home, ".clawdbot");
+    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
     if (process.platform === "win32") {
       const match = home.match(/^([A-Za-z]:)(.*)$/);
       if (match) {
@@ -38,7 +40,7 @@ describe("media store", () => {
         process.env.HOMEPATH = match[2] || "\\";
       }
     }
-    await fs.mkdir(path.join(home, ".clawdbot"), { recursive: true });
+    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
     store = await import("./store.js");
   });
 
@@ -61,7 +63,7 @@ describe("media store", () => {
     await withTempStore(async (store, home) => {
       const dir = await store.ensureMediaDir();
       expect(isPathWithinBase(home, dir)).toBe(true);
-      expect(path.normalize(dir)).toContain(`${path.sep}.clawdbot${path.sep}media`);
+      expect(path.normalize(dir)).toContain(`${path.sep}.openclaw${path.sep}media`);
       const stat = await fs.stat(dir);
       expect(stat.isDirectory()).toBe(true);
     });

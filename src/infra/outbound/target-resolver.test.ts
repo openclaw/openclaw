@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resetDirectoryCache, resolveMessagingTarget } from "./target-resolver.js";
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +15,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 describe("resolveMessagingTarget (directory fallback)", () => {
-  const cfg = {} as MoltbotConfig;
+  const cfg = {} as OpenClawConfig;
 
   beforeEach(() => {
     mocks.listGroups.mockReset();

@@ -1,5 +1,4 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
-
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
@@ -9,36 +8,56 @@ const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceacc
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
+// Size-capped to prevent unbounded growth in long-running deployments (#4948)
+const MAX_AUTH_CACHE_SIZE = 32;
 const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
 const verifyClient = new OAuth2Client();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
-  if (account.credentialsFile) return `file:${account.credentialsFile}`;
-  if (account.credentials) return `inline:${JSON.stringify(account.credentials)}`;
+  if (account.credentialsFile) {
+    return `file:${account.credentialsFile}`;
+  }
+  if (account.credentials) {
+    return `inline:${JSON.stringify(account.credentials)}`;
+  }
   return "none";
 }
 
 function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   const key = buildAuthKey(account);
   const cached = authCache.get(account.accountId);
-  if (cached && cached.key === key) return cached.auth;
+  if (cached && cached.key === key) {
+    return cached.auth;
+  }
+
+  const evictOldest = () => {
+    if (authCache.size > MAX_AUTH_CACHE_SIZE) {
+      const oldest = authCache.keys().next().value;
+      if (oldest !== undefined) {
+        authCache.delete(oldest);
+      }
+    }
+  };
 
   if (account.credentialsFile) {
     const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
+    evictOldest();
     return auth;
   }
 
   if (account.credentials) {
     const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
     authCache.set(account.accountId, { key, auth });
+    evictOldest();
     return auth;
   }
 
   const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
   authCache.set(account.accountId, { key, auth });
+  evictOldest();
   return auth;
 }
 
@@ -77,9 +96,13 @@ export async function verifyGoogleChatRequest(params: {
   audience?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer?.trim();
-  if (!bearer) return { ok: false, reason: "missing token" };
+  if (!bearer) {
+    return { ok: false, reason: "missing token" };
+  }
   const audience = params.audience?.trim();
-  if (!audience) return { ok: false, reason: "missing audience" };
+  if (!audience) {
+    return { ok: false, reason: "missing audience" };
+  }
   const audienceType = params.audienceType ?? null;
 
   if (audienceType === "app-url") {
@@ -90,7 +113,8 @@ export async function verifyGoogleChatRequest(params: {
       });
       const payload = ticket.getPayload();
       const email = payload?.email ?? "";
-      const ok = payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+      const ok =
+        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };

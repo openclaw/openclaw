@@ -8,6 +8,8 @@ export type CronRunLogEntry = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -23,7 +25,9 @@ const writesByPath = new Map<string, Promise<void>>();
 
 async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLines: number }) {
   const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size <= opts.maxBytes) return;
+  if (!stat || stat.size <= opts.maxBytes) {
+    return;
+  }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
   const lines = raw
@@ -64,23 +68,54 @@ export async function readCronRunLogEntries(
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
   const jobId = opts?.jobId?.trim() || undefined;
   const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
-  if (!raw.trim()) return [];
+  if (!raw.trim()) {
+    return [];
+  }
   const parsed: CronRunLogEntry[] = [];
   const lines = raw.split("\n");
   for (let i = lines.length - 1; i >= 0 && parsed.length < limit; i--) {
     const line = lines[i]?.trim();
-    if (!line) continue;
+    if (!line) {
+      continue;
+    }
     try {
       const obj = JSON.parse(line) as Partial<CronRunLogEntry> | null;
-      if (!obj || typeof obj !== "object") continue;
-      if (obj.action !== "finished") continue;
-      if (typeof obj.jobId !== "string" || obj.jobId.trim().length === 0) continue;
-      if (typeof obj.ts !== "number" || !Number.isFinite(obj.ts)) continue;
-      if (jobId && obj.jobId !== jobId) continue;
-      parsed.push(obj as CronRunLogEntry);
+      if (!obj || typeof obj !== "object") {
+        continue;
+      }
+      if (obj.action !== "finished") {
+        continue;
+      }
+      if (typeof obj.jobId !== "string" || obj.jobId.trim().length === 0) {
+        continue;
+      }
+      if (typeof obj.ts !== "number" || !Number.isFinite(obj.ts)) {
+        continue;
+      }
+      if (jobId && obj.jobId !== jobId) {
+        continue;
+      }
+      const entry: CronRunLogEntry = {
+        ts: obj.ts,
+        jobId: obj.jobId,
+        action: "finished",
+        status: obj.status,
+        error: obj.error,
+        summary: obj.summary,
+        runAtMs: obj.runAtMs,
+        durationMs: obj.durationMs,
+        nextRunAtMs: obj.nextRunAtMs,
+      };
+      if (typeof obj.sessionId === "string" && obj.sessionId.trim().length > 0) {
+        entry.sessionId = obj.sessionId;
+      }
+      if (typeof obj.sessionKey === "string" && obj.sessionKey.trim().length > 0) {
+        entry.sessionKey = obj.sessionKey;
+      }
+      parsed.push(entry);
     } catch {
       // ignore invalid lines
     }
   }
-  return parsed.reverse();
+  return parsed.toReversed();
 }

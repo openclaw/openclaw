@@ -6,7 +6,9 @@ export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,
 ): EmbeddedSandboxInfo | undefined {
-  if (!sandbox?.enabled) return undefined;
+  if (!sandbox?.enabled) {
+    return undefined;
+  }
   const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
   return {
     enabled: true,

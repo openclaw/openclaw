@@ -9,10 +9,14 @@ export type SignalProbe = {
 };
 
 function parseSignalVersion(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
   if (typeof value === "object" && value !== null) {
     const version = (value as { version?: unknown }).version;
-    if (typeof version === "string" && version.trim()) return version.trim();
+    if (typeof version === "string" && version.trim()) {
+      return version.trim();
+    }
   }
   return null;
 }
@@ -36,7 +40,7 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
     };
   }
   try {
-    const version = await signalRpcRequest<unknown>("version", undefined, {
+    const version = await signalRpcRequest("version", undefined, {
       baseUrl,
       timeoutMs,
     });

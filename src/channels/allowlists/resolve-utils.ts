@@ -8,9 +8,13 @@ export function mergeAllowlist(params: {
   const merged: string[] = [];
   const push = (value: string) => {
     const normalized = value.trim();
-    if (!normalized) return;
+    if (!normalized) {
+      return;
+    }
     const key = normalized.toLowerCase();
-    if (seen.has(key)) return;
+    if (seen.has(key)) {
+      return;
+    }
     seen.add(key);
     merged.push(normalized);
   };

@@ -1,9 +1,9 @@
-import type { NormalizedChatType } from "../channels/chat-type.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
-  chatType?: NormalizedChatType;
+  chatType?: ChatType;
   keyPrefix?: string;
 };
 
@@ -234,7 +234,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local";
+  provider?: "openai" | "gemini" | "local" | "voyage";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -253,7 +253,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */
@@ -336,8 +336,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave" or "perplexity"). */
-      provider?: "brave" | "perplexity";
+      /** Search provider ("brave", "perplexity", or "grok"). */
+      provider?: "brave" | "perplexity" | "grok";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -355,12 +355,23 @@ export type ToolsConfig = {
         /** Model to use (defaults to "perplexity/sonar-pro"). */
         model?: string;
       };
+      /** Grok-specific configuration (used when provider="grok"). */
+      grok?: {
+        /** API key for xAI (defaults to XAI_API_KEY env var). */
+        apiKey?: string;
+        /** Model to use (defaults to "grok-4-1-fast"). */
+        model?: string;
+        /** Include inline citations in response text as markdown links (default: false). */
+        inlineCitations?: boolean;
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
       /** Max characters to return from fetched content. */
       maxChars?: number;
+      /** Hard cap for maxChars (tool or config), defaults to 50000. */
+      maxCharsCap?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */

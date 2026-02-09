@@ -1,30 +1,30 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Moltbot Auth Widget for Termux
+# OpenClaw Auth Widget for Termux
 # Place in ~/.shortcuts/ for Termux:Widget
 #
 # This widget checks auth status and helps with re-auth if needed.
 # It's designed for quick one-tap checking from phone home screen.
 
 # Server hostname (via Tailscale or SSH config)
-SERVER="${CLAWDBOT_SERVER:-l36}"
+SERVER="${OPENCLAW_SERVER:-${CLAWDBOT_SERVER:-l36}}"
 
 # Check auth status
-termux-toast "Checking Moltbot auth..."
+termux-toast "Checking OpenClaw auth..."
 
-STATUS=$(ssh "$SERVER" '$HOME/moltbot/scripts/claude-auth-status.sh simple' 2>&1)
+STATUS=$(ssh "$SERVER" '$HOME/openclaw/scripts/claude-auth-status.sh simple' 2>&1)
 EXIT_CODE=$?
 
 case "$STATUS" in
     OK)
         # Get remaining time
-        DETAILS=$(ssh "$SERVER" '$HOME/moltbot/scripts/claude-auth-status.sh json' 2>&1)
+        DETAILS=$(ssh "$SERVER" '$HOME/openclaw/scripts/claude-auth-status.sh json' 2>&1)
         HOURS=$(echo "$DETAILS" | jq -r '.claude_code.status' | grep -oP '\d+(?=h)' || echo "?")
 
         termux-vibrate -d 50
         termux-toast "Auth OK (${HOURS}h left)"
         ;;
 
-    CLAUDE_EXPIRING|CLAWDBOT_EXPIRING)
+    CLAUDE_EXPIRING|OPENCLAW_EXPIRING|CLAWDBOT_EXPIRING)
         termux-vibrate -d 100
 
         # Ask if user wants to re-auth now
@@ -43,7 +43,7 @@ case "$STATUS" in
 
                 # Open terminal to server
                 am start -n com.termux/com.termux.app.TermuxActivity -a android.intent.action.MAIN
-                termux-toast "Run: ssh $SERVER '$HOME/moltbot/scripts/mobile-reauth.sh'"
+                termux-toast "Run: ssh $SERVER '$HOME/openclaw/scripts/mobile-reauth.sh'"
                 ;;
             *)
                 termux-toast "Reminder: Auth expires soon"
@@ -51,7 +51,7 @@ case "$STATUS" in
         esac
         ;;
 
-    CLAUDE_EXPIRED|CLAWDBOT_EXPIRED)
+    CLAUDE_EXPIRED|OPENCLAW_EXPIRED|CLAWDBOT_EXPIRED)
         termux-vibrate -d 300
 
         CHOICE=$(termux-dialog radio -t "Auth Expired!" -v "Re-auth now,Dismiss")
@@ -66,10 +66,10 @@ case "$STATUS" in
 2. Return here and tap OK to SSH"
 
                 am start -n com.termux/com.termux.app.TermuxActivity -a android.intent.action.MAIN
-                termux-toast "Run: ssh $SERVER '$HOME/moltbot/scripts/mobile-reauth.sh'"
+                termux-toast "Run: ssh $SERVER '$HOME/openclaw/scripts/mobile-reauth.sh'"
                 ;;
             *)
-                termux-toast "Warning: Moltbot won't work until re-auth"
+                termux-toast "Warning: OpenClaw won't work until re-auth"
                 ;;
         esac
         ;;

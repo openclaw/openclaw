@@ -1,5 +1,4 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -26,7 +25,8 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   const transform = hookRunner?.hasHooks("tool_result_persist")
-    ? (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
+    ? // oxlint-disable-next-line typescript/no-explicit-any
+      (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
         const out = hookRunner.runToolResultPersist(
           {
             toolName: meta.toolName,

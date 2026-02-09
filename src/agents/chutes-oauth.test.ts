@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   CHUTES_TOKEN_ENDPOINT,
   CHUTES_USERINFO_ENDPOINT,
@@ -7,10 +6,17 @@ import {
   refreshChutesTokens,
 } from "./chutes-oauth.js";
 
+const urlToString = (url: Request | URL | string): string => {
+  if (typeof url === "string") {
+    return url;
+  }
+  return "url" in url ? url.url : String(url);
+};
+
 describe("chutes-oauth", () => {
   it("exchanges code for tokens and stores username as email", async () => {
     const fetchFn: typeof fetch = async (input, init) => {
-      const url = String(input);
+      const url = urlToString(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
         expect(init?.method).toBe("POST");
         expect(
@@ -60,8 +66,10 @@ describe("chutes-oauth", () => {
 
   it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
     const fetchFn: typeof fetch = async (input, init) => {
-      const url = String(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) return new Response("not found", { status: 404 });
+      const url = urlToString(input);
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
       expect(init?.method).toBe("POST");
       const body = init?.body as URLSearchParams;
       expect(String(body.get("grant_type"))).toBe("refresh_token");

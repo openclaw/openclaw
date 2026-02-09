@@ -1,5 +1,5 @@
 export type TlonTarget =
-  | { kind: "dm"; ship: string }
+  | { kind: "direct"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 
 const SHIP_RE = /^~?[a-z-]+$/i;
@@ -7,13 +7,17 @@ const NEST_RE = /^chat\/([^/]+)\/([^/]+)$/i;
 
 export function normalizeShip(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   return trimmed.startsWith("~") ? trimmed : `~${trimmed}`;
 }
 
 export function parseChannelNest(raw: string): { hostShip: string; channelName: string } | null {
   const match = NEST_RE.exec(raw.trim());
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const hostShip = normalizeShip(match[1]);
   const channelName = match[2];
   return { hostShip, channelName };
@@ -21,12 +25,14 @@ export function parseChannelNest(raw: string): { hostShip: string; channelName: 
 
 export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   const trimmed = raw?.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const withoutPrefix = trimmed.replace(/^tlon:/i, "");
 
   const dmPrefix = withoutPrefix.match(/^dm[/:](.+)$/i);
   if (dmPrefix) {
-    return { kind: "dm", ship: normalizeShip(dmPrefix[1]) };
+    return { kind: "direct", ship: normalizeShip(dmPrefix[1]) };
   }
 
   const groupPrefix = withoutPrefix.match(/^(group|room)[/:](.+)$/i);
@@ -34,7 +40,9 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     const groupTarget = groupPrefix[2].trim();
     if (groupTarget.startsWith("chat/")) {
       const parsed = parseChannelNest(groupTarget);
-      if (!parsed) return null;
+      if (!parsed) {
+        return null;
+      }
       return {
         kind: "group",
         nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
@@ -58,7 +66,9 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
 
   if (withoutPrefix.startsWith("chat/")) {
     const parsed = parseChannelNest(withoutPrefix);
-    if (!parsed) return null;
+    if (!parsed) {
+      return null;
+    }
     return {
       kind: "group",
       nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
@@ -68,7 +78,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   }
 
   if (SHIP_RE.test(withoutPrefix)) {
-    return { kind: "dm", ship: normalizeShip(withoutPrefix) };
+    return { kind: "direct", ship: normalizeShip(withoutPrefix) };
   }
 
   return null;

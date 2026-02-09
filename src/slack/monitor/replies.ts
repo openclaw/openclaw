@@ -1,10 +1,10 @@
-import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
-import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
+import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
 
@@ -21,11 +21,15 @@ export async function deliverReplies(params: {
     const threadTs = payload.replyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) continue;
+    if (!text && mediaList.length === 0) {
+      continue;
+    }
 
     if (mediaList.length === 0) {
       const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+        continue;
+      }
       await sendMessageSlack(params.target, trimmed, {
         token: params.token,
         threadTs,
@@ -131,7 +135,9 @@ export async function deliverSlackSlashReplies(params: {
     const combined = [text ?? "", ...mediaList.map((url) => url.trim()).filter(Boolean)]
       .filter(Boolean)
       .join("\n");
-    if (!combined) continue;
+    if (!combined) {
+      continue;
+    }
     const chunkMode = params.chunkMode ?? "length";
     const markdownChunks =
       chunkMode === "newline"
@@ -140,13 +146,17 @@ export async function deliverSlackSlashReplies(params: {
     const chunks = markdownChunks.flatMap((markdown) =>
       markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
     );
-    if (!chunks.length && combined) chunks.push(combined);
+    if (!chunks.length && combined) {
+      chunks.push(combined);
+    }
     for (const chunk of chunks) {
       messages.push(chunk);
     }
   }
 
-  if (messages.length === 0) return;
+  if (messages.length === 0) {
+    return;
+  }
 
   // Slack slash command responses can be multi-part by sending follow-ups via response_url.
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";

@@ -19,11 +19,15 @@ export function isWordBoundary(text: string, index: number): boolean {
  * Returns null if no match.
  */
 export function findWordBoundaryIndex(text: string, query: string): number | null {
-  if (!query) return null;
+  if (!query) {
+    return null;
+  }
   const textLower = text.toLowerCase();
   const queryLower = query.toLowerCase();
   const maxIndex = textLower.length - queryLower.length;
-  if (maxIndex < 0) return null;
+  if (maxIndex < 0) {
+    return null;
+  }
   for (let i = 0; i <= maxIndex; i++) {
     if (textLower.startsWith(queryLower, i) && isWordBoundary(textLower, i)) {
       return i;
@@ -37,8 +41,12 @@ export function findWordBoundaryIndex(text: string, query: string): number | nul
  * Returns score (lower = better) or null if no match.
  */
 export function fuzzyMatchLower(queryLower: string, textLower: string): number | null {
-  if (queryLower.length === 0) return 0;
-  if (queryLower.length > textLower.length) return null;
+  if (queryLower.length === 0) {
+    return 0;
+  }
+  if (queryLower.length > textLower.length) {
+    return null;
+  }
 
   let queryIndex = 0;
   let score = 0;
@@ -53,9 +61,13 @@ export function fuzzyMatchLower(queryLower: string, textLower: string): number |
         score -= consecutiveMatches * 5; // Reward consecutive matches
       } else {
         consecutiveMatches = 0;
-        if (lastMatchIndex >= 0) score += (i - lastMatchIndex - 1) * 2; // Penalize gaps
+        if (lastMatchIndex >= 0) {
+          score += (i - lastMatchIndex - 1) * 2;
+        } // Penalize gaps
       }
-      if (isAtWordBoundary) score -= 10; // Reward word boundary matches
+      if (isAtWordBoundary) {
+        score -= 10;
+      } // Reward word boundary matches
       score += i * 0.1; // Slight penalty for later matches
       lastMatchIndex = i;
       queryIndex++;
@@ -73,10 +85,14 @@ export function fuzzyFilterLower<T extends { searchTextLower?: string }>(
   queryLower: string,
 ): T[] {
   const trimmed = queryLower.trim();
-  if (!trimmed) return items;
+  if (!trimmed) {
+    return items;
+  }
 
   const tokens = trimmed.split(/\s+/).filter((t) => t.length > 0);
-  if (tokens.length === 0) return items;
+  if (tokens.length === 0) {
+    return items;
+  }
 
   const results: { item: T; score: number }[] = [];
   for (const item of items) {
@@ -92,7 +108,9 @@ export function fuzzyFilterLower<T extends { searchTextLower?: string }>(
         break;
       }
     }
-    if (allMatch) results.push({ item, score: totalScore });
+    if (allMatch) {
+      results.push({ item, score: totalScore });
+    }
   }
   results.sort((a, b) => a.score - b.score);
   return results.map((r) => r.item);
@@ -106,9 +124,15 @@ export function prepareSearchItems<
 >(items: T[]): (T & { searchTextLower: string })[] {
   return items.map((item) => {
     const parts: string[] = [];
-    if (item.label) parts.push(item.label);
-    if (item.description) parts.push(item.description);
-    if (item.searchText) parts.push(item.searchText);
+    if (item.label) {
+      parts.push(item.label);
+    }
+    if (item.description) {
+      parts.push(item.description);
+    }
+    if (item.searchText) {
+      parts.push(item.searchText);
+    }
     return { ...item, searchTextLower: parts.join(" ").toLowerCase() };
   });
 }

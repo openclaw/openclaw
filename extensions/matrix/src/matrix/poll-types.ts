@@ -7,7 +7,7 @@
  * - m.poll.end - Closes a poll
  */
 
-import type { PollInput } from "clawdbot/plugin-sdk";
+import type { PollInput } from "openclaw/plugin-sdk";
 
 export const M_POLL_START = "m.poll.start" as const;
 export const M_POLL_RESPONSE = "m.poll.response" as const;
@@ -73,22 +73,29 @@ export type PollSummary = {
 };
 
 export function isPollStartType(eventType: string): boolean {
-  return POLL_START_TYPES.includes(eventType);
+  return (POLL_START_TYPES as readonly string[]).includes(eventType);
 }
 
 export function getTextContent(text?: TextContent): string {
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
 }
 
 export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const poll = (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
-  if (!poll) return null;
+  const poll =
+    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  if (!poll) {
+    return null;
+  }
 
   const question = getTextContent(poll.question);
-  if (!question) return null;
+  if (!question) {
+    return null;
+  }
 
   const answers = poll.answers
     .map((answer) => getTextContent(answer))
@@ -124,7 +131,9 @@ function buildTextContent(body: string): TextContent {
 }
 
 function buildPollFallbackText(question: string, answers: string[]): string {
-  if (answers.length === 0) return question;
+  if (answers.length === 0) {
+    return question;
+  }
   return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
 }
 
@@ -138,7 +147,8 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
       ...buildTextContent(option),
     }));
 
-  const maxSelections = poll.multiple ? Math.max(1, answers.length) : 1;
+  const isMultiple = (poll.maxSelections ?? 1) > 1;
+  const maxSelections = isMultiple ? Math.max(1, answers.length) : 1;
   const fallbackText = buildPollFallbackText(
     question,
     answers.map((answer) => getTextContent(answer)),
@@ -147,7 +157,7 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   return {
     [M_POLL_START]: {
       question: buildTextContent(question),
-      kind: poll.multiple ? "m.poll.undisclosed" : "m.poll.disclosed",
+      kind: isMultiple ? "m.poll.undisclosed" : "m.poll.disclosed",
       max_selections: maxSelections,
       answers,
     },

@@ -1,4 +1,4 @@
-import { MarkdownConfigSchema } from "clawdbot/plugin-sdk";
+import { MarkdownConfigSchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
@@ -16,6 +16,7 @@ const zaloAccountSchema = z.object({
   allowFrom: z.array(allowFromEntry).optional(),
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
+  responsePrefix: z.string().optional(),
 });
 
 export const ZaloConfigSchema = zaloAccountSchema.extend({

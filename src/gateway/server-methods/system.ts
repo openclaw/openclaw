@@ -1,10 +1,10 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
   "last-heartbeat": ({ respond }) => {
@@ -54,15 +54,15 @@ export const systemHandlers: GatewayRequestHandlers = {
     const reason = typeof params.reason === "string" ? params.reason : undefined;
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
-        ? (params.roles as string[])
+        ? params.roles
         : undefined;
     const scopes =
       Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
-        ? (params.scopes as string[])
+        ? params.scopes
         : undefined;
     const tags =
       Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
-        ? (params.tags as string[])
+        ? params.tags
         : undefined;
     const presenceUpdate = updateSystemPresence({
       text,

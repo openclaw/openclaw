@@ -1,11 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
-import { resolveConfigDir } from "../utils.js";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { escapeRegExp, resolveConfigDir } from "../utils.js";
 
 export function upsertSharedEnvVar(params: {
   key: string;
@@ -30,11 +25,15 @@ export function upsertSharedEnvVar(params: {
 
   const nextLines = lines.map((line) => {
     const match = line.match(matcher);
-    if (!match) return line;
+    if (!match) {
+      return line;
+    }
     replaced = true;
     const prefix = match[1] ?? "";
     const next = `${prefix}${key}=${value}`;
-    if (next !== line) updated = true;
+    if (next !== line) {
+      updated = true;
+    }
     return next;
   });
 

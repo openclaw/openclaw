@@ -1,4 +1,15 @@
-import { buildXiaomiProvider, XIAOMI_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
+import {
+  buildCloudflareAiGatewayModelDefinition,
+  resolveCloudflareAiGatewayBaseUrl,
+} from "../agents/cloudflare-ai-gateway.js";
+import {
+  buildQianfanProvider,
+  buildXiaomiProvider,
+  QIANFAN_DEFAULT_MODEL_ID,
+  XIAOMI_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -11,25 +22,29 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
-import type { MoltbotConfig } from "../config/config.js";
 import {
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 import {
-  buildKimiCodeModelDefinition,
   buildMoonshotModelDefinition,
-  KIMI_CODE_BASE_URL,
-  KIMI_CODE_MODEL_ID,
-  KIMI_CODE_MODEL_REF,
+  buildXaiModelDefinition,
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_REF,
+  KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  XAI_BASE_URL,
+  XAI_DEFAULT_MODEL_ID,
 } from "./onboard-auth.models.js";
 
-export function applyZaiConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[ZAI_DEFAULT_MODEL_REF] = {
     ...models[ZAI_DEFAULT_MODEL_REF],
@@ -57,7 +72,7 @@ export function applyZaiConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyOpenrouterProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENROUTER_DEFAULT_MODEL_REF] = {
     ...models[OPENROUTER_DEFAULT_MODEL_REF],
@@ -76,7 +91,7 @@ export function applyOpenrouterProviderConfig(cfg: MoltbotConfig): MoltbotConfig
   };
 }
 
-export function applyVercelAiGatewayProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF] = {
     ...models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF],
@@ -95,7 +110,74 @@ export function applyVercelAiGatewayProviderConfig(cfg: MoltbotConfig): MoltbotC
   };
 }
 
-export function applyVercelAiGatewayConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyCloudflareAiGatewayProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { accountId?: string; gatewayId?: string },
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
+    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
+    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers["cloudflare-ai-gateway"];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildCloudflareAiGatewayModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === defaultModel.id);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const baseUrl =
+    params?.accountId && params?.gatewayId
+      ? resolveCloudflareAiGatewayBaseUrl({
+          accountId: params.accountId,
+          gatewayId: params.gatewayId,
+        })
+      : existingProvider?.baseUrl;
+
+  if (!baseUrl) {
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models,
+        },
+      },
+    };
+  }
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers["cloudflare-ai-gateway"] = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "anthropic-messages",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyVercelAiGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVercelAiGatewayProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -117,7 +199,32 @@ export function applyVercelAiGatewayConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyOpenrouterConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyCloudflareAiGatewayConfig(
+  cfg: OpenClawConfig,
+  params?: { accountId?: string; gatewayId?: string },
+): OpenClawConfig {
+  const next = applyCloudflareAiGatewayProviderConfig(cfg, params);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -139,11 +246,22 @@ export function applyOpenrouterConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyMoonshotProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyMoonshotProviderConfigWithBaseUrl(cfg, MOONSHOT_BASE_URL);
+}
+
+export function applyMoonshotProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  return applyMoonshotProviderConfigWithBaseUrl(cfg, MOONSHOT_CN_BASE_URL);
+}
+
+function applyMoonshotProviderConfigWithBaseUrl(
+  cfg: OpenClawConfig,
+  baseUrl: string,
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[MOONSHOT_DEFAULT_MODEL_REF] = {
     ...models[MOONSHOT_DEFAULT_MODEL_REF],
-    alias: models[MOONSHOT_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2",
+    alias: models[MOONSHOT_DEFAULT_MODEL_REF]?.alias ?? "Kimi",
   };
 
   const providers = { ...cfg.models?.providers };
@@ -160,7 +278,7 @@ export function applyMoonshotProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   const normalizedApiKey = resolvedApiKey?.trim();
   providers.moonshot = {
     ...existingProviderRest,
-    baseUrl: MOONSHOT_BASE_URL,
+    baseUrl,
     api: "openai-completions",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [defaultModel],
@@ -182,7 +300,7 @@ export function applyMoonshotProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyMoonshotConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -204,31 +322,33 @@ export function applyMoonshotConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyKimiCodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[KIMI_CODE_MODEL_REF] = {
-    ...models[KIMI_CODE_MODEL_REF],
-    alias: models[KIMI_CODE_MODEL_REF]?.alias ?? "Kimi Code",
+export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyMoonshotProviderConfigCn(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: MOONSHOT_DEFAULT_MODEL_REF,
+        },
+      },
+    },
   };
+}
 
-  const providers = { ...cfg.models?.providers };
-  const existingProvider = providers["kimi-code"];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const defaultModel = buildKimiCodeModelDefinition();
-  const hasDefaultModel = existingModels.some((model) => model.id === KIMI_CODE_MODEL_ID);
-  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
-    string,
-    unknown
-  > as { apiKey?: string };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim();
-  providers["kimi-code"] = {
-    ...existingProviderRest,
-    baseUrl: KIMI_CODE_BASE_URL,
-    api: "openai-completions",
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[KIMI_CODING_MODEL_REF] = {
+    ...models[KIMI_CODING_MODEL_REF],
+    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi K2.5",
   };
 
   return {
@@ -240,14 +360,10 @@ export function applyKimiCodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
         models,
       },
     },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
-    },
   };
 }
 
-export function applyKimiCodeConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKimiCodeProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -262,14 +378,14 @@ export function applyKimiCodeConfig(cfg: MoltbotConfig): MoltbotConfig {
                 fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
-          primary: KIMI_CODE_MODEL_REF,
+          primary: KIMI_CODING_MODEL_REF,
         },
       },
     },
   };
 }
 
-export function applySyntheticProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[SYNTHETIC_DEFAULT_MODEL_REF] = {
     ...models[SYNTHETIC_DEFAULT_MODEL_REF],
@@ -316,7 +432,7 @@ export function applySyntheticProviderConfig(cfg: MoltbotConfig): MoltbotConfig 
   };
 }
 
-export function applySyntheticConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applySyntheticProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -338,7 +454,7 @@ export function applySyntheticConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyXiaomiProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XIAOMI_DEFAULT_MODEL_REF] = {
     ...models[XIAOMI_DEFAULT_MODEL_REF],
@@ -387,7 +503,7 @@ export function applyXiaomiProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
-export function applyXiaomiConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -413,7 +529,7 @@ export function applyXiaomiConfig(cfg: MoltbotConfig): MoltbotConfig {
  * Apply Venice provider configuration without changing the default model.
  * Registers Venice models and sets up the provider, but preserves existing model selection.
  */
-export function applyVeniceProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VENICE_DEFAULT_MODEL_REF] = {
     ...models[VENICE_DEFAULT_MODEL_REF],
@@ -462,7 +578,7 @@ export function applyVeniceProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
  * Apply Venice provider configuration AND set Venice as the default model.
  * Use this when Venice is the primary provider choice during onboarding.
  */
-export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
+export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;
   return {
@@ -484,8 +600,73 @@ export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
   };
 }
 
+export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[XAI_DEFAULT_MODEL_REF] = {
+    ...models[XAI_DEFAULT_MODEL_REF],
+    alias: models[XAI_DEFAULT_MODEL_REF]?.alias ?? "Grok",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.xai;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildXaiModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === XAI_DEFAULT_MODEL_ID);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.xai = {
+    ...existingProviderRest,
+    baseUrl: XAI_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyXaiProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: XAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
 export function applyAuthProfileConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   params: {
     profileId: string;
     provider: string;
@@ -493,7 +674,7 @@ export function applyAuthProfileConfig(
     email?: string;
     preferProfileFirst?: boolean;
   },
-): MoltbotConfig {
+): OpenClawConfig {
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -529,6 +710,83 @@ export function applyAuthProfileConfig(
       ...cfg.auth,
       profiles,
       ...(order ? { order } : {}),
+    },
+  };
+}
+
+export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[QIANFAN_DEFAULT_MODEL_REF] = {
+    ...models[QIANFAN_DEFAULT_MODEL_REF],
+    alias: models[QIANFAN_DEFAULT_MODEL_REF]?.alias ?? "QIANFAN",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.qianfan;
+  const defaultProvider = buildQianfanProvider();
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === QIANFAN_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const {
+    apiKey: existingApiKey,
+    baseUrl: existingBaseUrl,
+    api: existingApi,
+    ...existingProviderRest
+  } = (existingProvider ?? {}) as Record<string, unknown> as {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: ModelApi;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.qianfan = {
+    ...existingProviderRest,
+    baseUrl: existingBaseUrl ?? QIANFAN_BASE_URL,
+    api: existingApi ?? "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyQianfanProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: QIANFAN_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }

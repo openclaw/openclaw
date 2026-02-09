@@ -21,19 +21,20 @@ This document describes how the OpenProse VM tracks execution state using a **Po
 ## Prerequisites
 
 **Requires:**
+
 1. The `psql` command-line tool must be available in your PATH
 2. A running PostgreSQL server (local, Docker, or cloud)
 
 ### Installing psql
 
-| Platform | Command | Notes |
-|----------|---------|-------|
-| macOS (Homebrew) | `brew install libpq && brew link --force libpq` | Client-only; no server |
-| macOS (Postgres.app) | Download from https://postgresapp.com | Full install with GUI |
-| Debian/Ubuntu | `apt install postgresql-client` | Client-only |
-| Fedora/RHEL | `dnf install postgresql` | Client-only |
-| Arch Linux | `pacman -S postgresql-libs` | Client-only |
-| Windows | `winget install PostgreSQL.PostgreSQL` | Full installer |
+| Platform             | Command                                         | Notes                  |
+| -------------------- | ----------------------------------------------- | ---------------------- |
+| macOS (Homebrew)     | `brew install libpq && brew link --force libpq` | Client-only; no server |
+| macOS (Postgres.app) | Download from https://postgresapp.com           | Full install with GUI  |
+| Debian/Ubuntu        | `apt install postgresql-client`                 | Client-only            |
+| Fedora/RHEL          | `dnf install postgresql`                        | Client-only            |
+| Arch Linux           | `pacman -S postgresql-libs`                     | Client-only            |
+| Windows              | `winget install PostgreSQL.PostgreSQL`          | Full installer         |
 
 After installation, verify:
 
@@ -70,6 +71,7 @@ PostgreSQL state provides:
 - Create a **limited-privilege user** with access only to the `openprose` schema
 
 **Recommended setup:**
+
 ```sql
 -- Create dedicated user with minimal privileges
 CREATE USER openprose_agent WITH PASSWORD 'changeme';
@@ -84,13 +86,13 @@ GRANT ALL ON SCHEMA openprose TO openprose_agent;
 
 PostgreSQL state is for **power users** with specific scale or collaboration needs:
 
-| Need | PostgreSQL Helps |
-|------|------------------|
-| >5 parallel branches writing simultaneously | SQLite locks; PostgreSQL doesn't |
-| External dashboards querying state | PostgreSQL is designed for concurrent readers |
-| Team collaboration on long workflows | Shared network access; no file sync needed |
-| Outputs exceeding 1GB | Bulk ingestion; no single-file bottleneck |
-| Mission-critical workflows (hours/days) | Robust durability; point-in-time recovery |
+| Need                                        | PostgreSQL Helps                              |
+| ------------------------------------------- | --------------------------------------------- |
+| >5 parallel branches writing simultaneously | SQLite locks; PostgreSQL doesn't              |
+| External dashboards querying state          | PostgreSQL is designed for concurrent readers |
+| Team collaboration on long workflows        | Shared network access; no file sync needed    |
+| Outputs exceeding 1GB                       | Bulk ingestion; no single-file bottleneck     |
+| Mission-critical workflows (hours/days)     | Robust durability; point-in-time recovery     |
 
 **If none of these apply, use filesystem or SQLite state.** They're simpler and sufficient for 99% of programs.
 
@@ -187,11 +189,11 @@ echo "OPENPROSE_POSTGRES_URL=postgresql:///myproject" >> .prose/.env
 
 For team collaboration or production:
 
-| Provider | Free Tier | Cold Start | Best For |
-|----------|-----------|------------|----------|
-| **Neon** | 0.5GB, auto-suspend | 1-3s | Development, testing |
-| **Supabase** | 500MB, no auto-suspend | None | Projects needing auth/storage |
-| **Railway** | $5/mo credit | None | Simple production deploys |
+| Provider     | Free Tier              | Cold Start | Best For                      |
+| ------------ | ---------------------- | ---------- | ----------------------------- |
+| **Neon**     | 0.5GB, auto-suspend    | 1-3s       | Development, testing          |
+| **Supabase** | 500MB, no auto-suspend | None       | Projects needing auth/storage |
+| **Railway**  | $5/mo credit           | None       | Simple production deploys     |
 
 ```bash
 # Example: Neon
@@ -246,17 +248,17 @@ This section defines **who does what**. This is the contract between the VM and 
 
 The VM (the orchestrating agent running the .prose program) is responsible for:
 
-| Responsibility | Description |
-|----------------|-------------|
-| **Schema initialization** | Create `openprose` schema and tables at run start |
-| **Run registration** | Store the program source and metadata |
-| **Execution tracking** | Update position, status, and timing as statements execute |
-| **Subagent spawning** | Spawn sessions via Task tool with database instructions |
-| **Parallel coordination** | Track branch status, implement join strategies |
-| **Loop management** | Track iteration counts, evaluate conditions |
-| **Error aggregation** | Record failures, manage retry state |
-| **Context preservation** | Maintain sufficient narration in the main thread |
-| **Completion detection** | Mark the run as complete when finished |
+| Responsibility            | Description                                               |
+| ------------------------- | --------------------------------------------------------- |
+| **Schema initialization** | Create `openprose` schema and tables at run start         |
+| **Run registration**      | Store the program source and metadata                     |
+| **Execution tracking**    | Update position, status, and timing as statements execute |
+| **Subagent spawning**     | Spawn sessions via Task tool with database instructions   |
+| **Parallel coordination** | Track branch status, implement join strategies            |
+| **Loop management**       | Track iteration counts, evaluate conditions               |
+| **Error aggregation**     | Record failures, manage retry state                       |
+| **Context preservation**  | Maintain sufficient narration in the main thread          |
+| **Completion detection**  | Mark the run as complete when finished                    |
 
 **Critical:** The VM must preserve enough context in its own conversation to understand execution state without re-reading the entire database. The database is for coordination and persistence, not a replacement for working memory.
 
@@ -264,13 +266,13 @@ The VM (the orchestrating agent running the .prose program) is responsible for:
 
 Subagents (sessions spawned by the VM) are responsible for:
 
-| Responsibility | Description |
-|----------------|-------------|
-| **Writing own outputs** | Insert/update their binding in the `bindings` table |
-| **Memory management** | For persistent agents: read and update their memory record |
-| **Segment recording** | For persistent agents: append segment history |
+| Responsibility          | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| **Writing own outputs** | Insert/update their binding in the `bindings` table               |
+| **Memory management**   | For persistent agents: read and update their memory record        |
+| **Segment recording**   | For persistent agents: append segment history                     |
 | **Attachment handling** | Write large outputs to `attachments/` directory, store path in DB |
-| **Atomic writes** | Use transactions when updating multiple related records |
+| **Atomic writes**       | Use transactions when updating multiple related records           |
 
 **Critical:** Subagents write ONLY to `bindings`, `agents`, and `agent_segments` tables. The VM owns the `execution` table entirely. Completion signaling happens through the substrate (Task tool return), not database updates.
 
@@ -279,6 +281,7 @@ Subagents (sessions spawned by the VM) are responsible for:
 **What subagents return to the VM:** A confirmation message with the binding location—not the full content:
 
 **Root scope:**
+
 ```
 Binding written: research
 Location: openprose.bindings WHERE name='research' AND run_id='20260116-143052-a7b3c9' AND execution_id IS NULL
@@ -286,6 +289,7 @@ Summary: AI safety research covering alignment, robustness, and interpretability
 ```
 
 **Inside block invocation:**
+
 ```
 Binding written: result
 Location: openprose.bindings WHERE name='result' AND run_id='20260116-143052-a7b3c9' AND execution_id=43
@@ -297,12 +301,12 @@ The VM tracks locations, not values. This keeps the VM's context lean and enable
 
 ### Shared Concerns
 
-| Concern | Who Handles |
-|---------|-------------|
+| Concern          | Who Handles                                                        |
+| ---------------- | ------------------------------------------------------------------ |
 | Schema evolution | Either (use `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE` as needed) |
-| Custom tables | Either (prefix with `x_` for extensions) |
-| Indexing | Either (add indexes for frequently-queried columns) |
-| Cleanup | VM (at run end, optionally delete old data) |
+| Custom tables    | Either (prefix with `x_` for extensions)                           |
+| Indexing         | Either (add indexes for frequently-queried columns)                |
+| Cleanup          | VM (at run end, optionally delete old data)                        |
 
 ---
 
@@ -601,12 +605,12 @@ Even with PostgreSQL state, the VM should narrate key events in its conversation
 
 ### Why Both?
 
-| Purpose | Mechanism |
-|---------|-----------|
-| **Working memory** | Conversation narration (what the VM "remembers" without re-querying) |
-| **Durable state** | PostgreSQL database (survives context limits, enables resumption) |
-| **Subagent coordination** | PostgreSQL database (shared access point) |
-| **Debugging/inspection** | PostgreSQL database (queryable history) |
+| Purpose                   | Mechanism                                                            |
+| ------------------------- | -------------------------------------------------------------------- |
+| **Working memory**        | Conversation narration (what the VM "remembers" without re-querying) |
+| **Durable state**         | PostgreSQL database (survives context limits, enables resumption)    |
+| **Subagent coordination** | PostgreSQL database (shared access point)                            |
+| **Debugging/inspection**  | PostgreSQL database (queryable history)                              |
 
 The narration is the VM's "mental model" of execution. The database is the "source of truth" for resumption and inspection.
 
@@ -717,6 +721,7 @@ PRIMARY KEY (name, COALESCE(run_id, '__project__'))
 ```
 
 This means:
+
 - `name='advisor', run_id=NULL` has PK `('advisor', '__project__')`
 - `name='advisor', run_id='20260116-143052-a7b3c9'` has PK `('advisor', '20260116-143052-a7b3c9')`
 
@@ -724,10 +729,10 @@ The same agent name can exist as both project-scoped and execution-scoped withou
 
 ### Query Patterns
 
-| Scope | Query |
-|-------|-------|
+| Scope            | Query                                            |
+| ---------------- | ------------------------------------------------ |
 | Execution-scoped | `WHERE name = 'captain' AND run_id = '{RUN_ID}'` |
-| Project-scoped | `WHERE name = 'advisor' AND run_id IS NULL` |
+| Project-scoped   | `WHERE name = 'advisor' AND run_id IS NULL`      |
 
 ### Project-Scoped Memory Guidelines
 
@@ -841,20 +846,20 @@ The database is your workspace. Use it.
 
 ## Comparison with Other Modes
 
-| Aspect | filesystem.md | in-context.md | sqlite.md | postgres.md |
-|--------|---------------|---------------|-----------|-------------|
-| **State location** | `.prose/runs/{id}/` files | Conversation history | `.prose/runs/{id}/state.db` | PostgreSQL database |
-| **Queryable** | Via file reads | No | Yes (SQL) | Yes (SQL) |
-| **Atomic updates** | No | N/A | Yes (transactions) | Yes (ACID) |
-| **Concurrent writes** | Yes (different files) | N/A | **No (table locks)** | **Yes (row locks)** |
-| **Network access** | No | No | No | **Yes** |
-| **Team collaboration** | Via file sync | No | Via file sync | **Yes** |
-| **Schema flexibility** | Rigid file structure | N/A | Flexible | Very flexible (JSONB) |
-| **Resumption** | Read state.md | Re-read conversation | Query database | Query database |
-| **Complexity ceiling** | High | Low (<30 statements) | High | **Very high** |
-| **Dependency** | None | None | sqlite3 CLI | psql CLI + PostgreSQL |
-| **Setup friction** | Zero | Zero | Low | Medium-High |
-| **Status** | Stable | Stable | Experimental | **Experimental** |
+| Aspect                 | filesystem.md             | in-context.md        | sqlite.md                   | postgres.md           |
+| ---------------------- | ------------------------- | -------------------- | --------------------------- | --------------------- |
+| **State location**     | `.prose/runs/{id}/` files | Conversation history | `.prose/runs/{id}/state.db` | PostgreSQL database   |
+| **Queryable**          | Via file reads            | No                   | Yes (SQL)                   | Yes (SQL)             |
+| **Atomic updates**     | No                        | N/A                  | Yes (transactions)          | Yes (ACID)            |
+| **Concurrent writes**  | Yes (different files)     | N/A                  | **No (table locks)**        | **Yes (row locks)**   |
+| **Network access**     | No                        | No                   | No                          | **Yes**               |
+| **Team collaboration** | Via file sync             | No                   | Via file sync               | **Yes**               |
+| **Schema flexibility** | Rigid file structure      | N/A                  | Flexible                    | Very flexible (JSONB) |
+| **Resumption**         | Read state.md             | Re-read conversation | Query database              | Query database        |
+| **Complexity ceiling** | High                      | Low (<30 statements) | High                        | **Very high**         |
+| **Dependency**         | None                      | None                 | sqlite3 CLI                 | psql CLI + PostgreSQL |
+| **Setup friction**     | Zero                      | Zero                 | Low                         | Medium-High           |
+| **Status**             | Stable                    | Stable               | Experimental                | **Experimental**      |
 
 ---
 

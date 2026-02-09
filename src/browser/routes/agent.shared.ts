@@ -1,8 +1,8 @@
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { PwAiModule } from "../pw-ai-module.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import { getProfileContext, jsonError } from "./utils.js";
-import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",
@@ -16,13 +16,17 @@ export const SELECTOR_UNSUPPORTED_MESSAGE = [
 
 export function readBody(req: BrowserRequest): Record<string, unknown> {
   const body = req.body as Record<string, unknown> | undefined;
-  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {};
+  }
   return body;
 }
 
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
   const mapped = ctx.mapTabError(err);
-  if (mapped) return jsonError(res, mapped.status, mapped.message);
+  if (mapped) {
+    return jsonError(res, mapped.status, mapped.message);
+  }
   jsonError(res, 500, String(err));
 }
 
@@ -48,7 +52,9 @@ export async function requirePwAi(
   feature: string,
 ): Promise<PwAiModule | null> {
   const mod = await getPwAiModule();
-  if (mod) return mod;
+  if (mod) {
+    return mod;
+  }
   jsonError(
     res,
     501,

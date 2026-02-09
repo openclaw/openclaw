@@ -1,21 +1,18 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionsListResult } from "../types";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types";
-import type { ChatItem, MessageGroup } from "../types/chat-types";
-import { icons } from "../icons";
-import {
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "../chat/message-normalizer";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
-} from "../chat/grouped-render";
-import { renderMarkdownSidebar } from "./markdown-sidebar";
-import "../components/resizable-divider";
+} from "../chat/grouped-render.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { icons } from "../icons.ts";
+import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import "../components/resizable-divider.ts";
 
 export type CompactionIndicatorStatus = {
   active: boolean;
@@ -56,6 +53,9 @@ export type ChatProps = {
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  // Scroll control
+  showNewMessages?: boolean;
+  onScrollToBottom?: () => void;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -78,12 +78,14 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
-  if (!status) return nothing;
+  if (!status) {
+    return nothing;
+  }
 
   // Show "compacting..." while active
   if (status.active) {
     return html`
-      <div class="callout info compaction-indicator compaction-indicator--active">
+      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
         ${icons.loader} Compacting context...
       </div>
     `;
@@ -94,7 +96,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
-        <div class="callout success compaction-indicator compaction-indicator--complete">
+        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
           ${icons.check} Context compacted
         </div>
       `;
@@ -108,12 +110,11 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function handlePaste(
-  e: ClipboardEvent,
-  props: ChatProps,
-) {
+function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) return;
+  if (!items || !props.onAttachmentsChange) {
+    return;
+  }
 
   const imageItems: DataTransferItem[] = [];
   for (let i = 0; i < items.length; i++) {
@@ -123,16 +124,20 @@ function handlePaste(
     }
   }
 
-  if (imageItems.length === 0) return;
+  if (imageItems.length === 0) {
+    return;
+  }
 
   e.preventDefault();
 
   for (const item of imageItems) {
     const file = item.getAsFile();
-    if (!file) continue;
+    if (!file) {
+      continue;
+    }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
       const newAttachment: ChatAttachment = {
         id: generateAttachmentId(),
@@ -141,14 +146,16 @@ function handlePaste(
       };
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
-    };
+    });
     reader.readAsDataURL(file);
   }
 }
 
 function renderAttachmentPreview(props: ChatProps) {
   const attachments = props.attachments ?? [];
-  if (attachments.length === 0) return nothing;
+  if (attachments.length === 0) {
+    return nothing;
+  }
 
   return html`
     <div class="chat-attachments">
@@ -165,9 +172,7 @@ function renderAttachmentPreview(props: ChatProps) {
               type="button"
               aria-label="Remove attachment"
               @click=${() => {
-                const next = (props.attachments ?? []).filter(
-                  (a) => a.id !== att.id,
-                );
+                const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
                 props.onAttachmentsChange?.(next);
               }}
             >
@@ -184,9 +189,7 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const activeSession = props.sessions?.sessions?.find(
-    (row) => row.key === props.sessionKey,
-  );
+  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -210,49 +213,64 @@ export function renderChat(props: ChatProps) {
       aria-live="polite"
       @scroll=${props.onChatScroll}
     >
-      ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
-      ${repeat(buildChatItems(props), (item) => item.key, (item) => {
-        if (item.kind === "reading-indicator") {
-          return renderReadingIndicatorGroup(assistantIdentity);
-        }
+      ${
+        props.loading
+          ? html`
+              <div class="muted">Loading chat…</div>
+            `
+          : nothing
+      }
+      ${repeat(
+        buildChatItems(props),
+        (item) => item.key,
+        (item) => {
+          if (item.kind === "divider") {
+            return html`
+              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                <span class="chat-divider__line"></span>
+                <span class="chat-divider__label">${item.label}</span>
+                <span class="chat-divider__line"></span>
+              </div>
+            `;
+          }
 
-        if (item.kind === "stream") {
-          return renderStreamingGroup(
-            item.text,
-            item.startedAt,
-            props.onOpenSidebar,
-            assistantIdentity,
-          );
-        }
+          if (item.kind === "reading-indicator") {
+            return renderReadingIndicatorGroup(assistantIdentity);
+          }
 
-        if (item.kind === "group") {
-          return renderMessageGroup(item, {
-            onOpenSidebar: props.onOpenSidebar,
-            showReasoning,
-            assistantName: props.assistantName,
-            assistantAvatar: assistantIdentity.avatar,
-          });
-        }
+          if (item.kind === "stream") {
+            return renderStreamingGroup(
+              item.text,
+              item.startedAt,
+              props.onOpenSidebar,
+              assistantIdentity,
+            );
+          }
 
-        return nothing;
-      })}
+          if (item.kind === "group") {
+            return renderMessageGroup(item, {
+              onOpenSidebar: props.onOpenSidebar,
+              showReasoning,
+              assistantName: props.assistantName,
+              assistantAvatar: assistantIdentity.avatar,
+            });
+          }
+
+          return nothing;
+        },
+      )}
     </div>
   `;
 
   return html`
     <section class="card chat">
-      ${props.disabledReason
-        ? html`<div class="callout">${props.disabledReason}</div>`
-        : nothing}
+      ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
-      ${props.error
-        ? html`<div class="callout danger">${props.error}</div>`
-        : nothing}
+      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
-      ${renderCompactionIndicator(props.compactionStatus)}
-
-      ${props.focusMode
-        ? html`
+      ${
+        props.focusMode
+          ? html`
             <button
               class="chat-focus-exit"
               type="button"
@@ -263,7 +281,8 @@ export function renderChat(props: ChatProps) {
               ${icons.x}
             </button>
           `
-        : nothing}
+          : nothing
+      }
 
       <div
         class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
@@ -275,12 +294,12 @@ export function renderChat(props: ChatProps) {
           ${thread}
         </div>
 
-        ${sidebarOpen
-          ? html`
+        ${
+          sidebarOpen
+            ? html`
               <resizable-divider
                 .splitRatio=${splitRatio}
-                @resize=${(e: CustomEvent) =>
-                  props.onSplitRatioChange?.(e.detail.splitRatio)}
+                @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
               <div class="chat-sidebar">
                 ${renderMarkdownSidebar({
@@ -288,17 +307,21 @@ export function renderChat(props: ChatProps) {
                   error: props.sidebarError ?? null,
                   onClose: props.onCloseSidebar!,
                   onViewRawText: () => {
-                    if (!props.sidebarContent || !props.onOpenSidebar) return;
+                    if (!props.sidebarContent || !props.onOpenSidebar) {
+                      return;
+                    }
                     props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
                   },
                 })}
               </div>
             `
-          : nothing}
+            : nothing
+        }
       </div>
 
-      ${props.queue.length
-        ? html`
+      ${
+        props.queue.length
+          ? html`
             <div class="chat-queue" role="status" aria-live="polite">
               <div class="chat-queue__title">Queued (${props.queue.length})</div>
               <div class="chat-queue__list">
@@ -306,10 +329,10 @@ export function renderChat(props: ChatProps) {
                   (item) => html`
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
-                        ${item.text ||
-                        (item.attachments?.length
-                          ? `Image (${item.attachments.length})`
-                          : "")}
+                        ${
+                          item.text ||
+                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
+                        }
                       </div>
                       <button
                         class="btn chat-queue__remove"
@@ -325,7 +348,24 @@ export function renderChat(props: ChatProps) {
               </div>
             </div>
           `
-        : nothing}
+          : nothing
+      }
+
+      ${renderCompactionIndicator(props.compactionStatus)}
+
+      ${
+        props.showNewMessages
+          ? html`
+            <button
+              class="btn chat-new-messages"
+              type="button"
+              @click=${props.onScrollToBottom}
+            >
+              New messages ${icons.arrowDown}
+            </button>
+          `
+          : nothing
+      }
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
@@ -337,12 +377,22 @@ export function renderChat(props: ChatProps) {
               .value=${props.draft}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
-                if (e.key !== "Enter") return;
-                if (e.isComposing || e.keyCode === 229) return;
-                if (e.shiftKey) return; // Allow Shift+Enter for line breaks
-                if (!props.connected) return;
+                if (e.key !== "Enter") {
+                  return;
+                }
+                if (e.isComposing || e.keyCode === 229) {
+                  return;
+                }
+                if (e.shiftKey) {
+                  return;
+                } // Allow Shift+Enter for line breaks
+                if (!props.connected) {
+                  return;
+                }
                 e.preventDefault();
-                if (canCompose) props.onSend();
+                if (canCompose) {
+                  props.onSend();
+                }
               }}
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
@@ -396,7 +446,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const timestamp = normalized.timestamp || Date.now();
 
     if (!currentGroup || currentGroup.role !== role) {
-      if (currentGroup) result.push(currentGroup);
+      if (currentGroup) {
+        result.push(currentGroup);
+      }
       currentGroup = {
         kind: "group",
         key: `group:${role}:${item.key}`,
@@ -410,7 +462,9 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     }
   }
 
-  if (currentGroup) result.push(currentGroup);
+  if (currentGroup) {
+    result.push(currentGroup);
+  }
   return result;
 }
 
@@ -433,6 +487,20 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
+    const raw = msg as Record<string, unknown>;
+    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    if (marker && marker.kind === "compaction") {
+      items.push({
+        kind: "divider",
+        key:
+          typeof marker.id === "string"
+            ? `divider:compaction:${marker.id}`
+            : `divider:compaction:${normalized.timestamp}:${i}`,
+        label: "Compaction",
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
       continue;
@@ -474,13 +542,21 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
 function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
-  if (toolCallId) return `tool:${toolCallId}`;
+  if (toolCallId) {
+    return `tool:${toolCallId}`;
+  }
   const id = typeof m.id === "string" ? m.id : "";
-  if (id) return `msg:${id}`;
+  if (id) {
+    return `msg:${id}`;
+  }
   const messageId = typeof m.messageId === "string" ? m.messageId : "";
-  if (messageId) return `msg:${messageId}`;
+  if (messageId) {
+    return `msg:${messageId}`;
+  }
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
   const role = typeof m.role === "string" ? m.role : "unknown";
-  if (timestamp != null) return `msg:${role}:${timestamp}:${index}`;
+  if (timestamp != null) {
+    return `msg:${role}:${timestamp}:${index}`;
+  }
   return `msg:${role}:${index}`;
 }

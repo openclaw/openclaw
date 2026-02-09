@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createMetrics, type MetricName } from "./metrics.js";
 import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-bus.js";
 import { createSeenTracker } from "./seen-tracker.js";
-import { createMetrics, type MetricName } from "./metrics.js";
 
 // ============================================================================
 // Fuzz Tests for validatePrivateKey
@@ -47,60 +47,51 @@ describe("validatePrivateKey fuzz", () => {
     });
 
     it("rejects RTL override", () => {
-      const withRtl =
-        "\u202E0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const withRtl = "\u202E0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(() => validatePrivateKey(withRtl)).toThrow();
     });
 
     it("rejects homoglyph 'a' (Cyrillic а)", () => {
       // Using Cyrillic 'а' (U+0430) instead of Latin 'a'
-      const withCyrillicA =
-        "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const withCyrillicA = "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef";
       expect(() => validatePrivateKey(withCyrillicA)).toThrow();
     });
 
     it("rejects emoji", () => {
-      const withEmoji =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀";
+      const withEmoji = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀";
       expect(() => validatePrivateKey(withEmoji)).toThrow();
     });
 
     it("rejects combining characters", () => {
       // 'a' followed by combining acute accent
-      const withCombining =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301";
+      const withCombining = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301";
       expect(() => validatePrivateKey(withCombining)).toThrow();
     });
   });
 
   describe("injection attempts", () => {
     it("rejects null byte injection", () => {
-      const withNullByte =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f";
+      const withNullByte = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f";
       expect(() => validatePrivateKey(withNullByte)).toThrow();
     });
 
     it("rejects newline injection", () => {
-      const withNewline =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf";
+      const withNewline = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf";
       expect(() => validatePrivateKey(withNewline)).toThrow();
     });
 
     it("rejects carriage return injection", () => {
-      const withCR =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf";
+      const withCR = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf";
       expect(() => validatePrivateKey(withCR)).toThrow();
     });
 
     it("rejects tab injection", () => {
-      const withTab =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf";
+      const withTab = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf";
       expect(() => validatePrivateKey(withTab)).toThrow();
     });
 
     it("rejects form feed injection", () => {
-      const withFormFeed =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff";
+      const withFormFeed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff";
       expect(() => validatePrivateKey(withFormFeed)).toThrow();
     });
   });
@@ -530,9 +521,7 @@ describe("JSON parsing edge cases", () => {
       if (!parseError) {
         // If it parsed, we need to validate the structure
         const isValidRelayMessage =
-          Array.isArray(parsed) &&
-          parsed.length >= 2 &&
-          typeof parsed[0] === "string";
+          Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[0] === "string";
 
         // Most malformed cases won't produce valid relay messages
         if (["null literal", "plain number", "plain string"].includes(desc)) {

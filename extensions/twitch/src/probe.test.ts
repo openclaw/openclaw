@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
+import { probeTwitch } from "./probe.js";
 
 // Mock Twurple modules - Vitest v4 compatible mocking
 const mockUnbind = vi.fn();
@@ -8,7 +8,6 @@ const mockUnbind = vi.fn();
 // Event handler storage
 let connectHandler: (() => void) | null = null;
 let disconnectHandler: ((manually: boolean, reason?: Error) => void) | null = null;
-let authFailHandler: (() => void) | null = null;
 
 // Event listener mocks that store handlers and return unbind function
 const mockOnConnect = vi.fn((handler: () => void) => {
@@ -21,8 +20,7 @@ const mockOnDisconnect = vi.fn((handler: (manually: boolean, reason?: Error) => 
   return { unbind: mockUnbind };
 });
 
-const mockOnAuthenticationFailure = vi.fn((handler: () => void) => {
-  authFailHandler = handler;
+const mockOnAuthenticationFailure = vi.fn((_handler: () => void) => {
   return { unbind: mockUnbind };
 });
 
@@ -56,7 +54,8 @@ vi.mock("@twurple/auth", () => ({
 describe("probeTwitch", () => {
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
-    token: "oauth:test123456789",
+    accessToken: "oauth:test123456789",
+    clientId: "test-client-id",
     channel: "testchannel",
   };
 
@@ -65,7 +64,6 @@ describe("probeTwitch", () => {
     // Reset handlers
     connectHandler = null;
     disconnectHandler = null;
-    authFailHandler = null;
   });
 
   it("returns error when username is missing", async () => {
@@ -77,7 +75,7 @@ describe("probeTwitch", () => {
   });
 
   it("returns error when token is missing", async () => {
-    const account = { ...mockAccount, token: "" };
+    const account = { ...mockAccount, accessToken: "" };
     const result = await probeTwitch(account, 5000);
 
     expect(result.ok).toBe(false);
@@ -87,7 +85,7 @@ describe("probeTwitch", () => {
   it("attempts connection regardless of token prefix", async () => {
     // Note: probeTwitch doesn't validate token format - it tries to connect with whatever token is provided
     // The actual connection would fail in production with an invalid token
-    const account = { ...mockAccount, token: "raw_token_no_prefix" };
+    const account = { ...mockAccount, accessToken: "raw_token_no_prefix" };
     const result = await probeTwitch(account, 5000);
 
     // With mock, connection succeeds even without oauth: prefix
@@ -169,7 +167,7 @@ describe("probeTwitch", () => {
   it("trims token before validation", async () => {
     const account: TwitchAccountConfig = {
       ...mockAccount,
-      token: "  oauth:test123456789  ",
+      accessToken: "  oauth:test123456789  ",
     };
 
     const result = await probeTwitch(account, 5000);

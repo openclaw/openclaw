@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import {
   approveDevicePairing,
   listDevicePairing,
@@ -17,7 +18,6 @@ import {
   validateDeviceTokenRevokeParams,
   validateDeviceTokenRotateParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,

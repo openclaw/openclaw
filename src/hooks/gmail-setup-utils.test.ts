@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -14,7 +13,7 @@ describe("resolvePythonExecutablePath", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-python-"));
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
       const originalPath = process.env.PATH;
       try {
         const realPython = path.join(tmp, "python-real");

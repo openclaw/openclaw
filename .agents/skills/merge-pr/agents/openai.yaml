@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge PR"
+  short_description: "Merge GitHub PRs via squash"
+  default_prompt: "Use $merge-pr to merge a GitHub PR via squash after preparation."

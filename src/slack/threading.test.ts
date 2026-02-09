@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveSlackThreadContext, resolveSlackThreadTargets } from "./threading.js";
 
 describe("resolveSlackThreadTargets", () => {

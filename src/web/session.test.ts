@@ -62,7 +62,9 @@ describe("web session", () => {
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {
     const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") return false;
+      if (typeof p !== "string") {
+        return false;
+      }
       return p.endsWith("creds.json");
     });
     const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
@@ -106,11 +108,13 @@ describe("web session", () => {
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
-    const credsSuffix = path.join(".clawdbot", "credentials", "whatsapp", "default", "creds.json");
+    const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
 
     const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
     const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") return false;
+      if (typeof p !== "string") {
+        return false;
+      }
       return p.endsWith(credsSuffix);
     });
     const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((p) => {
@@ -182,9 +186,9 @@ describe("web session", () => {
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
-    const credsSuffix = path.join(".clawdbot", "credentials", "whatsapp", "default", "creds.json");
+    const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
     const backupSuffix = path.join(
-      ".clawdbot",
+      ".openclaw",
       "credentials",
       "whatsapp",
       "default",
@@ -193,7 +197,9 @@ describe("web session", () => {
 
     const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
     const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") return false;
+      if (typeof p !== "string") {
+        return false;
+      }
       return p.endsWith(credsSuffix);
     });
     const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((p) => {

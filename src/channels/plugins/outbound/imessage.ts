@@ -1,7 +1,7 @@
+import type { ChannelOutboundAdapter } from "../types.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import { sendMessageIMessage } from "../../../imessage/send.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 
 export const imessageOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",

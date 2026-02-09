@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import {
-  formatDurationShort,
   formatRunLabel,
   formatRunStatus,
   resolveSubagentLabel,
@@ -55,8 +54,8 @@ describe("subagents utils", () => {
     );
   });
 
-  it("formats duration short for seconds and minutes", () => {
-    expect(formatDurationShort(45_000)).toBe("45s");
-    expect(formatDurationShort(65_000)).toBe("1m5s");
+  it("formats duration compact for seconds and minutes", () => {
+    expect(formatDurationCompact(45_000)).toBe("45s");
+    expect(formatDurationCompact(65_000)).toBe("1m5s");
   });
 });

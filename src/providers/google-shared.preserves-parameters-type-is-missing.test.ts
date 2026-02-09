@@ -1,5 +1,5 @@
-import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import type { Context, Model, Tool } from "@mariozechner/pi-ai/dist/types.js";
+import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import { describe, expect, it } from "vitest";
 
 const asRecord = (value: unknown): Record<string, unknown> => {
@@ -7,6 +7,13 @@ const asRecord = (value: unknown): Record<string, unknown> => {
   expect(typeof value).toBe("object");
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
+};
+
+const getFirstToolParameters = (
+  converted: ReturnType<typeof convertTools>,
+): Record<string, unknown> => {
+  const functionDeclaration = asRecord(converted?.[0]?.functionDeclarations?.[0]);
+  return asRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
 };
 
 const makeModel = (id: string): Model<"google-generative-ai"> =>
@@ -53,7 +60,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = getFirstToolParameters(converted);
 
     expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
@@ -93,7 +100,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = getFirstToolParameters(converted);
     const properties = asRecord(params.properties);
     const mode = asRecord(properties.mode);
     const options = asRecord(properties.options);
@@ -134,7 +141,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = asRecord(converted?.[0]?.functionDeclarations?.[0]?.parameters);
+    const params = getFirstToolParameters(converted);
     const config = asRecord(asRecord(params.properties).config);
     const configProps = asRecord(config.properties);
     const retries = asRecord(configProps.retries);

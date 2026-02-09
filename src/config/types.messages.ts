@@ -59,13 +59,13 @@ export type MessagesConfig = {
    * - special value: `"auto"` derives `[{agents.list[].identity.name}]` for the routed agent (when set)
    *
    * Supported template variables (case-insensitive):
-   * - `{model}` - short model name (e.g., `claude-opus-4-5`, `gpt-4o`)
-   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-5`)
+   * - `{model}` - short model name (e.g., `claude-opus-4-6`, `gpt-4o`)
+   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-6`)
    * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
    * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
    * - `{identity.name}` or `{identityName}` - agent identity name
    *
-   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-5 | think:high]"`
+   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-6 | think:high]"`
    *
    * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable).
    *
@@ -107,6 +107,8 @@ export type CommandsConfig = {
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
+  /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
+  ownerAllowFrom?: Array<string | number>;
 };
 
 export type ProviderCommandsConfig = {

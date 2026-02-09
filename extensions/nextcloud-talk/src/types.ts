@@ -3,7 +3,9 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
+
+export type { DmPolicy, GroupPolicy };
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -68,6 +70,8 @@ export type NextcloudTalkAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
 };

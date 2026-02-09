@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
@@ -26,7 +25,9 @@ describe("signal createSignalEventHandler inbound contract", () => {
     capturedCtx = undefined;
 
     const handler = createSignalEventHandler({
+      // oxlint-disable-next-line typescript/no-explicit-any
       runtime: { log: () => {}, error: () => {} } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
       baseUrl: "http://localhost",
       accountId: "default",
@@ -46,6 +47,7 @@ describe("signal createSignalEventHandler inbound contract", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],
+      // oxlint-disable-next-line typescript/no-explicit-any
       isSignalReactionMessage: () => false as any,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "reaction",

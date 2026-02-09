@@ -1,5 +1,5 @@
-export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
-export type GroupPolicy = "open" | "disabled" | "allowlist";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+export type { DmPolicy, GroupPolicy };
 
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */

@@ -21,6 +21,8 @@ export type ZaloAccountConfig = {
   mediaMaxMb?: number;
   /** Proxy URL for API requests. */
   proxy?: string;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type ZaloConfig = {

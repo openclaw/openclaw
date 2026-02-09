@@ -1,7 +1,6 @@
 import type { EventEmitter } from "node:events";
-
-import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { logVerbose } from "../globals.js";
 
 type GatewayEmitter = Pick<EventEmitter, "on" | "removeListener">;
 
@@ -15,8 +14,12 @@ const shouldPromoteGatewayDebug = (message: string) =>
   INFO_DEBUG_MARKERS.some((marker) => message.includes(marker));
 
 const formatGatewayMetrics = (metrics: unknown) => {
-  if (metrics === null || metrics === undefined) return String(metrics);
-  if (typeof metrics === "string") return metrics;
+  if (metrics === null || metrics === undefined) {
+    return String(metrics);
+  }
+  if (typeof metrics === "string") {
+    return metrics;
+  }
   if (typeof metrics === "number" || typeof metrics === "boolean" || typeof metrics === "bigint") {
     return String(metrics);
   }
@@ -32,7 +35,9 @@ export function attachDiscordGatewayLogging(params: {
   runtime: RuntimeEnv;
 }) {
   const { emitter, runtime } = params;
-  if (!emitter) return () => {};
+  if (!emitter) {
+    return () => {};
+  }
 
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);

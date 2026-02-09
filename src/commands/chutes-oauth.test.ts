@@ -1,7 +1,5 @@
 import net from "node:net";
-
 import { describe, expect, it, vi } from "vitest";
-
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
@@ -21,13 +19,20 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+const urlToString = (url: Request | URL | string): string => {
+  if (typeof url === "string") {
+    return url;
+  }
+  return "url" in url ? url.url : String(url);
+};
+
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
     const port = await getFreePort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
 
     const fetchFn: typeof fetch = async (input, init) => {
-      const url = String(input);
+      const url = urlToString(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
         return new Response(
           JSON.stringify({
@@ -70,7 +75,7 @@ describe("loginChutes", () => {
 
   it("supports manual flow with pasted code", async () => {
     const fetchFn: typeof fetch = async (input) => {
-      const url = String(input);
+      const url = urlToString(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
         return new Response(
           JSON.stringify({
@@ -109,7 +114,7 @@ describe("loginChutes", () => {
 
   it("does not reuse code_verifier as state", async () => {
     const fetchFn: typeof fetch = async (input) => {
-      const url = String(input);
+      const url = urlToString(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
         return new Response(
           JSON.stringify({

@@ -39,9 +39,15 @@ describe("agent-events sequencing", () => {
   test("preserves compaction ordering on the event bus", async () => {
     const phases: Array<string> = [];
     const stop = onAgentEvent((evt) => {
-      if (evt.runId !== "run-1") return;
-      if (evt.stream !== "compaction") return;
-      if (typeof evt.data?.phase === "string") phases.push(evt.data.phase);
+      if (evt.runId !== "run-1") {
+        return;
+      }
+      if (evt.stream !== "compaction") {
+        return;
+      }
+      if (typeof evt.data?.phase === "string") {
+        phases.push(evt.data.phase);
+      }
     });
 
     emitAgentEvent({ runId: "run-1", stream: "compaction", data: { phase: "start" } });

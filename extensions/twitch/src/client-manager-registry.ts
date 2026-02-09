@@ -5,8 +5,8 @@
  * ensuring proper cleanup when accounts are stopped or reconfigured.
  */
 
-import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink } from "./types.js";
+import { TwitchClientManager } from "./twitch-client.js";
 
 /**
  * Registry entry tracking a client manager and its associated account.

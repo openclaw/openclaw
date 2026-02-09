@@ -5,15 +5,21 @@ export function createWizardSessionTracker() {
 
   const findRunningWizard = (): string | null => {
     for (const [id, session] of wizardSessions) {
-      if (session.getStatus() === "running") return id;
+      if (session.getStatus() === "running") {
+        return id;
+      }
     }
     return null;
   };
 
   const purgeWizardSession = (id: string) => {
     const session = wizardSessions.get(id);
-    if (!session) return;
-    if (session.getStatus() === "running") return;
+    if (!session) {
+      return;
+    }
+    if (session.getStatus() === "running") {
+      return;
+    }
     wizardSessions.delete(id);
   };
 

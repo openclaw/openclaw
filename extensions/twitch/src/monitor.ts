@@ -5,11 +5,12 @@
  * resolves agent routes, and handles replies.
  */
 
-import type { ReplyPayload, MoltbotConfig } from "clawdbot/plugin-sdk";
+import type { ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
-import { getTwitchRuntime } from "./runtime.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
+import { getTwitchRuntime } from "./runtime.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 export type TwitchRuntimeEnv = {
@@ -20,7 +21,7 @@ export type TwitchRuntimeEnv = {
 export type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
-  config: unknown; // MoltbotConfig
+  config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
@@ -45,7 +46,7 @@ async function processTwitchMessage(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
-  const cfg = config as MoltbotConfig;
+  const cfg = config as OpenClawConfig;
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
@@ -103,11 +104,18 @@ async function processTwitchMessage(params: {
     channel: "twitch",
     accountId,
   });
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "twitch",
+    accountId,
+  });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
+      ...prefixOptions,
       deliver: async (payload) => {
         await deliverTwitchReply({
           payload,
@@ -120,6 +128,9 @@ async function processTwitchMessage(params: {
           statusSink,
         });
       },
+    },
+    replyOptions: {
+      onModelSelected,
     },
   });
 }
@@ -137,7 +148,7 @@ async function deliverTwitchReply(params: {
   runtime: TwitchRuntimeEnv;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { payload, channel, account, accountId, config, tableMode, runtime, statusSink } = params;
+  const { payload, channel, account, accountId, config, runtime, statusSink } = params;
 
   try {
     const clientManager = getOrCreateClientManager(accountId, {
@@ -187,7 +198,9 @@ export async function monitorTwitchProvider(
 
   const coreLogger = core.logging.getChildLogger({ module: "twitch" });
   const logVerboseMessage = (message: string) => {
-    if (!core.logging.shouldLogVerbose()) return;
+    if (!core.logging.shouldLogVerbose()) {
+      return;
+    }
     coreLogger.debug?.(message);
   };
   const logger = {
@@ -212,7 +225,9 @@ export async function monitorTwitchProvider(
   }
 
   const unregisterHandler = clientManager.onMessage(account, (message) => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
 
     // Access control check
     const botUsername = account.username.toLowerCase();
