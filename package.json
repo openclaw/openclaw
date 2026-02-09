@@ -107,7 +107,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "@aws-sdk/client-bedrock": "^3.985.0",
+    "@aws-sdk/client-bedrock": "^3.986.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.0",
     "@grammyjs/runner": "^2.0.3",
@@ -135,7 +135,7 @@
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
-    "grammy": "^1.39.3",
+    "grammy": "^1.40.0",
     "hono": "4.11.9",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
@@ -160,7 +160,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@grammyjs/types": "^3.23.0",
+    "@grammyjs/types": "^3.24.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
@@ -169,7 +169,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260208.1",
+    "@typescript/native-preview": "7.0.0-dev.20260209.1",
     "@vitest/coverage-v8": "^4.0.18",
     "lit": "^3.3.2",
     "ollama": "^0.6.3",
