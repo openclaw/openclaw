@@ -347,6 +347,7 @@ def _write_github_summary(
     """Write a Markdown job summary to $GITHUB_STEP_SUMMARY."""
     lines: List[str] = []
     lines.append("## Code Size Check Failed\n")
+    lines.append("> ⚠️ **DO NOT trash the code base!** The goal is maintainability.\n")
 
     if crossed:
         lines.append(f"### {len(crossed)} file(s) crossed the {threshold}-line threshold\n")
@@ -524,6 +525,8 @@ def main():
             # Print actionable summary so contributors know what to do
             print("─" * 60)
             print("❌ Code size check failed\n")
+            print("   ⚠️  DO NOT just trash the code base!")
+            print("   The goal is maintainability.\n")
             if crossed:
                 print(f"   {len(crossed)} file(s) grew past the {args.threshold}-line limit.")
             if grew:
