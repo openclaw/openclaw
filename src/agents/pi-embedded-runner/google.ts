@@ -119,6 +119,29 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
   return touched ? out : messages;
 }
 
+function stripEmptyErrorAssistantMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.filter((msg) => {
+    if (msg.role !== "assistant") {
+      return true;
+    }
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (assistant.stopReason !== "error") {
+      return true;
+    }
+    // Keep errored messages that have meaningful content (e.g., partial responses)
+    const hasContent =
+      Array.isArray(assistant.content) &&
+      assistant.content.some((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const textBlock = block as { text?: unknown };
+        return typeof textBlock.text === "string" && textBlock.text.trim().length > 0;
+      });
+    return hasContent;
+  });
+}
+
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
@@ -354,6 +377,8 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
 
+  const sanitizedErrors = stripEmptyErrorAssistantMessages(repairedTools);
+
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
@@ -368,8 +393,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(sanitizedErrors)
+      : sanitizedErrors;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

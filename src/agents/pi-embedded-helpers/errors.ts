@@ -387,6 +387,10 @@ export function formatAssistantErrorText(
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
+  if (isEmptyStreamError(raw)) {
+    return "The AI service returned an empty response. Please try again.";
+  }
+
   if (isBillingErrorMessage(raw)) {
     return BILLING_ERROR_USER_MESSAGE;
   }
@@ -652,10 +656,17 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
   }
+  if (isEmptyStreamError(raw)) {
+    return "timeout";
+  }
   if (isAuthErrorMessage(raw)) {
     return "auth";
   }
   return null;
+}
+
+export function isEmptyStreamError(raw: string): boolean {
+  return raw.includes("request ended without sending any chunks");
 }
 
 export function isFailoverErrorMessage(raw: string): boolean {
