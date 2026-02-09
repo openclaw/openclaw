@@ -85,6 +85,16 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
+const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
+const VLLM_DEFAULT_MAX_TOKENS = 8192;
+const VLLM_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -129,6 +139,11 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 }
 
 async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
+type VllmModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
@@ -168,6 +183,59 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
     });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function discoverVllmModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  // Skip vLLM discovery in test environments
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover vLLM models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as VllmModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      console.warn("No vLLM models found on local instance");
+      return [];
+    }
+
+    return models
+      .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
+      .filter((m) => Boolean(m.id))
+      .map((m) => {
+        const modelId = m.id;
+        const lower = modelId.toLowerCase();
+        const isReasoning =
+          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: VLLM_DEFAULT_COST,
+          contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: VLLM_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    console.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
   }
 }
@@ -481,6 +549,18 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+async function buildVllmProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverVllmModels(baseUrl, params?.apiKey);
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -605,6 +685,23 @@ export async function resolveImplicitProviders(params: {
   if (ollamaKey) {
     const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
     providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  }
+
+  // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
+  // If explicitly configured, keep user-defined models/settings as-is.
+  if (!params.explicitProviders?.vllm) {
+    const vllmEnvVar = resolveEnvApiKeyVarName("vllm");
+    const vllmProfileKey = resolveApiKeyFromProfiles({ provider: "vllm", store: authStore });
+    const vllmKey = vllmEnvVar ?? vllmProfileKey;
+    if (vllmKey) {
+      const discoveryApiKey = vllmEnvVar
+        ? (process.env[vllmEnvVar]?.trim() ?? "")
+        : (vllmProfileKey ?? "");
+      providers.vllm = {
+        ...(await buildVllmProvider({ apiKey: discoveryApiKey || undefined })),
+        apiKey: vllmKey,
+      };
+    }
   }
 
   const togetherKey =

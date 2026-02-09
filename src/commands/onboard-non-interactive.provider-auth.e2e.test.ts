@@ -330,6 +330,24 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("rejects vLLM auth choice in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
+      await expect(
+        runNonInteractive(
+          {
+            nonInteractive: true,
+            authChoice: "vllm",
+            skipHealth: true,
+            skipChannels: true,
+            skipSkills: true,
+            json: true,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
+    });
+  }, 60_000);
+
   it("stores LiteLLM API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async ({ configPath, runtime }) => {
       await runNonInteractive(
