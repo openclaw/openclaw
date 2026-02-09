@@ -44,49 +44,52 @@ describe("createGatewayCloseHandler", () => {
     const tickInterval = setInterval(() => {}, 10);
     const healthInterval = setInterval(() => {}, 10);
     const dedupeCleanup = setInterval(() => {}, 10);
-    const handler = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => {}),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() },
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval,
-      healthInterval,
-      dedupeCleanup,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => {}) },
-      browserControl: null,
-      wss: makeWss(),
-      httpServer: makeServer(),
-    });
+    try {
+      const handler = createGatewayCloseHandler({
+        bonjourStop: null,
+        tailscaleCleanup: null,
+        canvasHost: null,
+        canvasHostServer: null,
+        stopChannel: vi.fn(async () => {}),
+        pluginServices: null,
+        cron: { stop: vi.fn() },
+        heartbeatRunner: { stop: vi.fn() },
+        nodePresenceTimers: new Map(),
+        broadcast: vi.fn(),
+        tickInterval,
+        healthInterval,
+        dedupeCleanup,
+        agentUnsub: null,
+        heartbeatUnsub: null,
+        chatRunState: { clear: vi.fn() },
+        clients: new Set(),
+        configReloader: { stop: vi.fn(async () => {}) },
+        browserControl: null,
+        wss: makeWss(),
+        httpServer: makeServer(),
+      });
 
-    await handler({ reason: "gateway restarting", restartExpectedMs: 123 });
-    clearInterval(tickInterval);
-    clearInterval(healthInterval);
-    clearInterval(dedupeCleanup);
+      await handler({ reason: "gateway restarting", restartExpectedMs: 123 });
 
-    const shutdownEvent = triggerInternalHook.mock.calls.find(
-      (call) => call[0]?.type === "gateway" && call[0]?.action === "shutdown",
-    )?.[0];
-    const preRestartEvent = triggerInternalHook.mock.calls.find(
-      (call) => call[0]?.type === "gateway" && call[0]?.action === "pre-restart",
-    )?.[0];
+      const shutdownEvent = triggerInternalHook.mock.calls.find(
+        (call) => call[0]?.type === "gateway" && call[0]?.action === "shutdown",
+      )?.[0];
+      const preRestartEvent = triggerInternalHook.mock.calls.find(
+        (call) => call[0]?.type === "gateway" && call[0]?.action === "pre-restart",
+      )?.[0];
 
-    expect(shutdownEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
-    expect(preRestartEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
+      expect(shutdownEvent?.context).toMatchObject({
+        reason: "gateway restarting",
+        restartExpectedMs: 123,
+      });
+      expect(preRestartEvent?.context).toMatchObject({
+        reason: "gateway restarting",
+        restartExpectedMs: 123,
+      });
+    } finally {
+      clearInterval(tickInterval);
+      clearInterval(healthInterval);
+      clearInterval(dedupeCleanup);
+    }
   });
 });
