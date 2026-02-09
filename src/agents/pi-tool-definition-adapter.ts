@@ -4,14 +4,15 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { logDebug, logError } from "../logger.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { isPlainObject } from "../utils.js";
+import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
+import { logDebug, logError } from "../logger.js";
+import { isPlainObject } from "../utils.js";
 import {
   consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
+  runAfterToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -96,43 +97,33 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const hookToolCallId =
+          typeof toolCallId === "string" && toolCallId.trim() ? toolCallId : `hook-${randomUUID()}`;
+        const startedAt = Date.now();
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params,
-              toolCallId,
+              toolCallId: hookToolCallId,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
           }
-          const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const result = await tool.execute(hookToolCallId, executeParams, signal, onUpdate);
           const afterParams = beforeHookWrapped
-            ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
+            ? (consumeAdjustedParamsForToolCall(hookToolCallId) ?? executeParams)
             : executeParams;
-
-          // Call after_tool_call hook
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: name,
-                  params: isPlainObject(afterParams) ? afterParams : {},
-                  result,
-                },
-                { toolName: name },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
-            }
-          }
-
+          await runAfterToolCallHook({
+            toolName: name,
+            params: afterParams,
+            result,
+            durationMs: Date.now() - startedAt,
+            toolCallId: hookToolCallId,
+          });
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -145,9 +136,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (name === "AbortError") {
             throw err;
           }
-          if (beforeHookWrapped) {
-            consumeAdjustedParamsForToolCall(toolCallId);
-          }
+          const afterParams = beforeHookWrapped
+            ? (consumeAdjustedParamsForToolCall(hookToolCallId) ?? executeParams)
+            : executeParams;
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
@@ -159,26 +150,13 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             tool: normalizedName,
             error: described.message,
           });
-
-          // Call after_tool_call hook for errors too
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: normalizedName,
-                  params: isPlainObject(params) ? params : {},
-                  error: described.message,
-                },
-                { toolName: normalizedName },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
-            }
-          }
-
+          await runAfterToolCallHook({
+            toolName: name,
+            params: afterParams,
+            error: described.message,
+            durationMs: Date.now() - startedAt,
+            toolCallId: hookToolCallId,
+          });
           return errorResult;
         }
       },
@@ -190,7 +168,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+  onClientToolCall?: (
+    toolName: string,
+    params: Record<string, unknown>,
+    toolCallId: string,
+  ) => void,
   hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
@@ -203,27 +185,66 @@ export function toClientToolDefinitions(
       parameters: func.parameters as any,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
+        const hookToolCallId =
+          typeof toolCallId === "string" && toolCallId.trim() ? toolCallId : `hook-${randomUUID()}`;
+        const startedAt = Date.now();
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
-          toolCallId,
-          ctx: hookContext,
+          toolCallId: hookToolCallId,
+          ctx: {
+            ...hookContext,
+            toolCallId: hookToolCallId,
+          },
         });
         if (outcome.blocked) {
+          await runAfterToolCallHook({
+            toolName: func.name,
+            params,
+            error: outcome.reason,
+            durationMs: Date.now() - startedAt,
+            toolCallId: hookToolCallId,
+            ctx: {
+              ...hookContext,
+              toolCallId: hookToolCallId,
+            },
+          });
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
-        // Notify handler that a client tool was called
-        if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+        let result: AgentToolResult<unknown> | undefined;
+        let error: string | undefined;
+        try {
+          // Notify handler that a client tool was called
+          if (onClientToolCall) {
+            onClientToolCall(func.name, paramsRecord, hookToolCallId);
+          }
+          // Return a pending result - the client will execute this tool
+          result = jsonResult({
+            status: "pending",
+            tool: func.name,
+            toolCallId: hookToolCallId,
+            message: "Tool execution delegated to client",
+          });
+          return result;
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          throw err;
+        } finally {
+          await runAfterToolCallHook({
+            toolName: func.name,
+            params: adjustedParams,
+            result,
+            error,
+            durationMs: Date.now() - startedAt,
+            toolCallId: hookToolCallId,
+            ctx: {
+              ...hookContext,
+              toolCallId: hookToolCallId,
+            },
+          });
         }
-        // Return a pending result - the client will execute this tool
-        return jsonResult({
-          status: "pending",
-          tool: func.name,
-          message: "Tool execution delegated to client",
-        });
       },
     } satisfies ToolDefinition;
   });

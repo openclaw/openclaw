@@ -12,6 +12,7 @@ describe("before_tool_call hook integration", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -19,6 +20,7 @@ describe("before_tool_call hook integration", () => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -105,6 +107,7 @@ describe("before_tool_call hook integration", () => {
         toolName: "read",
         agentId: "main",
         sessionKey: "main",
+        toolCallId: "call-5",
       },
     );
   });
@@ -153,6 +156,7 @@ describe("before_tool_call hook integration for client tools", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -160,6 +164,7 @@ describe("before_tool_call hook integration for client tools", () => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -186,9 +191,13 @@ describe("before_tool_call hook integration for client tools", () => {
 
     await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, undefined);
 
-    expect(onClientToolCall).toHaveBeenCalledWith("client_tool", {
-      value: "ok",
-      extra: true,
-    });
+    expect(onClientToolCall).toHaveBeenCalledWith(
+      "client_tool",
+      {
+        value: "ok",
+        extra: true,
+      },
+      "client-call-1",
+    );
   });
 });
