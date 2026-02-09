@@ -107,13 +107,35 @@ function formatTimestamp(
     return undefined;
   }
   const zone = resolveEnvelopeTimezone(resolved);
-  if (zone.mode === "utc") {
-    return formatUtcTimestamp(date);
+  // Include a weekday prefix so models do not need to derive DOW from the date
+  // (small models are notoriously unreliable at that).
+  const weekday = (() => {
+    try {
+      if (zone.mode === "utc") {
+        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
+      }
+      if (zone.mode === "local") {
+        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+      }
+      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
+        date,
+      );
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const formatted =
+    zone.mode === "utc"
+      ? formatUtcTimestamp(date)
+      : zone.mode === "local"
+        ? formatZonedTimestamp(date)
+        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
+
+  if (!formatted) {
+    return undefined;
   }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date);
-  }
-  return formatZonedTimestamp(date, { timeZone: zone.timeZone });
+  return weekday ? `${weekday} ${formatted}` : formatted;
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {

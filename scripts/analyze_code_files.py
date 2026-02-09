@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lists the longest and shortest code files in the project.
+Lists the longest and shortest code files in the project, and counts duplicated function names across files. Useful for identifying potential refactoring targets and enforcing code size guidelines.
 Threshold can be set to warn about files longer or shorter than a certain number of lines.
 """
 
@@ -157,7 +157,7 @@ def find_duplicate_functions(files: List[Tuple[Path, int]], root_dir: Path) -> D
 
 def main():
     parser = argparse.ArgumentParser(
-        description='List the longest and shortest code files in a project'
+        description='Analyze code files: list longest/shortest files, find duplicate function names'
     )
     parser.add_argument(
         '-t', '--threshold',
