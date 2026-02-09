@@ -57,6 +57,7 @@ function mergeInfoflowAccountConfig(
   enabled?: boolean;
   name?: string;
   robotName?: string;
+  requireMention?: boolean;
 } {
   const raw = getChannelSection(cfg) ?? {};
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
@@ -70,6 +71,7 @@ function mergeInfoflowAccountConfig(
     enabled?: boolean;
     name?: string;
     robotName?: string;
+    requireMention?: boolean;
   };
 }
 
@@ -103,6 +105,7 @@ export function resolveInfoflowAccount(params: {
       appKey,
       appSecret,
       robotName: merged.robotName?.trim() || undefined,
+      requireMention: merged.requireMention,
     },
   };
 }
