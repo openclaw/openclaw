@@ -120,6 +120,7 @@ jobs:
       - name: Create NPM package tarball
         shell: bash
         run: |
+          mkdir -p ./artifacts
           npm pack --pack-destination ./artifacts
           ls -lh ./artifacts/
 
