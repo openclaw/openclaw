@@ -228,7 +228,7 @@ function isHeartbeatAckMessage(message: unknown, ackCandidates: Set<string>): bo
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -260,7 +260,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const deliveryContext = deliveryContextFromSession(entry);
     const rawChannel = deliveryContext?.channel ?? entry?.channel ?? entry?.lastChannel;
     let resolvedChannel = resolveGatewayMessageChannel(rawChannel);
-    if (!resolvedChannel && isWebchatClient(context.client)) {
+    if (!resolvedChannel && isWebchatConnect(client?.connect)) {
       resolvedChannel = "webchat";
     }
     resolvedChannel ??= INTERNAL_MESSAGE_CHANNEL;
@@ -376,7 +376,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
-  "chat.send": async ({ params, respond, context, client }) => {
+  "chat.send": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -530,6 +530,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
+      const effectiveChannel = isWebchatConnect(client?.connect)
+        ? "webchat"
+        : INTERNAL_MESSAGE_CHANNEL;
       const ctx: MsgContext = {
         Body: parsedMessage,
         BodyForAgent: stampedMessage,
@@ -537,9 +540,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         RawBody: parsedMessage,
         CommandBody: commandBody,
         SessionKey: p.sessionKey,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+        Provider: effectiveChannel,
+        Surface: effectiveChannel,
+        OriginatingChannel: effectiveChannel,
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
