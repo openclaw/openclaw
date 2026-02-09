@@ -276,12 +276,13 @@ export class ProcessMonitor {
 
     const buildDir = path.dirname(entryPoint);
 
-    this.process = spawn("node", [entryPoint, "gateway"], {
+    this.process = spawn("node", [entryPoint, "gateway", "--verbose"], {
       cwd: buildDir,
       env: {
         ...process.env,
         OPENCLAW_GATEWAY_PORT: String(this.port),
         OPENCLAW_BUILD_HASH: this.currentCommitHash ?? "",
+        OPENCLAW_CLAUDE_CLI_LOG_OUTPUT: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
