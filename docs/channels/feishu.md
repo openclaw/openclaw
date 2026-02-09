@@ -75,7 +75,7 @@ Choose **Feishu**, then enter the App ID and App Secret.
 
 Visit [Feishu Open Platform](https://open.feishu.cn/app) and sign in.
 
-Lark (global) tenants should use https://open.larksuite.com/app and set `domain: "lark"` in the Feishu config.
+Lark (global) tenants should use [https://open.larksuite.com/app](https://open.larksuite.com/app) and set `domain: "lark"` in the Feishu config.
 
 ### 2. Create an app
 
@@ -261,10 +261,12 @@ After approval, you can chat normally.
 
 - **Default**: `dmPolicy: "pairing"` (unknown users get a pairing code)
 - **Approve pairing**:
+
   ```bash
   openclaw pairing list feishu
   openclaw pairing approve feishu <CODE>
   ```
+
 - **Allowlist mode**: set `channels.feishu.allowFrom` with allowed Open IDs
 
 ### Group chats
@@ -447,7 +449,75 @@ openclaw pairing list feishu
 
 ### Streaming
 
-Feishu does not support message editing, so block streaming is enabled by default (`blockStreaming: true`). The bot waits for the full reply before sending.
+Feishu supports streaming replies via interactive cards. When enabled, the bot updates a card as it generates text.
+
+```json5
+{
+  channels: {
+    feishu: {
+      streaming: true, // enable streaming card output (default true)
+      blockStreaming: true, // enable block-level streaming (default true)
+    },
+  },
+}
+```
+
+Set `streaming: false` to wait for the full reply before sending.
+
+### Multi-agent routing
+
+Use `bindings` to route Feishu DMs or groups to different agents.
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main" },
+      {
+        id: "clawd-fan",
+        workspace: "/home/user/clawd-fan",
+        agentDir: "/home/user/.openclaw/agents/clawd-fan/agent",
+      },
+      {
+        id: "clawd-xi",
+        workspace: "/home/user/clawd-xi",
+        agentDir: "/home/user/.openclaw/agents/clawd-xi/agent",
+      },
+    ],
+  },
+  bindings: [
+    {
+      agentId: "main",
+      match: {
+        channel: "feishu",
+        peer: { kind: "direct", id: "ou_xxx" },
+      },
+    },
+    {
+      agentId: "clawd-fan",
+      match: {
+        channel: "feishu",
+        peer: { kind: "direct", id: "ou_yyy" },
+      },
+    },
+    {
+      agentId: "clawd-xi",
+      match: {
+        channel: "feishu",
+        peer: { kind: "group", id: "oc_zzz" },
+      },
+    },
+  ],
+}
+```
+
+Routing fields:
+
+- `match.channel`: `"feishu"`
+- `match.peer.kind`: `"direct"` or `"group"`
+- `match.peer.id`: user Open ID (`ou_xxx`) or group ID (`oc_xxx`)
+
+See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
 
 ---
 
@@ -472,7 +542,8 @@ Key options:
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`    |
 | `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`    |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`      |
-| `channels.feishu.blockStreaming`                  | Disable streaming               | `true`    |
+| `channels.feishu.streaming`                       | Enable streaming card output    | `true`    |
+| `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`    |
 
 ---
 
@@ -492,6 +563,7 @@ Key options:
 ### Receive
 
 - ✅ Text
+- ✅ Rich text (post)
 - ✅ Images
 - ✅ Files
 - ✅ Audio

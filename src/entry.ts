@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
-import { installProcessWarningFilter } from "./infra/warnings.js";
+import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 process.title = "openclaw";
@@ -18,11 +18,17 @@ if (process.argv.includes("--no-color")) {
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 
-function hasExperimentalWarningSuppressed(nodeOptions: string): boolean {
-  if (!nodeOptions) {
-    return false;
+function hasExperimentalWarningSuppressed(): boolean {
+  const nodeOptions = process.env.NODE_OPTIONS ?? "";
+  if (nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings")) {
+    return true;
   }
-  return nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings");
+  for (const arg of process.execArgv) {
+    if (arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function ensureExperimentalWarningSuppressed(): boolean {
@@ -32,18 +38,21 @@ function ensureExperimentalWarningSuppressed(): boolean {
   if (isTruthyEnvValue(process.env.OPENCLAW_NODE_OPTIONS_READY)) {
     return false;
   }
-  const nodeOptions = process.env.NODE_OPTIONS ?? "";
-  if (hasExperimentalWarningSuppressed(nodeOptions)) {
+  if (hasExperimentalWarningSuppressed()) {
     return false;
   }
 
+  // Respawn guard (and keep recursion bounded if something goes wrong).
   process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
-  process.env.NODE_OPTIONS = `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
-
-  const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
-    stdio: "inherit",
-    env: process.env,
-  });
+  // Pass flag as a Node CLI option, not via NODE_OPTIONS (--disable-warning is disallowed in NODE_OPTIONS).
+  const child = spawn(
+    process.execPath,
+    [EXPERIMENTAL_WARNING_FLAG, ...process.execArgv, ...process.argv.slice(1)],
+    {
+      stdio: "inherit",
+      env: process.env,
+    },
+  );
 
   attachChildProcessBridge(child);
 

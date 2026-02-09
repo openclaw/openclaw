@@ -387,7 +387,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       channel: "imessage",
       accountId: accountInfo.accountId,
       peer: {
-        kind: isGroup ? "group" : "dm",
+        kind: isGroup ? "group" : "direct",
         id: isGroup ? String(chatId ?? "unknown") : normalizeIMessageHandle(sender),
       },
     });

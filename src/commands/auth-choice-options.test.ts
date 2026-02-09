@@ -114,4 +114,14 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(options.some((opt) => opt.value === "qwen-portal")).toBe(true);
   });
+
+  it("includes xAI auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "xai-api-key")).toBe(true);
+  });
 });

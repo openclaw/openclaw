@@ -1,6 +1,6 @@
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+
 export type ReplyToMode = "off" | "first" | "all";
-export type GroupPolicy = "open" | "disabled" | "allowlist";
-export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */

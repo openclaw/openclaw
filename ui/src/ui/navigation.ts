@@ -4,7 +4,7 @@ export const TAB_GROUPS = [
   { label: "Chat", tabs: ["chat"] },
   {
     label: "Control",
-    tabs: ["overview", "channels", "instances", "sessions", "cron"],
+    tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
   { label: "Agent", tabs: ["agents", "skills", "nodes"] },
   { label: "Settings", tabs: ["config", "debug", "logs"] },
@@ -16,6 +16,7 @@ export type Tab =
   | "channels"
   | "instances"
   | "sessions"
+  | "usage"
   | "cron"
   | "skills"
   | "nodes"
@@ -30,6 +31,7 @@ const TAB_PATHS: Record<Tab, string> = {
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
+  usage: "/usage",
   cron: "/cron",
   skills: "/skills",
   nodes: "/nodes",
@@ -134,6 +136,8 @@ export function iconForTab(tab: Tab): IconName {
       return "radio";
     case "sessions":
       return "fileText";
+    case "usage":
+      return "barChart";
     case "cron":
       return "loader";
     case "skills":
@@ -163,6 +167,8 @@ export function titleForTab(tab: Tab) {
       return "Instances";
     case "sessions":
       return "Sessions";
+    case "usage":
+      return "Usage";
     case "cron":
       return "Cron Jobs";
     case "skills":
@@ -194,6 +200,8 @@ export function subtitleForTab(tab: Tab) {
       return "Presence beacons from connected clients and nodes.";
     case "sessions":
       return "Inspect active sessions and adjust per-session defaults.";
+    case "usage":
+      return "";
     case "cron":
       return "Schedule wakeups and recurring agent runs.";
     case "skills":

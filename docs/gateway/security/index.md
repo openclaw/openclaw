@@ -175,7 +175,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## DM access model (pairing / allowlist / open / disabled)
 
@@ -193,7 +193,7 @@ openclaw pairing list <channel>
 openclaw pairing approve <channel> <code>
 ```
 
-Details + files on disk: [Pairing](/start/pairing)
+Details + files on disk: [Pairing](/channels/pairing)
 
 ## DM session isolation (multi-user mode)
 
@@ -229,7 +229,7 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
-Details: [Configuration](/gateway/configuration) and [Groups](/concepts/groups)
+Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)
 
 ## Prompt injection (what it is, why it matters)
 
@@ -243,7 +243,7 @@ Even with strong system prompts, **prompt injection is not solved**. System prom
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
 - Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
-- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
+- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.6 (or the latest Opus) because it’s strong at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
 Red flags to treat as untrusted:
 
@@ -627,7 +627,7 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 
 With multi-agent routing, each agent can have its own sandbox + tool policy:
 use this to give **full access**, **read-only**, or **no access** per agent.
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for full details
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for full details
 and precedence rules.
 
 Common use cases:
@@ -773,18 +773,22 @@ If it fails, there are new candidates not yet in the baseline.
 ### If CI fails
 
 1. Reproduce locally:
+
    ```bash
    detect-secrets scan --baseline .secrets.baseline
    ```
+
 2. Understand the tools:
    - `detect-secrets scan` finds candidates and compares them to the baseline.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
 4. For false positives: run the interactive audit and mark them as false:
+
    ```bash
    detect-secrets audit .secrets.baseline
    ```
+
 5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
    baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
    file is reference-only; detect-secrets doesn’t read it automatically).
@@ -793,28 +797,40 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 
 ## The Trust Hierarchy
 
-```
-Owner (Peter)
-  │ Full trust
-  ▼
-AI (Clawd)
-  │ Trust but verify
-  ▼
-Friends in allowlist
-  │ Limited trust
-  ▼
-Strangers
-  │ No trust
-  ▼
-Mario asking for find ~
-  │ Definitely no trust 😏
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#ffffff',
+    'primaryTextColor': '#000000',
+    'primaryBorderColor': '#000000',
+    'lineColor': '#000000',
+    'secondaryColor': '#f9f9fb',
+    'tertiaryColor': '#ffffff',
+    'clusterBkg': '#f9f9fb',
+    'clusterBorder': '#000000',
+    'nodeBorder': '#000000',
+    'mainBkg': '#ffffff',
+    'edgeLabelBackground': '#ffffff'
+  }
+}}%%
+flowchart TB
+    A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
+    B -- Trust but verify --> C["Friends in allowlist"]
+    C -- Limited trust --> D["Strangers"]
+    D -- No trust --> E["Mario asking for find ~"]
+    E -- Definitely no trust 😏 --> F[" "]
+
+     %% The transparent box is needed to show the bottom-most label correctly
+     F:::Class_transparent_box
+    classDef Class_transparent_box fill:transparent, stroke:transparent
 ```
 
 ## Reporting Security Issues
 
 Found a vulnerability in OpenClaw? Please report responsibly:
 
-1. Email: security@openclaw.ai
+1. Email: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. Don't post publicly until fixed
 3. We'll credit you (unless you prefer anonymity)
 

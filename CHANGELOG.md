@@ -2,11 +2,91 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.2.4
+## 2026.2.9
+
+### Added
+
+- iOS: alpha node app + setup-code onboarding. (#11756) Thanks @mbelinky.
+- Plugins: device pairing + phone control plugins (Telegram `/pair`, iOS/Android node controls). (#11755) Thanks @mbelinky.
+- Tools: add Grok (xAI) as a `web_search` provider. (#12419) Thanks @app/clawdinator.
+- Paths: add `OPENCLAW_HOME` for overriding the home directory used by internal path resolution. (#12091) Thanks @sebslight.
+- Gateway: add agent management RPC methods for the web UI (`agents.create`, `agents.update`, `agents.delete`). (#11045) Thanks @advaitpaliwal.
+- Web UI: show a Compaction divider in chat history. (#11341) Thanks @Takhoffman.
+- Channels: comprehensive BlueBubbles and channel cleanup. (#11093) Thanks @tyler6204.
+- Agents: include runtime shell in agent envelopes. (#1835) Thanks @Takhoffman.
+
+### Fixes
+
+- Telegram: harden quote parsing; preserve quote context; avoid QUOTE_TEXT_INVALID; avoid nested reply quote misclassification. (#12156) Thanks @rybnikov.
+- Telegram: truncate command registration to 100 entries to avoid `BOT_COMMANDS_TOO_MUCH` failures on startup. (#12356) Thanks @arosstale.
+- Telegram: match DM `allowFrom` against sender user id (fallback to chat id) and clarify pairing logs. (#12779) Thanks @liuxiaopai-ai.
+- Tools/web_search: include provider-specific settings in the web search cache key, and pass `inlineCitations` for Grok. (#12419) Thanks @app/clawdinator.
+- Auth: strip embedded line breaks from pasted API keys and tokens before storing/resolving credentials.
+- Model failover: treat HTTP 400 errors as failover-eligible, enabling automatic model fallback. (#1879) Thanks @orenyomtov.
+- Errors: prevent false positive context overflow detection when conversation mentions "context overflow" topic. (#2078) Thanks @sbking.
+- Gateway: fix multi-agent sessions.usage discovery. (#11523) Thanks @Takhoffman.
+- Gateway: no more post-compaction amnesia; injected transcript writes now preserve Pi session `parentId` chain so agents can remember again. (#12283) Thanks @Takhoffman.
+- Agents: recover from context overflow caused by oversized tool results (pre-emptive capping + fallback truncation). (#11579) Thanks @tyler6204.
+- Subagents/compaction: stabilize announce timing and preserve compaction metrics across retries. (#11664) Thanks @tyler6204.
+- Routing: refresh bindings per message by loading config at route resolution so binding changes apply without restart. (#11372) Thanks @juanpablodlc.
+- Cron: share isolated announce flow and harden scheduling/delivery reliability. (#11641) Thanks @tyler6204.
+- Cron tool: recover flat params when LLM omits the `job` wrapper for add requests. (#12124) Thanks @tyler6204.
+- Hooks: fix bundled hooks broken since 2026.2.2 (tsdown migration). (#9295) Thanks @patrickshao.
+- Exec approvals: render forwarded commands in monospace for safer approval scanning. (#11937) Thanks @sebslight.
+- Config: clamp `maxTokens` to `contextWindow` to prevent invalid model configs. (#5516) Thanks @lailoo.
+- Thinking: allow xhigh for `github-copilot/gpt-5.2-codex` and `github-copilot/gpt-5.2`. (#11646) Thanks @seans-openclawbot.
+- Discord: support forum/media thread-create starter messages, wire `message thread create --message`, and harden routing. (#10062) Thanks @jarvis89757.
+- Telegram: render markdown spoilers with `<tg-spoiler>` HTML tags. (#11543) Thanks @ezhikkk.
+- Telegram: recover proactive sends when stale topic thread IDs are used by retrying without `message_thread_id`. (#11620)
+- Web UI: make chat refresh smoothly scroll to the latest messages and suppress new-messages badge flash during manual refresh.
+- Gateway/CLI: when `gateway.bind=lan`, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.
+- Paths: structurally resolve `OPENCLAW_HOME`-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.
+- Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
+- Memory/QMD: reuse default model cache across agents instead of re-downloading per agent. (#12114) Thanks @tyler6204.
+- Media understanding: recognize `.caf` audio attachments for transcription. (#10982) Thanks @succ985.
+- State dir: honor `OPENCLAW_STATE_DIR` for default device identity and canvas storage paths. (#4824) Thanks @kossoy.
+
+## 2026.2.6
 
 ### Changes
 
-- CLI: sort `openclaw --help` commands (and options) alphabetically. (#8068) Thanks @deepsoumya617.
+- Cron: default `wakeMode` is now `"now"` for new jobs (was `"next-heartbeat"`). (#10776) Thanks @tyler6204.
+- Cron: `cron run` defaults to force execution; use `--due` to restrict to due-only. (#10776) Thanks @tyler6204.
+- Models: support Anthropic Opus 4.6 and OpenAI Codex gpt-5.3-codex (forward-compat fallbacks). (#9853, #10720, #9995) Thanks @TinyTb, @calvin-hpnet, @tyler6204.
+- Providers: add xAI (Grok) support. (#9885) Thanks @grp06.
+- Providers: add Baidu Qianfan support. (#8868) Thanks @ide-rea.
+- Web UI: add token usage dashboard. (#10072) Thanks @Takhoffman.
+- Memory: native Voyage AI support. (#7078) Thanks @mcinteerj.
+- Sessions: cap sessions_history payloads to reduce context overflow. (#10000) Thanks @gut-puncture.
+- CLI: sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
+- CI: optimize pipeline throughput (macOS consolidation, Windows perf, workflow concurrency). (#10784) Thanks @mcaxtr.
+- Agents: bump pi-mono to 0.52.7; add embedded forward-compat fallback for Opus 4.6 model ids.
+
+### Added
+
+- Cron: run history deep-links to session chat from the dashboard. (#10776) Thanks @tyler6204.
+- Cron: per-run session keys in run log entries and default labels for cron sessions. (#10776) Thanks @tyler6204.
+- Cron: legacy payload field compatibility (`deliver`, `channel`, `to`, `bestEffortDeliver`) in schema. (#10776) Thanks @tyler6204.
+
+### Fixes
+
+- Cron: scheduler reliability (timer drift, restart catch-up, lock contention, stale running markers). (#10776) Thanks @tyler6204.
+- Cron: store migration hardening (legacy field migration, parse error handling, explicit delivery mode persistence). (#10776) Thanks @tyler6204.
+- Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
+- Telegram: auto-inject DM topic threadId in message tool + subagent announce. (#7235) Thanks @Lukavyi.
+- Security: require auth for Gateway canvas host and A2UI assets. (#9518) Thanks @coygeek.
+- Cron: fix scheduling and reminder delivery regressions; harden next-run recompute + timer re-arming + legacy schedule fields. (#9733, #9823, #9948, #9932) Thanks @tyler6204, @pycckuu, @j2h4u, @fujiwara-tofu-shop.
+- Update: harden Control UI asset handling in update flow. (#10146) Thanks @gumadeiras.
+- Security: add skill/plugin code safety scanner; redact credentials from config.get gateway responses. (#9806, #9858) Thanks @abdelsfane.
+- Exec approvals: coerce bare string allowlist entries to objects. (#9903) Thanks @mcaxtr.
+- Slack: add mention stripPatterns for /new and /reset. (#9971) Thanks @ironbyte-rgb.
+- Chrome extension: fix bundled path resolution. (#8914) Thanks @kelvinCB.
+- Compaction/errors: allow multiple compaction retries on context overflow; show clear billing errors. (#8928, #8391) Thanks @Glucksberg.
+
+## 2026.2.3
+
+### Changes
+
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
 - Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180)
 - Telegram: remove `@ts-nocheck` from `bot.ts`, fix duplicate `bot.catch` error handler (Grammy overrides), remove dead reaction `message_thread_id` routing, harden sticker cache guard. (#9077)
@@ -24,8 +104,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- CLI: resolve bundled Chrome extension assets by walking up to the nearest assets directory; add resolver and clipboard tests. (#8914) Thanks @kelvinCB.
-- Tests: stabilize Windows ACL coverage with deterministic os.userInfo mocking. (#9335) Thanks @M00N7682.
 - Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.
 - TUI/Gateway: handle non-streaming finals, refresh history for non-local chat runs, and avoid event gap warnings for targeted tool streams. (#8432) Thanks @gumadeiras.
 - Shell completion: auto-detect and migrate slow dynamic patterns to cached files for faster terminal startup; add completion health checks to doctor/update/onboard.
@@ -35,7 +113,6 @@ Docs: https://docs.openclaw.ai
 - Web UI: apply button styling to the new-messages indicator.
 - Onboarding: infer auth choice from non-interactive API key flags. (#8484) Thanks @f-trycua.
 - Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.
-- Discord: treat allowlisted senders as owner for system-prompt identity hints while keeping channel topics untrusted.
 - Security: enforce sandboxed media paths for message tool attachments. (#9182) Thanks @victormier.
 - Security: require explicit credentials for gateway URL overrides to prevent credential leakage. (#8113) Thanks @victormier.
 - Security: gate `whatsapp_login` tool to owner senders and default-deny non-owner contexts. (#8768) Thanks @victormier.
@@ -45,7 +122,6 @@ Docs: https://docs.openclaw.ai
 - Cron: reload store data when the store file is recreated or mtime changes.
 - Cron: deliver announce runs directly, honor delivery mode, and respect wakeMode for summaries. (#8540) Thanks @tyler6204.
 - Telegram: include forward_from_chat metadata in forwarded messages and harden cron delivery target checks. (#8392) Thanks @Glucksberg.
-- Telegram: preserve DM topic threadId in deliveryContext. (#9039) Thanks @lailoo.
 - macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.
 
 ## 2026.2.2-3

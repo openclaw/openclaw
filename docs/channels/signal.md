@@ -109,7 +109,7 @@ DMs:
 - Approve via:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Pairing is the default token exchange for Signal DMs. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange for Signal DMs. Details: [Pairing](/channels/pairing)
 - UUID-only senders (from `sourceUuid`) are stored as `uuid:<id>` in `channels.signal.allowFrom`.
 
 Groups:
@@ -167,6 +167,32 @@ Config:
 - UUID DMs: `uuid:<id>` (or bare UUID).
 - Groups: `signal:group:<groupId>`.
 - Usernames: `username:<name>` (if supported by your Signal account).
+
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list signal
+```
+
+Common failures:
+
+- Daemon reachable but no replies: verify account/daemon settings (`httpUrl`, `account`) and receive mode.
+- DMs ignored: sender is pending pairing approval.
+- Group messages ignored: group sender/mention gating blocks delivery.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
 ## Configuration reference (Signal)
 

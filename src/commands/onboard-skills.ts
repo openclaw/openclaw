@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
@@ -155,22 +156,29 @@ export async function setupSkills(
         installId,
         config: next,
       });
+      const warnings = result.warnings ?? [];
       if (result.ok) {
-        spin.stop(`Installed ${name}`);
-      } else {
-        const code = result.code == null ? "" : ` (exit ${result.code})`;
-        const detail = summarizeInstallFailure(result.message);
-        spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
-        if (result.stderr) {
-          runtime.log(result.stderr.trim());
-        } else if (result.stdout) {
-          runtime.log(result.stdout.trim());
+        spin.stop(warnings.length > 0 ? `Installed ${name} (with warnings)` : `Installed ${name}`);
+        for (const warning of warnings) {
+          runtime.log(warning);
         }
-        runtime.log(
-          `Tip: run \`${formatCliCommand("openclaw doctor")}\` to review skills + requirements.`,
-        );
-        runtime.log("Docs: https://docs.openclaw.ai/skills");
+        continue;
       }
+      const code = result.code == null ? "" : ` (exit ${result.code})`;
+      const detail = summarizeInstallFailure(result.message);
+      spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
+      for (const warning of warnings) {
+        runtime.log(warning);
+      }
+      if (result.stderr) {
+        runtime.log(result.stderr.trim());
+      } else if (result.stdout) {
+        runtime.log(result.stdout.trim());
+      }
+      runtime.log(
+        `Tip: run \`${formatCliCommand("openclaw doctor")}\` to review skills + requirements.`,
+      );
+      runtime.log("Docs: https://docs.openclaw.ai/skills");
     }
   }
 
@@ -191,7 +199,7 @@ export async function setupSkills(
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),
     );
-    next = upsertSkillEntry(next, skill.skillKey, { apiKey: apiKey.trim() });
+    next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
   }
 
   return next;

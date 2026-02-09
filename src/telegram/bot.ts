@@ -40,6 +40,7 @@ import {
 } from "./bot-updates.js";
 import {
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
@@ -125,8 +126,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch, {
     network: telegramCfg.network,
-  });
+  }) as unknown as ApiClientOptions["fetch"];
   const shouldProvideFetch = Boolean(fetchImpl);
+  // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
+  // (undici) is structurally compatible at runtime but not assignable in TS.
+  const fetchForClient = fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
@@ -134,7 +138,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const client: ApiClientOptions | undefined =
     shouldProvideFetch || timeoutSeconds
       ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchImpl } : {}),
+          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
@@ -444,11 +448,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
         : undefined;
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      // Fresh config for bindings lookup; other routing inputs are payload-derived.
       const route = resolveAgentRoute({
-        cfg,
+        cfg: loadConfig(),
         channel: "telegram",
         accountId: account.accountId,
-        peer: { kind: isGroup ? "group" : "dm", id: peerId },
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
       });
       const sessionKey = route.sessionKey;
 
