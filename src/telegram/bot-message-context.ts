@@ -266,7 +266,8 @@ export const buildTelegramMessageContext = async ({
             if (created) {
               logger.info(
                 {
-                  chatId: candidate,
+                  chatId: String(chatId),
+                  senderUserId: senderUserId ?? undefined,
                   username: from?.username,
                   firstName: from?.first_name,
                   lastName: from?.last_name,
