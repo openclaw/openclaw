@@ -33,6 +33,7 @@ function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
+  cfg?: OpenClawConfig,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
@@ -43,6 +44,8 @@ function resolveOpenAICodexGpt53FallbackModel(
     return undefined;
   }
 
+  const inlineOverrides = resolveInlineModelOverrides(cfg, normalizedProvider, trimmedModelId);
+
   for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
@@ -52,6 +55,7 @@ function resolveOpenAICodexGpt53FallbackModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...inlineOverrides,
     } as Model<Api>);
   }
 
@@ -73,6 +77,7 @@ function resolveAnthropicOpus46ForwardCompatModel(
   provider: string,
   modelId: string,
   modelRegistry: ModelRegistry,
+  cfg?: OpenClawConfig,
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   if (normalizedProvider !== "anthropic") {
@@ -99,6 +104,10 @@ function resolveAnthropicOpus46ForwardCompatModel(
   }
   templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
 
+  // Look up user-configured model properties from openclaw.json to apply overrides
+  // (e.g. contextWindow, maxTokens) that the template model wouldn't have.
+  const inlineOverrides = resolveInlineModelOverrides(cfg, normalizedProvider, trimmedModelId);
+
   for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
     const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
     if (!template) {
@@ -108,10 +117,48 @@ function resolveAnthropicOpus46ForwardCompatModel(
       ...template,
       id: trimmedModelId,
       name: trimmedModelId,
+      ...inlineOverrides,
     } as Model<Api>);
   }
 
   return undefined;
+}
+
+/**
+ * Extract user-configured model property overrides from openclaw.json.
+ * This ensures forward-compat models respect user config for fields like
+ * contextWindow and maxTokens that may differ from the template model.
+ */
+function resolveInlineModelOverrides(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  modelId: string,
+): Partial<Pick<Model<Api>, "contextWindow" | "maxTokens" | "reasoning" | "input">> {
+  const providers = cfg?.models?.providers ?? {};
+  const inlineModels = buildInlineProviderModels(providers as Record<string, InlineProviderConfig>);
+  const normalizedProvider = normalizeProviderId(provider);
+  const match = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (!match) {
+    return {};
+  }
+  const overrides: Partial<
+    Pick<Model<Api>, "contextWindow" | "maxTokens" | "reasoning" | "input">
+  > = {};
+  if (typeof match.contextWindow === "number" && match.contextWindow > 0) {
+    overrides.contextWindow = match.contextWindow;
+  }
+  if (typeof match.maxTokens === "number" && match.maxTokens > 0) {
+    overrides.maxTokens = match.maxTokens;
+  }
+  if (typeof match.reasoning === "boolean") {
+    overrides.reasoning = match.reasoning;
+  }
+  if (Array.isArray(match.input)) {
+    overrides.input = match.input as Model<Api>["input"];
+  }
+  return overrides;
 }
 
 export function buildInlineProviderModels(
@@ -187,6 +234,7 @@ export function resolveModel(
       provider,
       modelId,
       modelRegistry,
+      cfg,
     );
     if (codexForwardCompat) {
       return { model: codexForwardCompat, authStorage, modelRegistry };
@@ -195,6 +243,7 @@ export function resolveModel(
       provider,
       modelId,
       modelRegistry,
+      cfg,
     );
     if (anthropicForwardCompat) {
       return { model: anthropicForwardCompat, authStorage, modelRegistry };

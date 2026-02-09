@@ -207,6 +207,110 @@ describe("resolveModel", () => {
     });
   });
 
+  it("applies user-configured contextWindow to anthropic forward-compat model", () => {
+    const templateModel = {
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "anthropic" && modelId === "claude-opus-4-5") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6 (1M)",
+                contextWindow: 1000000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-opus-4-6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+      api: "anthropic-messages",
+      contextWindow: 1000000,
+      maxTokens: 32000,
+    });
+  });
+
+  it("applies user-configured contextWindow to codex forward-compat model", () => {
+    const templateModel = {
+      id: "gpt-5.2-codex",
+      name: "GPT-5.2 Codex",
+      provider: "openai-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 272000,
+      maxTokens: 128000,
+    };
+
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
+          return templateModel;
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.3-codex",
+                name: "GPT-5.3 Codex",
+                contextWindow: 500000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gpt-5.3-codex",
+      contextWindow: 500000,
+    });
+  });
+
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
