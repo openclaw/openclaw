@@ -273,6 +273,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: require TLS 1.3 minimum for TLS listeners. (#5970) Thanks @loganaden.
 - Web UI: refine chat layout + extend session active duration.
 - CI: add formal conformance + alias consistency checks. (#5723, #5807)
+- Tools: add Grok (xAI) as a `web_search` provider. (#5796) Thanks @tmchow.
 
 ### Fixes
 
