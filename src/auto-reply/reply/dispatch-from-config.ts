@@ -184,6 +184,10 @@ export async function dispatchReplyFromConfig(params: {
             senderName: ctx.SenderName,
             senderUsername: ctx.SenderUsername,
             senderE164: ctx.SenderE164,
+            rootId: (ctx as Record<string, unknown>).RootId,
+            parentId: (ctx as Record<string, unknown>).ParentId,
+            msgType: (ctx as Record<string, unknown>).MsgType,
+            mentionsJson: (ctx as Record<string, unknown>).MentionsJson,
           },
         },
         {
