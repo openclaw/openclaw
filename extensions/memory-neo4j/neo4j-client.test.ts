@@ -276,6 +276,60 @@ describe("Neo4jMemoryClient", () => {
       expect(result).toEqual([]);
       expect(mockLogger.debug).toHaveBeenCalled();
     });
+
+    it("should filter by agentId when provided", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [
+          {
+            get: vi.fn((key) => {
+              if (key === "id") return "mem-1";
+              if (key === "text") return "similar text";
+              if (key === "similarity") return 0.96;
+              return null;
+            }),
+          },
+        ],
+      });
+
+      const result = await client.findSimilar([0.1, 0.2, 0.3], 0.95, 5, "agent-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ id: "mem-1", text: "similar text", score: 0.96 });
+      // Should include agentId filter in query and params
+      expect(mockSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("node.agentId = $agentId"),
+        expect.objectContaining({ agentId: "agent-1" }),
+      );
+    });
+
+    it("should fetch extra candidates and trim when agentId is provided", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [
+          {
+            get: vi.fn((key) => {
+              if (key === "id") return "mem-1";
+              if (key === "text") return "text 1";
+              if (key === "similarity") return 0.99;
+              return null;
+            }),
+          },
+          {
+            get: vi.fn((key) => {
+              if (key === "id") return "mem-2";
+              if (key === "text") return "text 2";
+              if (key === "similarity") return 0.97;
+              return null;
+            }),
+          },
+        ],
+      });
+
+      // Request limit=1 with agentId: should fetch 3x candidates (limit*3) and trim to 1
+      const result = await client.findSimilar([0.1, 0.2], 0.95, 1, "agent-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("mem-1");
+    });
   });
 
   // ------------------------------------------------------------------------
@@ -1298,6 +1352,15 @@ describe("Neo4jMemoryClient", () => {
         extractionRetries: 1,
       });
     });
+
+    it("should not pass agentId: undefined in listPendingExtractions params", async () => {
+      mockSession.run.mockResolvedValue({ records: [] });
+
+      await client.listPendingExtractions(50);
+
+      const params = mockSession.run.mock.calls[0][1] as Record<string, unknown>;
+      expect(params).not.toHaveProperty("agentId");
+    });
   });
 
   // ------------------------------------------------------------------------
@@ -1356,8 +1419,49 @@ describe("Neo4jMemoryClient", () => {
       const result = await client.bm25Search("test query", 10);
 
       expect(result).toHaveLength(1);
-      // Score should be normalized (divided by max)
+      // Single result: score should be moderate 0.5 (not 1.0) to avoid inflating weak matches
+      expect(result[0].score).toBe(0.5);
+    });
+
+    it("should normalize BM25 scores with min-max when multiple results exist", async () => {
+      mockSession.run.mockResolvedValue({
+        records: [
+          {
+            get: vi.fn((key) => {
+              const data: Record<string, any> = {
+                id: "m1",
+                text: "best match",
+                category: "fact",
+                importance: 0.8,
+                createdAt: "2024-01-01",
+                bm25Score: 10.0,
+              };
+              return data[key];
+            }),
+          },
+          {
+            get: vi.fn((key) => {
+              const data: Record<string, any> = {
+                id: "m2",
+                text: "worst match",
+                category: "fact",
+                importance: 0.5,
+                createdAt: "2024-01-02",
+                bm25Score: 2.0,
+              };
+              return data[key];
+            }),
+          },
+        ],
+      });
+
+      const result = await client.bm25Search("test", 10);
+
+      expect(result).toHaveLength(2);
+      // Best result gets score 1.0 (FLOOR + (1-FLOOR)*1)
       expect(result[0].score).toBe(1.0);
+      // Worst result gets FLOOR (0.3)
+      expect(result[1].score).toBeCloseTo(0.3);
     });
 
     it("should escape Lucene special characters in BM25 query", async () => {
@@ -1401,6 +1505,75 @@ describe("Neo4jMemoryClient", () => {
         id: "m1",
         score: 0.9,
       });
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // reindex()
+  // ------------------------------------------------------------------------
+
+  describe("reindex", () => {
+    it("should use UNWIND batch update instead of individual queries", async () => {
+      // Mock drop index session
+      const dropSession = createMockSession();
+      // Mock fetch session (returns 2 memories)
+      const fetchSession = createMockSession();
+      fetchSession.run.mockResolvedValueOnce({
+        records: [
+          { get: vi.fn((key) => (key === "id" ? "m1" : "text 1")) },
+          { get: vi.fn((key) => (key === "id" ? "m2" : "text 2")) },
+        ],
+      });
+      // Mock batch update session
+      const updateSession = createMockSession();
+      // Mock recreate index session
+      const indexSession = createMockSession();
+
+      mockDriver.session
+        .mockReturnValueOnce(dropSession)
+        .mockReturnValueOnce(fetchSession)
+        .mockReturnValueOnce(updateSession)
+        .mockReturnValueOnce(indexSession);
+
+      const embedFn = vi.fn().mockResolvedValue([
+        [0.1, 0.2],
+        [0.3, 0.4],
+      ]);
+
+      await client.reindex(embedFn, { batchSize: 50 });
+
+      // Should call UNWIND batch, not individual queries
+      expect(updateSession.run).toHaveBeenCalledTimes(1);
+      expect(updateSession.run).toHaveBeenCalledWith(
+        expect.stringContaining("UNWIND $items"),
+        expect.objectContaining({
+          items: [
+            { id: "m1", embedding: [0.1, 0.2] },
+            { id: "m2", embedding: [0.3, 0.4] },
+          ],
+        }),
+      );
+    });
+
+    it("should skip batch update when all embeddings are empty", async () => {
+      const dropSession = createMockSession();
+      const fetchSession = createMockSession();
+      fetchSession.run.mockResolvedValueOnce({
+        records: [{ get: vi.fn((key) => (key === "id" ? "m1" : "text 1")) }],
+      });
+      const indexSession = createMockSession();
+
+      mockDriver.session
+        .mockReturnValueOnce(dropSession)
+        .mockReturnValueOnce(fetchSession)
+        .mockReturnValueOnce(indexSession);
+
+      const embedFn = vi.fn().mockResolvedValue([[]]);
+
+      await client.reindex(embedFn, { batchSize: 50 });
+
+      // No update session should be created (only drop, fetch, and index sessions)
+      expect(mockDriver.session).toHaveBeenCalledTimes(3);
     });
   });
 

@@ -114,10 +114,11 @@ const memoryNeo4jPlugin = {
             limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
           }),
           async execute(_toolCallId: string, params: unknown) {
-            const { query, limit = 5 } = params as {
+            const { query, limit: rawLimit = 5 } = params as {
               query: string;
               limit?: number;
             };
+            const limit = Math.floor(Math.min(50, Math.max(1, rawLimit)));
 
             const results = await hybridSearch(
               db,
@@ -197,7 +198,7 @@ const memoryNeo4jPlugin = {
             const vector = await embeddings.embed(text);
 
             // 2. Check for duplicates (vector similarity > 0.95)
-            const existing = await db.findSimilar(vector, 0.95, 1);
+            const existing = await db.findSimilar(vector, 0.95, 1, agentId);
             if (existing.length > 0) {
               return {
                 content: [
@@ -301,8 +302,9 @@ const memoryNeo4jPlugin = {
                 };
               }
 
-              // Auto-delete if single high-confidence match
-              if (results.length === 1 && results[0].score > 0.9) {
+              // Auto-delete if single high-confidence match (0.95 threshold
+              // reduces false positives — 0.9 cosine similarity is not exact match)
+              if (results.length === 1 && results[0].score > 0.95) {
                 await db.deleteMemory(results[0].id, agentId);
                 return {
                   content: [
@@ -1191,8 +1193,10 @@ async function captureMessage(
   extractionConfig: import("./config.js").ExtractionConfig,
   logger: AutoCaptureLogger,
 ): Promise<{ stored: boolean; semanticDeduped: boolean }> {
-  // For assistant messages, rate importance first (before embedding) to skip early
-  const rateFirst = source === "auto-capture-assistant";
+  // For assistant messages, rate importance first (before embedding) to skip early.
+  // When extraction is disabled, rateImportance returns 0.5 (the fallback), so we
+  // skip the early importance gate to avoid silently blocking all assistant captures.
+  const rateFirst = source === "auto-capture-assistant" && extractionConfig.enabled;
 
   let importance: number | undefined;
   if (rateFirst) {
@@ -1205,15 +1209,17 @@ async function captureMessage(
   const vector = await embeddings.embed(text);
 
   // Quick dedup (same content already stored — cosine >= 0.95)
-  const existing = await db.findSimilar(vector, 0.95, 1);
+  const existing = await db.findSimilar(vector, 0.95, 1, agentId);
   if (existing.length > 0) {
     return { stored: false, semanticDeduped: false };
   }
 
-  // Rate importance if not already done
+  // Rate importance if not already done.
+  // When extraction is disabled, rateImportance returns a fixed 0.5 fallback,
+  // so skip the threshold check to avoid silently blocking all captures.
   if (importance === undefined) {
     importance = await rateImportance(text, extractionConfig);
-    if (importance < importanceThreshold) {
+    if (extractionConfig.enabled && importance < importanceThreshold) {
       return { stored: false, semanticDeduped: false };
     }
   }
@@ -1221,7 +1227,7 @@ async function captureMessage(
   // Semantic dedup: check moderate-similarity memories (0.75-0.95)
   // Pass the vector similarity score as a pre-screen to skip LLM calls
   // for pairs below SEMANTIC_DEDUP_VECTOR_THRESHOLD.
-  const candidates = await db.findSimilar(vector, 0.75, 3);
+  const candidates = await db.findSimilar(vector, 0.75, 3, agentId);
   if (candidates.length > 0) {
     for (const candidate of candidates) {
       if (await isSemanticDuplicate(text, candidate.text, extractionConfig, candidate.score)) {

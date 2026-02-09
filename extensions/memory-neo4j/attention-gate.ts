@@ -78,7 +78,10 @@ export function passesAttentionGate(text: string): boolean {
   }
 
   // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  const emojiCount = (
+    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
+    []
+  ).length;
   if (emojiCount > 3) {
     return false;
   }
@@ -142,7 +145,10 @@ export function passesAssistantAttentionGate(text: string): boolean {
   }
 
   // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  const emojiCount = (
+    trimmed.match(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1FA00}-\u{1FAFF}]/gu) ||
+    []
+  ).length;
   if (emojiCount > 3) {
     return false;
   }

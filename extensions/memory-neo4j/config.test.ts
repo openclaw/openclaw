@@ -171,6 +171,32 @@ describe("memoryNeo4jConfigSchema.parse", () => {
       expect(config.embedding.apiKey).toBe("sk-from-env");
     });
 
+    it("should resolve ${ENV_VAR} in neo4j.user (username)", () => {
+      process.env.TEST_NEO4J_USER = "resolved-user";
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: {
+          uri: "bolt://localhost:7687",
+          user: "${TEST_NEO4J_USER}",
+          password: "",
+        },
+        embedding: { provider: "ollama" },
+      });
+      expect(config.neo4j.username).toBe("resolved-user");
+    });
+
+    it("should resolve ${ENV_VAR} in neo4j.username", () => {
+      process.env.TEST_NEO4J_USERNAME = "resolved-username";
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: {
+          uri: "bolt://localhost:7687",
+          username: "${TEST_NEO4J_USERNAME}",
+          password: "",
+        },
+        embedding: { provider: "ollama" },
+      });
+      expect(config.neo4j.username).toBe("resolved-username");
+    });
+
     it("should throw when referenced env var is not set", () => {
       delete process.env.NONEXISTENT_VAR;
       expect(() =>

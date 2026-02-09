@@ -78,6 +78,40 @@ describe("Embeddings - Ollama provider", () => {
     );
   });
 
+  it("should strip trailing slashes from baseUrl", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const mockVector = [0.1, 0.2];
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ embeddings: [mockVector] }),
+    });
+
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama", "http://my-host:11434/");
+    await emb.embed("test");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://my-host:11434/api/embed",
+      expect.any(Object),
+    );
+  });
+
+  it("should strip multiple trailing slashes from baseUrl", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const mockVector = [0.1, 0.2];
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ embeddings: [mockVector] }),
+    });
+
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama", "http://my-host:11434///");
+    await emb.embed("test");
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://my-host:11434/api/embed",
+      expect.any(Object),
+    );
+  });
+
   it("should throw when Ollama returns error status", async () => {
     const { Embeddings } = await import("./embeddings.js");
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -296,5 +330,152 @@ describe("Embeddings - Ollama context-length truncation", () => {
     // Second call: short text should pass through unchanged
     const body2 = JSON.parse(calls[1][1].body as string);
     expect(body2.input).toBe(shortText);
+  });
+});
+
+// ============================================================================
+// OpenAI embed — functional tests with mocked OpenAI client
+// ============================================================================
+
+describe("Embeddings - OpenAI functional", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("embed() should call OpenAI API with correct model and input", async () => {
+    const mockCreate = vi.fn().mockResolvedValue({
+      data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+    });
+
+    // Mock the openai module
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: mockCreate };
+      },
+    }));
+
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings("sk-test-key", "text-embedding-3-small", "openai");
+    const result = await emb.embed("hello world");
+
+    expect(result).toEqual([0.1, 0.2, 0.3]);
+    expect(mockCreate).toHaveBeenCalledWith({
+      model: "text-embedding-3-small",
+      input: "hello world",
+    });
+  });
+
+  it("embedBatch() should send all texts in a single API call and return correctly ordered results", async () => {
+    const mockCreate = vi.fn().mockResolvedValue({
+      // Return out-of-order to verify sorting by index
+      data: [
+        { index: 2, embedding: [0.7, 0.8, 0.9] },
+        { index: 0, embedding: [0.1, 0.2, 0.3] },
+        { index: 1, embedding: [0.4, 0.5, 0.6] },
+      ],
+    });
+
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: mockCreate };
+      },
+    }));
+
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings("sk-test-key", "text-embedding-3-small", "openai");
+    const results = await emb.embedBatch(["first", "second", "third"]);
+
+    // Should have made exactly one API call with all texts
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate).toHaveBeenCalledWith({
+      model: "text-embedding-3-small",
+      input: ["first", "second", "third"],
+    });
+
+    // Results should be sorted by index (0, 1, 2)
+    expect(results).toEqual([
+      [0.1, 0.2, 0.3],
+      [0.4, 0.5, 0.6],
+      [0.7, 0.8, 0.9],
+    ]);
+  });
+
+  it("embed() should propagate OpenAI API errors", async () => {
+    const mockCreate = vi.fn().mockRejectedValue(new Error("API rate limit exceeded"));
+
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: mockCreate };
+      },
+    }));
+
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings("sk-test-key", "text-embedding-3-small", "openai");
+
+    await expect(emb.embed("test")).rejects.toThrow("API rate limit exceeded");
+  });
+
+  it("embed() should return cached result on second call for same text", async () => {
+    const mockCreate = vi.fn().mockResolvedValue({
+      data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+    });
+
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: mockCreate };
+      },
+    }));
+
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings("sk-test-key", "text-embedding-3-small", "openai");
+
+    const result1 = await emb.embed("cached text");
+    const result2 = await emb.embed("cached text");
+
+    expect(result1).toEqual([0.1, 0.2, 0.3]);
+    expect(result2).toEqual([0.1, 0.2, 0.3]);
+    // Should only make one API call — second call uses cache
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("embedBatch() should use cache for previously embedded texts", async () => {
+    const mockCreate = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+      })
+      .mockResolvedValueOnce({
+        data: [{ index: 0, embedding: [0.7, 0.8, 0.9] }],
+      });
+
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: mockCreate };
+      },
+    }));
+
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings("sk-test-key", "text-embedding-3-small", "openai");
+
+    // First: embed "alpha" to populate cache
+    await emb.embed("alpha");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+
+    // Now batch with "alpha" (cached) and "beta" (uncached)
+    const results = await emb.embedBatch(["alpha", "beta"]);
+    // Should only call API once more for "beta"
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockCreate).toHaveBeenLastCalledWith({
+      model: "text-embedding-3-small",
+      input: ["beta"],
+    });
+    expect(results).toEqual([
+      [0.1, 0.2, 0.3], // cached
+      [0.7, 0.8, 0.9], // freshly computed
+    ]);
   });
 });
