@@ -506,7 +506,35 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
   if (!cur) {
     return;
   }
-  await cur.browser.close().catch(() => {});
+  // Try graceful close with a timeout; fall back to raw connection teardown
+  // if close() itself hangs (e.g. stuck CDP transport).
+  const CLOSE_TIMEOUT_MS = 3000;
+  const closed = cur.browser.close().catch(() => {});
+  const timeout = new Promise<void>((r) => setTimeout(r, CLOSE_TIMEOUT_MS));
+  await Promise.race([closed, timeout]).then(() => {
+    // If close() didn't resolve, forcibly tear down the local connection.
+    forceDropConnection(cur.browser);
+  });
+}
+
+/**
+ * Forcibly tear down Playwright's internal Connection object for a browser,
+ * aborting all in-flight CDP commands locally without sending anything over the wire.
+ * This is the nuclear option for when browser.close() itself hangs because
+ * the underlying WebSocket/CDP transport is stuck.
+ */
+function forceDropConnection(browser: Browser): void {
+  try {
+    // Playwright's ChannelOwner (base of Browser) stores `_connection` internally.
+    // Connection.close() rejects all pending callbacks and emits 'close',
+    // triggering the 'disconnected' event — all without touching the network.
+    const conn = (browser as any)._connection;
+    if (conn && typeof conn.close === "function") {
+      conn.close("Force-disconnected due to stuck CDP transport");
+    }
+  } catch {
+    // Best-effort; if internals change, we just move on.
+  }
 }
 
 /**
@@ -516,6 +544,10 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
  * can block all subsequent commands. We cannot safely "cancel" an individual command, and we do
  * not want to close the actual Chromium tab. Instead, we disconnect Playwright's CDP connection
  * so in-flight commands fail fast and the next request reconnects transparently.
+ *
+ * Unlike closePlaywrightBrowserConnection(), this does NOT attempt browser.close() which would
+ * also hang on a stuck CDP transport. Instead it directly tears down the local Connection,
+ * instantly failing all pending Playwright operations.
  */
 export async function forceDisconnectPlaywrightForTarget(opts: {
   cdpUrl: string;
@@ -526,7 +558,11 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   if (cached?.cdpUrl !== normalized) {
     return;
   }
-  await closePlaywrightBrowserConnection();
+  const cur = cached;
+  cached = null;
+  if (cur) {
+    forceDropConnection(cur.browser);
+  }
 }
 
 /**
