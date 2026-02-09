@@ -24,6 +24,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
+import { registerInboundHandler } from "../../channels/inbound-handler-registry.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
@@ -247,6 +248,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
 
   async function handleMessageNow(message: IMessagePayload) {
+    // Register this handler to prevent gateway restart during message processing.
+    // This ensures we wait for complete message handling including reply delivery.
+    const messageId = message.id ? String(message.id) : `${Date.now()}`;
+    const { unregister } = registerInboundHandler({
+      channel: "imessage",
+      handlerId: `${accountInfo.accountId}:${messageId}`,
+    });
+
+    try {
+      await handleMessageNowImpl(message);
+    } finally {
+      // ALWAYS unregister, even if processing fails.
+      unregister();
+    }
+  }
+
+  async function handleMessageNowImpl(message: IMessagePayload) {
     const senderRaw = message.sender ?? "";
     const sender = senderRaw.trim();
     if (!sender) {
@@ -649,6 +667,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         onModelSelected,
       },
     });
+
     if (!queuedFinal) {
       if (isGroup && historyKey) {
         clearHistoryEntriesIfEnabled({

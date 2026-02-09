@@ -2,6 +2,11 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import {
+  getActiveInboundHandlerCount,
+  getActiveHandlersByChannel,
+} from "../channels/inbound-handler-registry.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -10,7 +15,7 @@ import {
   authorizeGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -148,13 +153,88 @@ export function createGatewayReloadHandlers(params: {
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
       : plan.changedPaths.join(", ");
-    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
       return;
     }
-    authorizeGatewaySigusr1Restart();
-    process.emit("SIGUSR1");
+
+    // Check if there are active operations (commands in queue, pending replies, or active message handlers)
+    const queueSize = getTotalQueueSize();
+    const pendingReplies = getTotalPendingReplies();
+    const activeHandlers = getActiveInboundHandlerCount();
+    const totalActive = queueSize + pendingReplies + activeHandlers;
+
+    if (totalActive > 0) {
+      const details = [];
+      if (queueSize > 0) {
+        details.push(`${queueSize} queued operation(s)`);
+      }
+      if (pendingReplies > 0) {
+        details.push(`${pendingReplies} pending reply(ies)`);
+      }
+      if (activeHandlers > 0) {
+        const byChannel = getActiveHandlersByChannel();
+        const channelSummary = Object.entries(byChannel)
+          .map(([channel, count]) => `${count} ${channel}`)
+          .join(", ");
+        details.push(`${activeHandlers} active handler(s): ${channelSummary}`);
+      }
+      params.logReload.warn(
+        `config change requires gateway restart (${reasons}) — deferring until ${details.join(", ")} complete`,
+      );
+
+      // Wait for all operations and replies to complete before restarting (max 30 seconds)
+      const maxWaitMs = 30_000;
+      const checkIntervalMs = 500;
+      const startTime = Date.now();
+
+      const checkAndRestart = () => {
+        const currentQueueSize = getTotalQueueSize();
+        const currentPendingReplies = getTotalPendingReplies();
+        const currentActiveHandlers = getActiveInboundHandlerCount();
+        const currentTotalActive = currentQueueSize + currentPendingReplies + currentActiveHandlers;
+        const elapsed = Date.now() - startTime;
+
+        if (currentTotalActive === 0) {
+          params.logReload.info(
+            "all operations, replies, and handlers completed; restarting gateway now",
+          );
+          authorizeGatewaySigusr1Restart();
+          process.emit("SIGUSR1");
+        } else if (elapsed >= maxWaitMs) {
+          const remainingDetails = [];
+          if (currentQueueSize > 0) {
+            remainingDetails.push(`${currentQueueSize} operation(s)`);
+          }
+          if (currentPendingReplies > 0) {
+            remainingDetails.push(`${currentPendingReplies} reply(ies)`);
+          }
+          if (currentActiveHandlers > 0) {
+            const byChannel = getActiveHandlersByChannel();
+            const channelSummary = Object.entries(byChannel)
+              .map(([channel, count]) => `${count} ${channel}`)
+              .join(", ");
+            remainingDetails.push(`${currentActiveHandlers} handler(s): ${channelSummary}`);
+          }
+          params.logReload.warn(
+            `restart timeout after ${elapsed}ms with ${remainingDetails.join(", ")} still active; restarting anyway`,
+          );
+          authorizeGatewaySigusr1Restart();
+          process.emit("SIGUSR1");
+        } else {
+          // Check again soon
+          setTimeout(checkAndRestart, checkIntervalMs);
+        }
+      };
+
+      setTimeout(checkAndRestart, checkIntervalMs);
+    } else {
+      // No active operations or pending replies, restart immediately
+      params.logReload.warn(`config change requires gateway restart (${reasons})`);
+      authorizeGatewaySigusr1Restart();
+      process.emit("SIGUSR1");
+    }
   };
 
   return { applyHotReload, requestGatewayRestart };
