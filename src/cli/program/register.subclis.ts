@@ -239,6 +239,14 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "workqueue-worker",
+    description: "Workqueue worker loop (clawnsole + openclaw agent)",
+    register: async (program) => {
+      const mod = await import("../workqueue-worker-cli.js");
+      mod.registerWorkqueueWorkerCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {
