@@ -1263,7 +1263,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue"]
+                "pages": ["help/submitting-a-pr", "help/submitting-an-issue", "ci"]
               },
               {
                 "group": "Docs meta",
