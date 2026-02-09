@@ -769,6 +769,80 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
   };
 }
 
+export function applySelfHostedOpenAIProviderConfig(
+  cfg: OpenClawConfig,
+  params: {
+    baseUrl: string;
+    apiKey?: string;
+    modelName: string;
+    providerName: string;
+    reasoning: boolean;
+    contextWindow: number;
+    maxTokens: number;
+  },
+): OpenClawConfig {
+  const modelKey = `${params.providerName}/${params.modelName}`;
+  const models = { ...cfg.agents?.defaults?.models };
+  models[modelKey] = {
+    ...models[modelKey],
+    alias: models[modelKey]?.alias ?? params.providerName,
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers[params.providerName];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = {
+    id: params.modelName,
+    name: `${params.providerName} ${params.modelName}`,
+    reasoning: params.reasoning,
+    input: ["text"] as const,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: params.contextWindow,
+    maxTokens: params.maxTokens,
+  };
+  const hasDefaultModel = existingModels.some((model) => model.id === params.modelName);
+  const mergedModels = hasDefaultModel ? existingModels : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim() || params.apiKey;
+  providers[params.providerName] = {
+    ...existingProviderRest,
+    baseUrl: params.baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applySelfHostedOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
+  // This function is a placeholder since the actual configuration is handled in applySelfHostedOpenAIProviderConfig
+  // when the specific parameters (baseUrl, apiKey, modelName) are known.
+  return cfg;
+}
+
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   const existingModel = next.agents?.defaults?.model;

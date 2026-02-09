@@ -17,6 +17,8 @@ export {
   applyMoonshotProviderConfigCn,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applySelfHostedOpenAIConfig,
+  applySelfHostedOpenAIProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -29,6 +31,12 @@ export {
   applyXaiConfig,
   applyXaiProviderConfig,
 } from "./onboard-auth.config-core.js";
+export {
+  DEFAULT_SELF_HOSTED_REASONING,
+  DEFAULT_SELF_HOSTED_CONTEXT_WINDOW,
+  DEFAULT_SELF_HOSTED_MAX_TOKENS,
+  SELF_HOSTED_OPENAI_DEFAULT_MODEL_REF,
+} from "./onboard-auth.self-hosted-openai.js";
 export {
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,

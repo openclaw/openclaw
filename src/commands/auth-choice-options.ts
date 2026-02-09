@@ -9,6 +9,7 @@ export type AuthChoiceOption = {
 
 export type AuthChoiceGroupId =
   | "openai"
+  | "self-hosted"
   | "anthropic"
   | "google"
   | "copilot"
@@ -44,6 +45,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "OpenAI",
     hint: "Codex OAuth + API key",
     choices: ["openai-codex", "openai-api-key"],
+  },
+  {
+    value: "self-hosted",
+    label: "OpenAI-compatible API",
+    hint: "LM Studio, Open WebUI, Ollama, or other OpenAI-compatible services",
+    choices: ["self-hosted-openai-api"],
   },
   {
     value: "anthropic",
@@ -236,6 +243,11 @@ export function buildAuthChoiceOptions(params: {
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
+  });
+  options.push({
+    value: "self-hosted-openai-api",
+    label: "OpenAI-compatible API",
+    hint: "LM Studio, Open WebUI, Ollama, or other OpenAI-compatible services",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });

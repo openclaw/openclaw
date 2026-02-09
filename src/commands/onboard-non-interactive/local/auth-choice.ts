@@ -555,5 +555,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
+  if (authChoice === "self-hosted-openai-api") {
+    // Handle self-hosted OpenAI API configuration
+    // Since this requires user input for URL, model name, etc., it's not suitable for non-interactive mode
+    runtime.error("Self-hosted OpenAI API configuration requires interactive mode.");
+    runtime.exit(1);
+    return null;
+  }
+
   return nextConfig;
 }
