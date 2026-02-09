@@ -463,6 +463,25 @@ For message tool sends, set `asVoice: true` with a voice-compatible audio `media
 }
 ```
 
+## Video messages (video vs video note)
+
+Telegram distinguishes **video notes** (round bubble) from **video files** (rectangular).
+OpenClaw defaults to video files.
+
+For message tool sends, set `asVideoNote: true` with a video `media` URL:
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  media: "https://example.com/video.mp4",
+  asVideoNote: true,
+}
+```
+
+(Note: Video notes do not support captions. If you provide a message text, it will be sent as a separate message.)
+
 ## Stickers
 
 OpenClaw supports receiving and sending Telegram stickers with intelligent caching.
