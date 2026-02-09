@@ -1,6 +1,6 @@
 ---
 title: CI Pipeline
-description: How the OpenClaw CI pipeline works and why jobs are ordered the way they are. Latest changes: Feb 09, 2026
+description: How the OpenClaw CI pipeline works and why jobs are ordered the way they are.
 ---
 
 # CI Pipeline
@@ -128,11 +128,14 @@ The analysis skips: `node_modules`, `dist`, `vendor`, `.git`, `coverage`,
 The `setup-node-env` composite action (`.github/actions/setup-node-env/`)
 handles the shared setup boilerplate:
 
-- Submodule checkout with retry (5 attempts)
+- Submodule init/update with retry (5 attempts, exponential backoff)
 - Node.js 22 setup
 - pnpm via corepack + store cache
 - Optional Bun install
 - `pnpm install` with retry
+
+The `macos` job also caches SwiftPM packages (`~/Library/Caches/org.swift.swiftpm`)
+to speed up dependency resolution.
 
 This eliminates ~40 lines of duplicated YAML per job.
 
