@@ -225,7 +225,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         }
         if (effectiveGroupAllowFrom.length > 0) {
           const allowMatch = resolveMSTeamsAllowlistMatch({
-            groupPolicy,
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
@@ -413,7 +412,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         channelData: activity.channelData,
       },
       log,
-      preserveFilenames: cfg.media?.preserveFilenames,
+      preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
+        ?.preserveFilenames,
     });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);

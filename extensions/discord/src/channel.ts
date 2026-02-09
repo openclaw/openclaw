@@ -31,10 +31,12 @@ import { getDiscordRuntime } from "./runtime.js";
 const meta = getChatChannelMeta("discord");
 
 const discordMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getDiscordRuntime().channel.discord.messageActions.listActions(ctx),
-  extractToolSend: (ctx) => getDiscordRuntime().channel.discord.messageActions.extractToolSend(ctx),
+  listActions: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
+  extractToolSend: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) =>
-    await getDiscordRuntime().channel.discord.messageActions.handleAction(ctx),
+    await getDiscordRuntime().channel.discord.messageActions!.handleAction!(ctx),
 };
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {

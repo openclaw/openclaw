@@ -25,10 +25,11 @@ import {
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions.listActions(ctx),
-  supportsAction: (ctx) => getSignalRuntime().channel.signal.messageActions.supportsAction?.(ctx),
+  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
+  supportsAction: (ctx) =>
+    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
   handleAction: async (ctx) =>
-    await getSignalRuntime().channel.signal.messageActions.handleAction(ctx),
+    await getSignalRuntime().channel.signal.messageActions!.handleAction!(ctx),
 };
 
 const meta = getChatChannelMeta("signal");

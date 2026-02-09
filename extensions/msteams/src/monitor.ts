@@ -9,7 +9,7 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { formatUnknownError } from "./errors.js";
-import { registerMSTeamsHandlers } from "./monitor-handler.js";
+import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
@@ -224,7 +224,7 @@ export async function monitorMSTeamsProvider(
   const tokenProvider = new MsalTokenProvider(authConfig);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler(), {
+  const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
     cfg,
     runtime,
     appId,
@@ -246,7 +246,7 @@ export async function monitorMSTeamsProvider(
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
     void adapter
-      .process(req, res, (context: unknown) => handler.run(context))
+      .process(req, res, (context: unknown) => handler.run!(context))
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });
