@@ -207,6 +207,38 @@ gcloud iam service-accounts create maibeauty-crm --display-name="MAIBEAUTY CRM"
 
 ---
 
+### MAIBEAUTY 서비스 접근 정보
+
+모든 키/토큰은 `C:\TEST\MAIBEAUTY\.env`에 저장 (git 무시됨).
+
+| 서비스 | 접근 방법 | .env 키 |
+|--------|----------|---------|
+| **MAIBEAUTY API** | REST API (JWT 인증) | `MAIBEAUTY_API_URL`, `MAIBEAUTY_ADMIN_EMAIL`, `MAIBEAUTY_ADMIN_PASSWORD` |
+| **Cloudflare R2** | boto3 S3 호환 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_PUBLIC_URL` |
+| **Cloudflare API** | REST API (Bearer Token) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
+| **Video Worker** | Worker key 인증 | `VIDEO_WORKER_KEY` |
+| **Railway** | CLI 로그인 상태 | `railway variables` (MAIBEAUTY 프로젝트) |
+| **GitHub** | git credential 저장 | `jini92/MAIBEAUTY`, `jini92/MAIBOT` |
+| **Ollama** | 로컬 LLM | `OLLAMA_BASE_URL` (localhost:11434) |
+| **Google Sheets** | Service Account JSON | `GOOGLE_SERVICE_ACCOUNT_JSON`, `CRM_SPREADSHEET_ID` |
+
+**자주 쓰는 명령:**
+```powershell
+# API 로그인 (토큰 발급)
+$login = Invoke-RestMethod -Uri "$env:MAIBEAUTY_API_URL/api/v1/auth/login" -Method POST -ContentType "application/json" -Body '{"email":"jini@maibeauty.vn","password":"BnF@2026!Admin"}'
+$token = $login.access_token
+
+# 영상 생성 Job 제출
+Invoke-RestMethod -Uri "$env:MAIBEAUTY_API_URL/api/v1/products/{product_id}/ai/generate-video" -Method POST -Headers @{"Authorization"="Bearer $token";"Content-Type"="application/json"} -Body '{"language":"vi","style":"tiktok_short","duration_target":60}'
+
+# Worker 시작
+cd C:\TEST\MAIBEAUTY; python src/workers/video_worker.py --api-url https://maibeauty-api-production.up.railway.app --worker-key 0aP87uilc4OH93kTwjYbXpNnhBgrQx6e
+
+# Cloudflare R2 버킷 조회
+$headers = @{ "Authorization" = "Bearer $env:CLOUDFLARE_API_TOKEN" }
+Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$env:CLOUDFLARE_ACCOUNT_ID/r2/buckets/maibeauty-media" -Headers $headers
+```
+
 ### Discord 노티 규칙
 - **절대 금지**: `#일반` 채널(1466615738512179394)에 메시지 전송 금지 (보안 위험)
 - **DM 전용**: 지니님 DM 채널(1466624220632059934)으로만 전송
@@ -219,4 +251,4 @@ gcloud iam service-accounts create maibeauty-crm --display-name="MAIBEAUTY CRM"
 - **CLI:** obsidian-cli 미지원 (Windows) → 직접 파일 읽기/쓰기로 연동
 - **동기화:** OneDrive
 
-*Last updated: 2026-02-05*
+*Last updated: 2026-02-09*

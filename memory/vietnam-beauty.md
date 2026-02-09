@@ -703,6 +703,8 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 | 2026-02-09 | R2 E2E 테스트 PASS | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB) |
 | 2026-02-09 | TTS 엔진 edge-tts 전환 | MMS-TTS-vie(남성) → edge-tts vi-VN-HoaiMyNeural(여성), 아바타(happy.png 여성)와 음성 일치 |
 | 2026-02-09 | 자막 모드 srt-only 기본값 | burn-in 제거, SRT 별도 R2 업로드, 프론트엔드 토글 |
+| 2026-02-09 | 서비스 키/토큰 `.env` 통합 관리 | API 로그인, Cloudflare Token, Worker Key 등 `.env`에 정리 → 마이봇 원클릭 접근 |
+| 2026-02-09 | 자율 진행 + 노티 방식 채택 | 구현/테스트/문서화/배포는 확인 없이 진행 후 결과 보고. 확인 필요: 비용, 방향성, 외부 가입, 삭제/롤백 |
 
 ---
 
