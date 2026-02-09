@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatInterface } from "./components/ChatInterface";
+import { Settings } from "./components/Settings";
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [showSettings, setShowSettings] = useState(false);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
@@ -17,11 +19,22 @@ export default function App() {
         isDark ? "bg-[#0a0a0a]" : "bg-[#fafafa]"
       }`}
     >
-      <Sidebar theme={theme} toggleTheme={toggleTheme} />
+      <Sidebar 
+        theme={theme} 
+        toggleTheme={toggleTheme} 
+        onOpenSettings={() => setShowSettings(true)}
+      />
       
       <div className="w-full flex justify-center py-20 px-6">
         <ChatInterface theme={theme} />
       </div>
+
+      {/* Settings Modal */}
+      <Settings 
+        isOpen={showSettings} 
+        onClose={() => setShowSettings(false)} 
+        theme={theme} 
+      />
 
       {/* Keyboard Shortcut Hint */}
       <div className={`fixed bottom-6 right-6 flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[11px] font-medium tracking-wider transition-opacity duration-500 ${

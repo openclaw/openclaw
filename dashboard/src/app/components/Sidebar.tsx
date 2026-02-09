@@ -1,18 +1,26 @@
 import React from "react";
 import { Settings, Sun, Moon, Plus, History, LayoutGrid, MessageSquare } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion } from "motion/react";
 
 interface SidebarProps {
   theme: "dark" | "light";
   toggleTheme: () => void;
+  onOpenSettings: () => void;
 }
 
-const NavItem = ({ icon: Icon, label, active = false, theme }: { icon: any, label: string, active?: boolean, theme: string }) => {
+const NavItem = ({ icon: Icon, label, active = false, theme, onClick }: { 
+  icon: any, 
+  label: string, 
+  active?: boolean, 
+  theme: string,
+  onClick?: () => void 
+}) => {
   const isDark = theme === "dark";
   return (
     <motion.div 
       whileHover={{ scale: 1.1 }}
       whileTap={{ scale: 0.95 }}
+      onClick={onClick}
       className="relative group flex items-center justify-center cursor-pointer"
     >
       <div className={`p-2.5 rounded-xl transition-all duration-200 ${
@@ -33,7 +41,7 @@ const NavItem = ({ icon: Icon, label, active = false, theme }: { icon: any, labe
   );
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ theme, toggleTheme }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ theme, toggleTheme, onOpenSettings }) => {
   const isDark = theme === "dark";
   
   return (
@@ -46,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ theme, toggleTheme }) => {
       <div className="flex flex-col items-center gap-8 w-full">
         <motion.div 
           whileHover={{ rotate: 5, scale: 1.05 }}
-          className="h-[40px] w-[40px] rounded-xl bg-linear-to-br from-[#2dd4bf] to-[#0d9488] flex items-center justify-center shadow-[0_0_20px_rgba(45,212,191,0.3)]"
+          className="h-[40px] w-[40px] rounded-xl bg-gradient-to-br from-[#2dd4bf] to-[#0d9488] flex items-center justify-center shadow-[0_0_20px_rgba(45,212,191,0.3)]"
         >
           <span className="text-white font-bold text-xl leading-none">E</span>
         </motion.div>
@@ -70,16 +78,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ theme, toggleTheme }) => {
           className={`p-2.5 rounded-xl transition-all ${
             isDark ? "text-gray-500 hover:bg-white/5 hover:text-orange-300" : "text-gray-400 hover:bg-black/5 hover:text-orange-500"
           }`}
+          title="Toggle theme"
         >
           {isDark ? <Sun size={20} /> : <Moon size={20} />}
         </motion.button>
         
         <motion.button
+          onClick={onOpenSettings}
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
           className={`p-2.5 rounded-xl transition-all ${
             isDark ? "text-gray-500 hover:bg-white/5 hover:text-white" : "text-gray-400 hover:bg-black/5 hover:text-black"
           }`}
+          title="Settings"
         >
           <Settings size={20} />
         </motion.button>
