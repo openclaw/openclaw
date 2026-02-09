@@ -32,6 +32,7 @@ import {
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
+import { stripMarkdown as stripMarkdownFormatting } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
@@ -86,6 +87,7 @@ export type ResolvedTtsConfig = {
   mode: TtsMode;
   provider: TtsProvider;
   providerSource: "config" | "default";
+  stripMarkdown: boolean;
   summaryModel?: string;
   modelOverrides: ResolvedTtsModelOverrides;
   elevenlabs: {
@@ -255,6 +257,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     mode: raw.mode ?? "final",
     provider: raw.provider ?? "edge",
     providerSource,
+    stripMarkdown: raw.stripMarkdown ?? false,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     elevenlabs: {
@@ -1169,11 +1172,12 @@ export async function textToSpeech(params: {
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
+  const ttsText = config.stripMarkdown ? stripMarkdownFormatting(params.text) : params.text;
 
-  if (params.text.length > config.maxTextLength) {
+  if (ttsText.length > config.maxTextLength) {
     return {
       success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+      error: `Text too long (${ttsText.length} chars, max ${config.maxTextLength})`,
     };
   }
 
@@ -1202,7 +1206,7 @@ export async function textToSpeech(params: {
           const extension = inferEdgeExtension(outputFormat);
           const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
           await edgeTTS({
-            text: params.text,
+            text: ttsText,
             outputPath: audioPath,
             config: {
               ...config.edge,
@@ -1273,7 +1277,7 @@ export async function textToSpeech(params: {
         const normalizationOverride = params.overrides?.elevenlabs?.applyTextNormalization;
         const languageOverride = params.overrides?.elevenlabs?.languageCode;
         audioBuffer = await elevenLabsTTS({
-          text: params.text,
+          text: ttsText,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
           voiceId: voiceIdOverride ?? config.elevenlabs.voiceId,
@@ -1289,7 +1293,7 @@ export async function textToSpeech(params: {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
         audioBuffer = await openaiTTS({
-          text: params.text,
+          text: ttsText,
           apiKey,
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
@@ -1336,11 +1340,12 @@ export async function textToSpeechTelephony(params: {
 }): Promise<TtsTelephonyResult> {
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const ttsText = config.stripMarkdown ? stripMarkdownFormatting(params.text) : params.text;
 
-  if (params.text.length > config.maxTextLength) {
+  if (ttsText.length > config.maxTextLength) {
     return {
       success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+      error: `Text too long (${ttsText.length} chars, max ${config.maxTextLength})`,
     };
   }
 
@@ -1366,7 +1371,7 @@ export async function textToSpeechTelephony(params: {
       if (provider === "elevenlabs") {
         const output = TELEPHONY_OUTPUT.elevenlabs;
         const audioBuffer = await elevenLabsTTS({
-          text: params.text,
+          text: ttsText,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
           voiceId: config.elevenlabs.voiceId,
@@ -1391,7 +1396,7 @@ export async function textToSpeechTelephony(params: {
 
       const output = TELEPHONY_OUTPUT.openai;
       const audioBuffer = await openaiTTS({
-        text: params.text,
+        text: ttsText,
         apiKey,
         model: config.openai.model,
         voice: config.openai.voice,

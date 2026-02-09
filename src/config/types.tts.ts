@@ -32,6 +32,8 @@ export type TtsConfig = {
   mode?: TtsMode;
   /** Primary TTS provider (fallbacks are automatic). */
   provider?: TtsProvider;
+  /** Strip markdown formatting from text before sending to TTS provider. */
+  stripMarkdown?: boolean;
   /** Optional model override for TTS auto-summary (provider/model or alias). */
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */
