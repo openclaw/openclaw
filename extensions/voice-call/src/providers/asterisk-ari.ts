@@ -59,6 +59,7 @@ type CallState = {
   ttsTimer?: NodeJS.Timeout;
   stt?: CoreSttSession;
   sttMessageHandler?: (msg: Buffer) => void;
+  rtpMessageHandler?: (msg: Buffer, rinfo: dgram.RemoteInfo) => void;
   pendingMulaw?: Buffer;
   pendingSpeakText?: string;
   rtpPeer?: { address: string; port: number };
@@ -396,7 +397,7 @@ export class AsteriskAriProvider implements VoiceCallProvider {
 
   private wireRtp(state: CallState): void {
     if (!state.media) return;
-    state.media.udp.on("message", (msg, rinfo) => {
+    const handler = (msg: Buffer, rinfo: dgram.RemoteInfo) => {
       if (!state.rtpSeen) {
         state.rtpSeen = true;
         console.log("[ari] RTP in from Asterisk", { rinfo, bytes: msg.length });
@@ -415,7 +416,9 @@ export class AsteriskAriProvider implements VoiceCallProvider {
         const peer = this.getRtpPeer(state) || rinfo;
         this.sendMulawRtp(state, pending, peer, pendingText);
       }
-    });
+    };
+    state.rtpMessageHandler = handler;
+    state.media.udp.on("message", handler);
   }
 
   private getRtpPeer(state: CallState) {
@@ -976,6 +979,10 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     if (state.ttsTimer) {
       clearInterval(state.ttsTimer);
       state.ttsTimer = undefined;
+    }
+    if (state.media && state.rtpMessageHandler) {
+      state.media.udp.off("message", state.rtpMessageHandler);
+      state.rtpMessageHandler = undefined;
     }
     if (state.media && state.sttMessageHandler) {
       state.media.sttUdp.off("message", state.sttMessageHandler);
