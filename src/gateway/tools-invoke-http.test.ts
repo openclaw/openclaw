@@ -40,6 +40,7 @@ describe("POST /tools/invoke", () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port, {
       bind: "loopback",
+      controlUiEnabled: false,
     });
     const token = resolveGatewayToken();
 
@@ -72,7 +73,7 @@ describe("POST /tools/invoke", () => {
     } as any);
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
     const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -103,7 +104,7 @@ describe("POST /tools/invoke", () => {
     );
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
     const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -135,6 +136,7 @@ describe("POST /tools/invoke", () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port, {
       bind: "loopback",
+      controlUiEnabled: false,
       auth: { mode: "password", password: "secret" },
     });
 
@@ -184,7 +186,7 @@ describe("POST /tools/invoke", () => {
     } as any;
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
     try {
       const token = resolveGatewayToken();
       const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -222,6 +224,7 @@ describe("POST /tools/invoke", () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port, {
       bind: "loopback",
+      controlUiEnabled: false,
       auth: { mode: "token", token: "t" },
     });
 
@@ -250,7 +253,7 @@ describe("POST /tools/invoke", () => {
     } as any;
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
     const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -284,7 +287,7 @@ describe("POST /tools/invoke", () => {
     } as any);
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
     const token = resolveGatewayToken();
 
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -320,7 +323,7 @@ describe("POST /tools/invoke", () => {
     testState.sessionConfig = { mainKey: "primary" };
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "loopback" });
+    const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
 
     const payload = { tool: "agents_list", action: "json", args: {} };
     const token = resolveGatewayToken();
