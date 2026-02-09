@@ -1,4 +1,5 @@
 ---
+title: "Memory"
 summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
 read_when:
   - You want the memory file layout and workflow
