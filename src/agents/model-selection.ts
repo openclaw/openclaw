@@ -75,6 +75,13 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "google") {
     return normalizeGoogleModelId(model);
   }
+  // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
+  // "openrouter/<name>" as the model ID sent to the API. Models from external
+  // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
+  // are passed through as-is (#12924).
+  if (provider === "openrouter" && !model.includes("/")) {
+    return `openrouter/${model}`;
+  }
   return model;
 }
 
