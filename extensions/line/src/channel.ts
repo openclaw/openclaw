@@ -571,7 +571,21 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+
+        const hasToken = Boolean(
+          account.channelAccessToken?.trim() ||
+            account.tokenFile?.trim() ||
+            (account.tokenSource && account.tokenSource !== "none") ||
+            account.configured,
+        );
+
+        const hasSecret = Boolean(
+          account.channelSecret?.trim() ||
+            account.secretFile?.trim() ||
+            (account.tokenSource && account.tokenSource !== "none"),
+        );
+
+        if (!hasToken) {
           issues.push({
             channel: "line",
             accountId,
@@ -579,7 +593,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
             message: "LINE channel access token not configured",
           });
         }
-        if (!account.channelSecret?.trim()) {
+        if (!hasSecret) {
           issues.push({
             channel: "line",
             accountId,
@@ -605,7 +619,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const configured = Boolean(
-        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+        (account.channelAccessToken?.trim() ||
+          account.tokenFile?.trim() ||
+          (account.tokenSource && account.tokenSource !== "none")) &&
+          (account.channelSecret?.trim() ||
+            account.secretFile?.trim() ||
+            (account.tokenSource && account.tokenSource !== "none")),
       );
       return {
         accountId: account.accountId,
