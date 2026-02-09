@@ -380,7 +380,8 @@ async function runPerplexitySearch(params: {
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const model = params.model.replace(/^perplexity\//, "");
+  const isNativePerplexity = /api\.perplexity\.ai/i.test(params.baseUrl);
+  const model = isNativePerplexity ? params.model.replace(/^perplexity\//, "") : params.model;
 
   const res = await fetch(endpoint, {
     method: "POST",
