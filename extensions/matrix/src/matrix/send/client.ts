@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { normalizeAccountId } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
@@ -67,8 +67,13 @@ export async function resolveMatrixClient(opts: {
   if (active) {
     return { client: active, stopOnDone: false };
   }
-  // Only fall back to any active client when no specific account is requested
+  // When no account is specified, try the default account first; only fall back to
+  // any active client as a last resort (prevents sending from an arbitrary account).
   if (!opts.accountId) {
+    const defaultClient = getActiveMatrixClient(DEFAULT_ACCOUNT_ID);
+    if (defaultClient) {
+      return { client: defaultClient, stopOnDone: false };
+    }
     const anyActive = getAnyActiveMatrixClient();
     if (anyActive) {
       return { client: anyActive, stopOnDone: false };

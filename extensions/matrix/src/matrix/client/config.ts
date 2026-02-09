@@ -9,6 +9,29 @@ function clean(value?: string): string {
   return value?.trim() ?? "";
 }
 
+/** Shallow-merge known nested config sub-objects so partial overrides inherit base values. */
+function deepMergeConfig(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base, ...override };
+  // Merge known nested objects (dm, actions) so partial overrides keep base fields
+  for (const key of ["dm", "actions"] as const) {
+    if (
+      typeof base[key] === "object" &&
+      base[key] !== null &&
+      typeof override[key] === "object" &&
+      override[key] !== null
+    ) {
+      merged[key] = {
+        ...(base[key] as Record<string, unknown>),
+        ...(override[key] as Record<string, unknown>),
+      };
+    }
+  }
+  return merged;
+}
+
 /**
  * Resolve Matrix config for a specific account, with fallback to top-level config.
  * This supports both multi-account (channels.matrix.accounts.*) and
@@ -34,10 +57,10 @@ export function resolveMatrixConfigForAccount(
     }
   }
 
-  // Merge: account-specific values override top-level values
-  // For DEFAULT_ACCOUNT_ID with no accounts, use top-level directly
+  // Deep merge: account-specific values override top-level values, preserving
+  // nested object inheritance (dm, actions, groups) so partial overrides work.
   const useAccountConfig = accountConfig !== undefined;
-  const matrix = useAccountConfig ? { ...matrixBase, ...accountConfig } : matrixBase;
+  const matrix = useAccountConfig ? deepMergeConfig(matrixBase, accountConfig) : matrixBase;
 
   const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
   const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
