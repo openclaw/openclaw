@@ -664,7 +664,10 @@ export async function compactEmbeddedPiSessionDirect(
           });
           await triggerInternalHook(hookEvent);
         } catch (err) {
-          log.warn(`session:compact:before hook failed: ${String(err)}`);
+          log.warn("session:compact:before hook failed", {
+            errorMessage: err instanceof Error ? err.message : String(err),
+            errorStack: err instanceof Error ? err.stack : undefined,
+          });
         }
         if (hookRunner?.hasHooks("before_compaction")) {
           try {
@@ -681,7 +684,10 @@ export async function compactEmbeddedPiSessionDirect(
               },
             );
           } catch (err) {
-            log.warn(`before_compaction hook failed: ${String(err)}`);
+            log.warn("before_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+              errorStack: err instanceof Error ? err.stack : undefined,
+            });
           }
         }
         const diagEnabled = log.isEnabled("debug");
@@ -765,7 +771,10 @@ export async function compactEmbeddedPiSessionDirect(
           });
           await triggerInternalHook(hookEvent);
         } catch (err) {
-          log.warn(`session:compact:after hook failed: ${String(err)}`);
+          log.warn("session:compact:after hook failed", {
+            errorMessage: err instanceof Error ? err.message : String(err),
+            errorStack: err instanceof Error ? err.stack : undefined,
+          });
         }
         if (hookRunner?.hasHooks("after_compaction")) {
           try {
@@ -783,7 +792,10 @@ export async function compactEmbeddedPiSessionDirect(
               },
             );
           } catch (err) {
-            log.warn(`after_compaction hook failed: ${String(err)}`);
+            log.warn("after_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+              errorStack: err instanceof Error ? err.stack : undefined,
+            });
           }
         }
         return {
