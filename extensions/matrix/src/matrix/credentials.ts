@@ -18,9 +18,9 @@ function credentialsFilename(accountId?: string | null): string {
   if (normalized === DEFAULT_ACCOUNT_ID) {
     return "credentials.json";
   }
-  // Sanitize accountId for use in filename
-  const safe = normalized.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `credentials-${safe}.json`;
+  // normalizeAccountId produces lowercase [a-z0-9-] strings, already filesystem-safe.
+  // Different raw IDs that normalize to the same value are the same logical account.
+  return `credentials-${normalized}.json`;
 }
 
 export function resolveMatrixCredentialsDir(
