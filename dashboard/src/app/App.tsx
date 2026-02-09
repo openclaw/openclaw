@@ -3,11 +3,13 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatInterface } from "./components/ChatInterface";
 import { Settings } from "./components/Settings";
 import { ChatHistory } from "./components/ChatHistory";
+import { Integrations } from "./components/Integrations";
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showIntegrations, setShowIntegrations] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
@@ -43,6 +45,7 @@ export default function App() {
         toggleTheme={toggleTheme} 
         onOpenSettings={() => setShowSettings(true)}
         onOpenHistory={() => setShowHistory(true)}
+        onOpenIntegrations={() => setShowIntegrations(true)}
         onNewChat={handleNewChat}
       />
 
@@ -68,6 +71,13 @@ export default function App() {
         isOpen={showSettings} 
         onClose={() => setShowSettings(false)} 
         theme={theme} 
+      />
+
+      {/* Integrations Modal */}
+      <Integrations
+        isOpen={showIntegrations}
+        onClose={() => setShowIntegrations(false)}
+        theme={theme}
       />
 
       {/* Keyboard Shortcut Hint */}

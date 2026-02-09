@@ -1,5 +1,5 @@
 import React from "react";
-import { Settings, Sun, Moon, Plus, History, LayoutGrid, MessageSquare } from "lucide-react";
+import { Settings, Sun, Moon, Plus, History, LayoutGrid, MessageSquare, Plug } from "lucide-react";
 import { motion } from "motion/react";
 
 interface SidebarProps {
@@ -7,6 +7,7 @@ interface SidebarProps {
   toggleTheme: () => void;
   onOpenSettings: () => void;
   onOpenHistory: () => void;
+  onOpenIntegrations: () => void;
   onNewChat: () => void;
 }
 
@@ -48,6 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   toggleTheme, 
   onOpenSettings,
   onOpenHistory,
+  onOpenIntegrations,
   onNewChat
 }) => {
   const isDark = theme === "dark";
@@ -71,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <NavItem icon={Plus} label="New Chat" active theme={theme} onClick={onNewChat} />
           <NavItem icon={History} label="History" theme={theme} onClick={onOpenHistory} />
           <NavItem icon={MessageSquare} label="Topics" theme={theme} />
-          <NavItem icon={LayoutGrid} label="Tools" theme={theme} />
+          <NavItem icon={Plug} label="Integrations" theme={theme} onClick={onOpenIntegrations} />
         </div>
       </div>
 
