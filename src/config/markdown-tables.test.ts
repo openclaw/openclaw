@@ -14,6 +14,7 @@ const stubPlugin = (id: string): ChannelPlugin => ({
     docsPath: `/channels/${id}`,
     blurb: "test stub.",
   },
+  capabilities: { chatTypes: ["direct"] },
   config: {
     listAccountIds: () => [],
     resolveAccount: () => ({}),
