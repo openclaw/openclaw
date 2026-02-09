@@ -8,7 +8,8 @@ export { escapeRegExp } from "../../src/utils.js";
 type EnvelopeTimestampZone = string;
 
 export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone = "utc"): string {
-  const normalized = zone.trim().toLowerCase();
+  const trimmedZone = zone.trim();
+  const normalized = trimmedZone.toLowerCase();
   const weekday = (() => {
     try {
       if (normalized === "utc" || normalized === "gmt") {
@@ -17,7 +18,9 @@ export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone 
       if (normalized === "local" || normalized === "host") {
         return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
       }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(date);
+      return new Intl.DateTimeFormat("en-US", { timeZone: trimmedZone, weekday: "short" }).format(
+        date,
+      );
     } catch {
       return undefined;
     }
@@ -31,7 +34,7 @@ export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone 
     const ts = formatZonedTimestamp(date) ?? formatUtcTimestamp(date);
     return weekday ? `${weekday} ${ts}` : ts;
   }
-  const ts = formatZonedTimestamp(date, { timeZone: zone }) ?? formatUtcTimestamp(date);
+  const ts = formatZonedTimestamp(date, { timeZone: trimmedZone }) ?? formatUtcTimestamp(date);
   return weekday ? `${weekday} ${ts}` : ts;
 }
 
