@@ -485,20 +485,23 @@ async function deliverOutboundPayloadsCore(params: {
         await runMessageSentHook(chunk.text, false, "canceled by message_sending hook");
         continue;
       }
-      let sendTextValue = hookResult.content;
-      let sendStyles = chunk.styles;
-      if (hookResult.content !== chunk.text) {
-        const formatted = markdownToSignalTextChunks(hookResult.content, Number.POSITIVE_INFINITY, {
-          tableMode: signalTableMode,
-        })[0] ?? {
-          text: hookResult.content,
-          styles: [],
-        };
-        sendTextValue = formatted.text;
-        sendStyles = formatted.styles;
+      const rewrittenChunks =
+        hookResult.content === chunk.text
+          ? [chunk]
+          : textLimit === undefined
+            ? markdownToSignalTextChunks(hookResult.content, Number.POSITIVE_INFINITY, {
+                tableMode: signalTableMode,
+              })
+            : markdownToSignalTextChunks(hookResult.content, textLimit, {
+                tableMode: signalTableMode,
+              });
+      if (rewrittenChunks.length === 0 && hookResult.content) {
+        rewrittenChunks.push({ text: hookResult.content, styles: [] });
       }
-      results.push(await sendSignalText(sendTextValue, sendStyles));
-      await runMessageSentHook(sendTextValue, true);
+      for (const rewrittenChunk of rewrittenChunks) {
+        results.push(await sendSignalText(rewrittenChunk.text, rewrittenChunk.styles));
+        await runMessageSentHook(rewrittenChunk.text, true);
+      }
     }
   };
 

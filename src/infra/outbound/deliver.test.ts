@@ -174,6 +174,47 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("sends all rewritten Signal chunk content within the configured limit", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
+    const runMessageSending = vi.fn().mockResolvedValue({ content: "abcdefgh" });
+    const getGlobalHookRunnerSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue({
+        hasHooks: (name: string) => name === "message_sending",
+        runMessageSending,
+      } as unknown as PluginHookRunner);
+    const cfg: OpenClawConfig = {
+      channels: { signal: { textChunkLimit: 4 } },
+    };
+    const expectedChunks = markdownToSignalTextChunks("abcdefgh", 4);
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "a" }],
+      deps: { sendSignal },
+    });
+
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(sendSignal).toHaveBeenCalledTimes(expectedChunks.length);
+    expectedChunks.forEach((chunk, index) => {
+      expect(sendSignal).toHaveBeenNthCalledWith(
+        index + 1,
+        "+1555",
+        chunk.text,
+        expect.objectContaining({
+          accountId: undefined,
+          textMode: "plain",
+          textStyles: chunk.styles,
+        }),
+      );
+    });
+    expect(results).toHaveLength(expectedChunks.length);
+
+    getGlobalHookRunnerSpy.mockRestore();
+  });
+
   it("chunks WhatsApp text and returns all results", async () => {
     const sendWhatsApp = vi
       .fn()
