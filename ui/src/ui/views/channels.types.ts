@@ -2,7 +2,6 @@ import type {
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
   ConfigUiHints,
-  ConvosStatus,
   DiscordStatus,
   GoogleChatStatus,
   IMessageStatus,
@@ -27,12 +26,6 @@ export type ChannelsProps = {
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
   whatsappBusy: boolean;
-  convosMessage: string | null;
-  convosInviteUrl: string | null;
-  convosQrDataUrl: string | null;
-  convosBusy: boolean;
-  convosJoined: boolean;
-  convosResetPending: boolean;
   configSchema: unknown;
   configSchemaLoading: boolean;
   configForm: Record<string, unknown> | null;
@@ -45,10 +38,6 @@ export type ChannelsProps = {
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;
-  onConvosSetup: () => void;
-  onConvosReset: () => void;
-  onConvosResetConfirm: (deleteDb: boolean) => void;
-  onConvosResetCancel: () => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;
@@ -69,6 +58,5 @@ export type ChannelsChannelData = {
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;
   nostr?: NostrStatus | null;
-  convos?: ConvosStatus | null;
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

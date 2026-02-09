@@ -1,5 +1,4 @@
 import type { GroupPolicy } from "./types.base.js";
-import type { ConvosConfig } from "./types.convos.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { FeishuConfig } from "./types.feishu.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
@@ -36,6 +35,5 @@ export type ChannelsConfig = {
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
-  convos?: ConvosConfig;
   [key: string]: unknown;
 };

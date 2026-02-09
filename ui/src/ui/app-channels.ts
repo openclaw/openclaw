@@ -3,8 +3,6 @@ import type { NostrProfile } from "./types.ts";
 import {
   loadChannels,
   logoutWhatsApp,
-  resetConvos,
-  setupConvos,
   startWhatsAppLogin,
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
@@ -24,25 +22,6 @@ export async function handleWhatsAppWait(host: OpenClawApp) {
 export async function handleWhatsAppLogout(host: OpenClawApp) {
   await logoutWhatsApp(host);
   await loadChannels(host, true);
-}
-
-export async function handleConvosSetup(host: OpenClawApp) {
-  await setupConvos(host);
-  await loadChannels(host, false);
-}
-
-export function handleConvosReset(host: OpenClawApp) {
-  host.convosResetPending = true;
-}
-
-export function handleConvosResetCancel(host: OpenClawApp) {
-  host.convosResetPending = false;
-}
-
-export async function handleConvosResetConfirm(host: OpenClawApp, deleteDb: boolean) {
-  host.convosResetPending = false;
-  await resetConvos(host, deleteDb);
-  await loadChannels(host, false);
 }
 
 export async function handleChannelConfigSave(host: OpenClawApp) {

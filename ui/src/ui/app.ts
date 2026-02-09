@@ -32,10 +32,6 @@ import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
-  handleConvosSetup as handleConvosSetupInternal,
-  handleConvosReset as handleConvosResetInternal,
-  handleConvosResetCancel as handleConvosResetCancelInternal,
-  handleConvosResetConfirm as handleConvosResetConfirmInternal,
   handleNostrProfileCancel as handleNostrProfileCancelInternal,
   handleNostrProfileEdit as handleNostrProfileEditInternal,
   handleNostrProfileFieldChange as handleNostrProfileFieldChangeInternal,
@@ -193,12 +189,6 @@ export class OpenClawApp extends LitElement {
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
   @state() whatsappBusy = false;
-  @state() convosMessage: string | null = null;
-  @state() convosInviteUrl: string | null = null;
-  @state() convosQrDataUrl: string | null = null;
-  @state() convosBusy = false;
-  @state() convosJoined = false;
-  @state() convosResetPending = false;
   @state() nostrProfileFormState: NostrProfileFormState | null = null;
   @state() nostrProfileAccountId: string | null = null;
 
@@ -415,22 +405,6 @@ export class OpenClawApp extends LitElement {
 
   async handleWhatsAppLogout() {
     await handleWhatsAppLogoutInternal(this);
-  }
-
-  async handleConvosSetup() {
-    await handleConvosSetupInternal(this);
-  }
-
-  handleConvosReset() {
-    handleConvosResetInternal(this);
-  }
-
-  handleConvosResetCancel() {
-    handleConvosResetCancelInternal(this);
-  }
-
-  async handleConvosResetConfirm(deleteDb: boolean) {
-    await handleConvosResetConfirmInternal(this, deleteDb);
   }
 
   async handleChannelConfigSave() {

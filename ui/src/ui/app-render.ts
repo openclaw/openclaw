@@ -58,7 +58,6 @@ import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
-import { renderConvosResetConfirmation } from "./views/convos-reset-confirmation.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -266,12 +265,6 @@ export function renderApp(state: AppViewState) {
                 whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                 whatsappConnected: state.whatsappLoginConnected,
                 whatsappBusy: state.whatsappBusy,
-                convosMessage: state.convosMessage,
-                convosInviteUrl: state.convosInviteUrl,
-                convosQrDataUrl: state.convosQrDataUrl,
-                convosBusy: state.convosBusy,
-                convosJoined: state.convosJoined,
-                convosResetPending: state.convosResetPending,
                 configSchema: state.configSchema,
                 configSchemaLoading: state.configSchemaLoading,
                 configForm: state.configForm,
@@ -284,10 +277,6 @@ export function renderApp(state: AppViewState) {
                 onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
                 onWhatsAppWait: () => state.handleWhatsAppWait(),
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-                onConvosSetup: () => state.handleConvosSetup(),
-                onConvosReset: () => state.handleConvosReset(),
-                onConvosResetConfirm: (deleteDb) => state.handleConvosResetConfirm(deleteDb),
-                onConvosResetCancel: () => state.handleConvosResetCancel(),
                 onConfigPatch: (path, value) =>
                   updateConfigFormValue(state as unknown as ConfigState, path, value),
                 onConfigSave: () => state.handleChannelConfigSave(),
@@ -1094,7 +1083,6 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
-      ${renderConvosResetConfirmation(state)}
     </div>
   `;
 }

@@ -241,7 +241,6 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    inviteUrl: Type.Optional(Type.String({ description: "Invite URL or slug for channel-join." })),
     type: Type.Optional(Type.Number()),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),

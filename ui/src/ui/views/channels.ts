@@ -3,7 +3,6 @@ import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
-  ConvosStatus,
   DiscordStatus,
   GoogleChatStatus,
   IMessageStatus,
@@ -17,7 +16,6 @@ import type {
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
 import { formatAgo } from "../format.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
-import { renderConvosCard } from "./channels.convos.ts";
 import { renderDiscordCard } from "./channels.discord.ts";
 import { renderGoogleChatCard } from "./channels.googlechat.ts";
 import { renderIMessageCard } from "./channels.imessage.ts";
@@ -38,7 +36,6 @@ export function renderChannels(props: ChannelsProps) {
   const signal = (channels?.signal ?? null) as SignalStatus | null;
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
-  const convos = (channels?.convos ?? null) as ConvosStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
   const orderedChannels = channelOrder
     .map((key, index) => ({
@@ -65,7 +62,6 @@ export function renderChannels(props: ChannelsProps) {
           signal,
           imessage,
           nostr,
-          convos,
           channelAccounts: props.snapshot?.channelAccounts ?? null,
         }),
       )}
@@ -100,7 +96,7 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
   }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr", "convos"];
+  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
@@ -147,12 +143,6 @@ function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChan
       return renderIMessageCard({
         props,
         imessage: data.imessage,
-        accountCountLabel,
-      });
-    case "convos":
-      return renderConvosCard({
-        props,
-        convos: data.convos,
         accountCountLabel,
       });
     case "nostr": {
