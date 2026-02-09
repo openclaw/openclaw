@@ -23,7 +23,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentSkillsFilter, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -245,21 +245,33 @@ export async function runEmbeddedAttempt(
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
+    const skillFilter = params.config
+      ? resolveAgentSkillsFilter(
+          params.config,
+          resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+            .sessionAgentId,
+        )
+      : undefined;
+    const filteredSkillEntries =
+      skillFilter !== undefined
+        ? skillEntries.filter((entry) => skillFilter.includes(entry.skill.name))
+        : skillEntries;
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
         })
       : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
+          skills: filteredSkillEntries,
           config: params.config,
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: shouldLoadSkillEntries ? filteredSkillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      skillFilter,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
