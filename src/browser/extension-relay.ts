@@ -153,7 +153,9 @@ function parseBaseUrl(raw: string): {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     throw new Error(`extension relay cdpUrl has invalid port: ${parsed.port || "(empty)"}`);
   }
-  return { host, port, baseUrl: parsed.toString().replace(/\/$/, "") };
+  const httpProtocol = isSecure ? "https:" : "http:";
+  const baseUrl = `${httpProtocol}//${host}:${port}`;
+  return { host, port, baseUrl };
 }
 
 function text(res: Duplex, status: number, bodyText: string) {
