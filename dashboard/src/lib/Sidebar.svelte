@@ -1,183 +1,76 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
-  
-  export let tools = [];
-  export let activeTool = null;
-
-  const dispatch = createEventDispatcher();
-
-  function selectTool(toolId) {
-    dispatch('toolSelect', toolId);
-  }
+  // Empty sidebar - features will be added here as they're built
 </script>
 
 <aside>
   <div class="top">
-    <!-- Logo -->
+    <!-- Logo only -->
     <div class="logo">
-      <span class="icon">🦅</span>
+      <span class="logo-text">E</span>
     </div>
-
-    <!-- New Chat -->
-    <button class="new-chat" title="New Chat">
-      <span>+</span>
-    </button>
-
-    <!-- Tools -->
-    <nav class="tools">
-      {#each tools as tool}
-        <button 
-          class="tool-btn" 
-          class:active={activeTool === tool.id}
-          on:click={() => selectTool(tool.id)}
-          title={tool.label}
-        >
-          <span class="tool-icon">{tool.icon}</span>
-          <span class="tool-label">{tool.label}</span>
-        </button>
-      {/each}
-    </nav>
   </div>
 
   <div class="bottom">
-    <!-- More -->
-    <button class="tool-btn" title="More">
-      <span class="tool-icon">•••</span>
-      <span class="tool-label">More</span>
-    </button>
-
-    <!-- User / Settings -->
-    <button class="user-btn" title="Settings">
-      <span class="avatar">👤</span>
-      <span class="tool-label">Settings</span>
+    <!-- Settings -->
+    <button class="settings-btn" title="Settings">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
     </button>
   </div>
 </aside>
 
 <style>
   aside {
-    width: 72px;
-    background: #111;
+    width: 60px;
+    background: #0f0f0f;
     border-right: 1px solid #1a1a1a;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 12px 0;
-    transition: width 0.2s;
-  }
-
-  aside:hover {
-    width: 160px;
+    padding: 16px 0;
+    flex-shrink: 0;
   }
 
   .top, .bottom {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
   }
 
   .logo {
-    width: 48px;
-    height: 48px;
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #2dd4bf, #60a5fa);
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 8px;
   }
 
-  .logo .icon {
-    font-size: 1.8rem;
+  .logo-text {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #000;
   }
 
-  .new-chat {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    border: 1px solid #333;
-    background: transparent;
-    color: #888;
-    font-size: 1.5rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 16px;
-  }
-
-  .new-chat:hover {
-    background: #1a1a1a;
-    color: #fff;
-    border-color: #444;
-  }
-
-  .tools {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    width: 100%;
-    padding: 0 12px;
-  }
-
-  .tool-btn, .user-btn {
-    width: 100%;
-    height: 44px;
+  .settings-btn {
+    width: 40px;
+    height: 40px;
     border-radius: 10px;
     border: none;
     background: transparent;
-    color: #666;
+    color: #555;
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 0 12px;
-    overflow: hidden;
+    justify-content: center;
   }
 
-  .tool-btn:hover, .user-btn:hover {
+  .settings-btn:hover {
     background: #1a1a1a;
-    color: #fff;
-  }
-
-  .tool-btn.active {
-    background: #1e3a5f;
-    color: #60a5fa;
-  }
-
-  .tool-icon {
-    font-size: 1.1rem;
-    min-width: 24px;
-    text-align: center;
-  }
-
-  .tool-label {
-    font-size: 0.85rem;
-    white-space: nowrap;
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
-
-  aside:hover .tool-label {
-    opacity: 1;
-  }
-
-  .avatar {
-    font-size: 1.2rem;
-    min-width: 24px;
-    text-align: center;
-  }
-
-  .bottom {
-    padding: 0 12px;
-  }
-
-  .user-btn {
-    border: 1px solid #222;
-  }
-
-  .user-btn:hover {
-    border-color: #333;
+    color: #888;
   }
 </style>

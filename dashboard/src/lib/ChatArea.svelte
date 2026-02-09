@@ -3,7 +3,6 @@
   
   export let currentModel = 'claude-opus-4-5';
   export let quickActions = [];
-  export let chatHistory = [];
 
   const dispatch = createEventDispatcher();
 
@@ -47,10 +46,6 @@
     <!-- Chat Input Box -->
     <div class="input-container">
       <div class="input-box">
-        <button class="attach-btn" title="Attach file">
-          <span>+</span>
-        </button>
-        
         <textarea 
           bind:value={inputText}
           on:keydown={handleKeydown}
@@ -85,16 +80,16 @@
             {/if}
           </div>
 
-          <!-- Voice -->
-          <button class="icon-btn" title="Voice input">🎤</button>
-
           <!-- Send -->
           <button 
             class="send-btn" 
             on:click={handleSubmit}
             disabled={!inputText.trim()}
           >
-            <span>↑</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
           </button>
         </div>
       </div>
@@ -104,8 +99,7 @@
     <div class="quick-actions">
       {#each quickActions as action}
         <button class="action-chip">
-          <span class="action-icon">{action.icon}</span>
-          <span>{action.label}</span>
+          {action.label}
         </button>
       {/each}
     </div>
@@ -124,7 +118,7 @@
 
   .center-content {
     width: 100%;
-    max-width: 720px;
+    max-width: 680px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -134,7 +128,7 @@
   .title {
     font-size: 3rem;
     font-weight: 300;
-    color: #888;
+    color: #666;
     margin: 0;
     letter-spacing: -1px;
   }
@@ -147,36 +141,15 @@
     display: flex;
     align-items: flex-end;
     gap: 12px;
-    padding: 16px;
-    background: #151515;
-    border: 1px solid #262626;
-    border-radius: 16px;
+    padding: 14px 18px;
+    background: #141414;
+    border: 1px solid #252525;
+    border-radius: 14px;
     transition: border-color 0.2s;
   }
 
   .input-box:focus-within {
-    border-color: #404040;
-  }
-
-  .attach-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: 1px solid #333;
-    background: transparent;
-    color: #666;
-    font-size: 1.2rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .attach-btn:hover {
-    background: #222;
-    color: #fff;
+    border-color: #353535;
   }
 
   textarea {
@@ -193,7 +166,7 @@
   }
 
   textarea::placeholder {
-    color: #555;
+    color: #4a4a4a;
   }
 
   .input-actions {
@@ -212,8 +185,8 @@
     align-items: center;
     gap: 6px;
     padding: 8px 12px;
-    background: transparent;
-    border: none;
+    background: #1e1e1e;
+    border: 1px solid #2a2a2a;
     color: #888;
     font-size: 0.85rem;
     cursor: pointer;
@@ -222,12 +195,12 @@
   }
 
   .model-btn:hover {
-    background: #222;
-    color: #fff;
+    background: #252525;
+    color: #aaa;
   }
 
   .chevron {
-    font-size: 0.6rem;
+    font-size: 0.55rem;
     opacity: 0.6;
   }
 
@@ -237,11 +210,12 @@
     right: 0;
     margin-bottom: 8px;
     background: #1a1a1a;
-    border: 1px solid #333;
+    border: 1px solid #2a2a2a;
     border-radius: 12px;
     padding: 8px;
     min-width: 180px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    z-index: 100;
   }
 
   .model-option {
@@ -256,7 +230,7 @@
     color: #ccc;
     cursor: pointer;
     border-radius: 8px;
-    transition: all 0.2s;
+    transition: all 0.15s;
   }
 
   .model-option:hover {
@@ -275,28 +249,11 @@
 
   .model-provider {
     font-size: 0.75rem;
-    color: #666;
+    color: #555;
   }
 
   .model-option.active .model-provider {
     color: #60a5fa88;
-  }
-
-  .icon-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: none;
-    background: transparent;
-    color: #666;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .icon-btn:hover {
-    background: #222;
-    color: #fff;
   }
 
   .send-btn {
@@ -306,8 +263,6 @@
     border: none;
     background: #2dd4bf;
     color: #000;
-    font-size: 1.1rem;
-    font-weight: bold;
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
@@ -320,8 +275,8 @@
   }
 
   .send-btn:disabled {
-    background: #333;
-    color: #666;
+    background: #252525;
+    color: #444;
     cursor: not-allowed;
   }
 
@@ -333,26 +288,19 @@
   }
 
   .action-chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 18px;
+    padding: 10px 20px;
     background: transparent;
-    border: 1px solid #2a2a2a;
+    border: 1px solid #252525;
     border-radius: 20px;
-    color: #888;
+    color: #666;
     font-size: 0.9rem;
     cursor: pointer;
     transition: all 0.2s;
   }
 
   .action-chip:hover {
-    background: #1a1a1a;
-    border-color: #404040;
-    color: #fff;
-  }
-
-  .action-icon {
-    font-size: 1rem;
+    background: #151515;
+    border-color: #353535;
+    color: #999;
   }
 </style>
