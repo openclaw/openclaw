@@ -13,12 +13,13 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 ## Maintainer-specific changes
 
 - **Documentation**
-  - Root [README.md](README.md): “About this repository” section describing the fork, ClawdBot-Next integration, and sync workflow link.
+  - Root [README.md](README.md): “About this repository” section describing the fork, ClawdBot-Next integration, [docs/MAINTENANCE.md](docs/MAINTENANCE.md) link, and sync workflow link.
   - This file: explicit listing of fork changes and commit history.
   - [.agent/workflows/update_clawdbot.md](.agent/workflows/update_clawdbot.md): push policy and link to this file.
 - **Ollama** — Support `OLLAMA_HOST` for cloud/remote discovery and requests (`8cb58d65d`). When `OLLAMA_HOST` is set, discovery uses a 15s timeout (vs 5s for local) to reduce timeouts on VPS/remote.
 - **Build** — Copy `src/agents/prompt-engine/data/skills.json` to `dist/` during build via `scripts/copy-skills-data.ts` (tsdown does not copy non-TS assets; without this, the Skills Registry hits ENOENT at runtime).
-- **Maintenance** — [docs/MAINTENANCE.md](docs/MAINTENANCE.md): fork update workflow, stop-before-rebuild, avoiding `openclaw doctor`/`gateway install` overwrites, and health-check script for VPS/repo installs.
+- **Maintenance** — [docs/MAINTENANCE.md](docs/MAINTENANCE.md): fork update workflow, stop-before-rebuild, avoiding `openclaw doctor`/`gateway install` overwrites, health-check script for VPS/repo installs, and **Why skills.json can disappear** (agent running `git clean -fd` in repo workspace; restore via `pnpm build`; gateway fallback loads from source when dist copy is missing).
+- **Skills loader fallback** — If `dist/agents/prompt-engine/data/skills.json` is missing (e.g. after `git clean -fd` or failed build), the gateway loads from `src/agents/prompt-engine/data/skills.json` and logs `Loaded skills from source path (dist copy missing)` so the gateway can start without a full rebuild.
 - **Agent loop** — One config/restart/cron change per request; report and ask before retry (`394341893`).
 - **Build** — Type fix for `SkillLibrary` in `selectSkillsForContext` (plugin-sdk dts build) (`ffe83456b`). Copy `skills.json` to dist during build (`scripts/copy-skills-data.ts`).
 - **Cron zombie scheduler fix** — Six changes to prevent and recover from a stuck scheduler:
