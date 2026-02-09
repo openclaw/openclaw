@@ -3,8 +3,10 @@ import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveUserTimezone } from "../date-time.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
@@ -77,7 +79,10 @@ function sanitizeHistoryContentBlock(block: unknown): { block: unknown; truncate
   return { block: entry, truncated };
 }
 
-function sanitizeHistoryMessage(message: unknown): { message: unknown; truncated: boolean } {
+function sanitizeHistoryMessage(
+  message: unknown,
+  timeZone?: string,
+): { message: unknown; truncated: boolean } {
   if (!message || typeof message !== "object") {
     return { message, truncated: false };
   }
@@ -110,6 +115,13 @@ function sanitizeHistoryMessage(message: unknown): { message: unknown; truncated
     const res = truncateHistoryText(entry.text);
     entry.text = res.text;
     truncated ||= res.truncated;
+  }
+  // Format the raw timestamp (epoch ms) into the user's timezone.
+  if (typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp) && timeZone) {
+    const formatted = formatZonedTimestamp(new Date(entry.timestamp), { timeZone });
+    if (formatted) {
+      entry.timestampFormatted = formatted;
+    }
   }
   return { message: entry, truncated };
 }
@@ -241,13 +253,16 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
+      const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
       const result = await callGateway<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      const sanitizedMessages = selectedMessages.map((message) =>
+        sanitizeHistoryMessage(message, userTimezone),
+      );
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
@@ -261,6 +276,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       return jsonResult({
         sessionKey: displayKey,
+        timezone: userTimezone,
         messages: hardened.items,
         truncated: droppedMessages || contentTruncated || hardened.hardCapped,
         droppedMessages: droppedMessages || hardened.hardCapped,

@@ -10,17 +10,20 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const configMocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+      agentToAgent: { maxPingPongTurns: 2 },
+    },
+  })),
+}));
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-    }),
+    loadConfig: configMocks.loadConfig,
     resolveGatewayPort: () => 18789,
   };
 });
@@ -306,6 +309,173 @@ describe("sessions tools", () => {
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",
     );
+  });
+
+  it("sessions_history formats timestamps using configured userTimezone", async () => {
+    callGatewayMock.mockReset();
+    // 2026-01-15T06:30:00Z — in Asia/Shanghai (UTC+8) this is 2026-01-15 14:30 CST
+    const utcEpochMs = Date.UTC(2026, 0, 15, 6, 30, 0);
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: utcEpochMs,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-tz", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      timezone?: string;
+    };
+    expect(details.messages).toHaveLength(1);
+    const msg = details.messages?.[0];
+    // Should have formatted timestamp in Asia/Shanghai timezone
+    expect(msg?.timestampFormatted).toBeDefined();
+    expect(typeof msg?.timestampFormatted).toBe("string");
+    expect(msg?.timestampFormatted).toContain("14:30");
+    // Timezone abbreviation varies by platform: "CST" or "GMT+8"
+    expect(msg?.timestampFormatted).toMatch(/CST|GMT\+8/);
+    // Should preserve the original epoch timestamp
+    expect(msg?.timestamp).toBe(utcEpochMs);
+    // Should include the timezone in the top-level response
+    expect(details.timezone).toBe("Asia/Shanghai");
+
+    // Restore default config
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+    });
+  });
+
+  it("sessions_history falls back to host timezone when userTimezone is not configured", async () => {
+    callGatewayMock.mockReset();
+    const utcEpochMs = Date.UTC(2026, 0, 15, 6, 30, 0);
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: utcEpochMs,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-tz-default", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      timezone?: string;
+    };
+    expect(details.messages).toHaveLength(1);
+    const msg = details.messages?.[0];
+    // Even without explicit timezone, should have formatted timestamp
+    expect(msg?.timestampFormatted).toBeDefined();
+    expect(typeof msg?.timestampFormatted).toBe("string");
+    // Should include a timezone in the response (host timezone)
+    expect(typeof details.timezone).toBe("string");
+    expect(details.timezone?.length).toBeGreaterThan(0);
+  });
+
+  it("sessions_history skips timestamp formatting for messages without timestamp field", async () => {
+    callGatewayMock.mockReset();
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "no timestamp" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-tz-no-ts", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(details.messages).toHaveLength(1);
+    const msg = details.messages?.[0];
+    // No timestamp field on the raw message, so no formatted timestamp should be added
+    expect(msg?.timestampFormatted).toBeUndefined();
+
+    // Restore default config
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+    });
   });
 
   it("sessions_history resolves sessionId inputs", async () => {
