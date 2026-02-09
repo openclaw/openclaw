@@ -229,10 +229,13 @@ export function promoteHistoricalContextToBlocks(message: AssistantMessage): voi
         break;
       }
 
-      // text before the marker → thinking (model's internal reasoning)
+      // Text before the marker is kept as a visible text block.
+      // It may be the model's actual reply (not just internal reasoning).
+      // If it *is* reasoning wrapped in <think> tags, the downstream
+      // promoteThinkingTagsToBlocks pass will promote it correctly.
       const before = stripTripleQuotes(src.slice(cursor, idx)).trim();
       if (before) {
-        next.push({ type: "thinking", thinking: before } as never);
+        next.push({ type: "text", text: before } as never);
       }
 
       const parsed = parseOneHC(src, idx);
