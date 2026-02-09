@@ -91,7 +91,41 @@ Run `scripts/migrate.py validate` to verify:
 - GPU pipeline (if applicable)
 - Discord channel connectivity
 
-## Quick Migration (Experienced)
+## How to Use (새 PC에서)
+
+**사전 준비:** Node.js 22+, Git, Python 3.10+ 설치
+
+### 방법 1: 원라인 (curl)
+
+```bash
+# Windows (PowerShell)
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jini92/MAIBOT/main/skills/maibot-migration/scripts/migrate.py" -OutFile migrate.py
+python migrate.py full
+
+# macOS / Linux
+curl -sL https://raw.githubusercontent.com/jini92/MAIBOT/main/skills/maibot-migration/scripts/migrate.py -o migrate.py
+python migrate.py full
+```
+
+스크립트 하나만 다운로드하면 나머지(Moltbot 설치, 레포 클론, .env 생성, 검증)는 자동 진행.
+
+### 방법 2: 레포 먼저 클론
+
+```bash
+git clone https://github.com/jini92/MAIBOT.git
+python MAIBOT/skills/maibot-migration/scripts/migrate.py full
+```
+
+### 방법 3: 단계별 수동 실행
+
+```bash
+python migrate.py detect      # 환경 체크
+python migrate.py install     # 설치 + 클론
+python migrate.py setup-env   # .env 생성
+python migrate.py validate    # 검증
+```
+
+### Quick Migration (경험자용)
 
 ```bash
 # 1. Install
