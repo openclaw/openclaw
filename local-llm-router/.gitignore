@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+logs/audit/*.jsonl
+errors/journal.jsonl
+errors/screenshots/
+errors/analysis/
+errors/proposals/
+memory/2*.md

@@ -1,0 +1,37 @@
+{
+  "name": "local-llm-router",
+  "version": "0.1.0",
+  "description": "Personal AI PA + coding agent with local LLM routing",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "0.52.8",
+    "@mariozechner/pi-ai": "0.52.8",
+    "@mariozechner/pi-coding-agent": "0.52.8",
+    "grammy": "^1.35.0",
+    "playwright": "^1.52.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "imapflow": "^1.0.172",
+    "nodemailer": "^6.10.1",
+    "better-sqlite3": "^11.8.1",
+    "zod": "^3.24.2",
+    "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3",
+    "vitest": "^3.0.5",
+    "@types/node": "^22.12.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/nodemailer": "^6.4.17"
+  }
+}

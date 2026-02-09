@@ -1,0 +1,21 @@
+{
+  "routes": [
+    { "intent": "email_draft",     "agent": "comms",   "model": "local",  "tools": ["email"],               "approval": "none" },
+    { "intent": "email_send",      "agent": "comms",   "model": "local",  "tools": ["email"],               "approval": "confirm" },
+    { "intent": "email_read",      "agent": "comms",   "model": "local",  "tools": ["email"],               "approval": "none" },
+    { "intent": "web_search",      "agent": "browser", "model": "local",  "tools": ["search"],              "approval": "none" },
+    { "intent": "web_scrape",      "agent": "browser", "model": "cloud",  "tools": ["browser"],             "approval": "none" },
+    { "intent": "purchase",        "agent": "browser", "model": "cloud",  "tools": ["browser", "vault"],    "approval": "confirm_with_screenshot" },
+    { "intent": "booking",         "agent": "browser", "model": "cloud",  "tools": ["browser", "vault"],    "approval": "confirm_with_screenshot" },
+    { "intent": "code_simple",     "agent": "coder",   "model": "local",  "tools": ["shell", "git"],        "approval": "none" },
+    { "intent": "code_complex",    "agent": "coder",   "model": "cloud",  "tools": ["shell", "git"],        "approval": "none" },
+    { "intent": "deploy",          "agent": "coder",   "model": "cloud",  "tools": ["shell", "git"],        "approval": "confirm" },
+    { "intent": "research",        "agent": "browser", "model": "cloud",  "tools": ["search", "browser"],   "approval": "none" },
+    { "intent": "form_fill",       "agent": "browser", "model": "cloud",  "tools": ["browser", "vault"],    "approval": "confirm" },
+    { "intent": "schedule_task",   "agent": "monitor", "model": "local",  "tools": ["cron"],                "approval": "confirm" },
+    { "intent": "general_chat",    "agent": "comms",   "model": "local",  "tools": [],                      "approval": "none" },
+    { "intent": "unknown",         "agent": "comms",   "model": "cloud",  "tools": [],                      "approval": "none" }
+  ],
+  "confidence_threshold": 0.7,
+  "fallback_on_low_confidence": "cloud"
+}

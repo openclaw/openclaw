@@ -1,0 +1,41 @@
+{
+  "local": {
+    "qwen-3b": {
+      "ref": { "provider": "ollama", "model": "qwen2.5:3b" },
+      "alias": "router",
+      "contextWindow": 32768,
+      "costTier": "free"
+    },
+    "llama-8b": {
+      "ref": { "provider": "ollama", "model": "llama3.1:8b" },
+      "alias": "local",
+      "contextWindow": 131072,
+      "costTier": "free"
+    },
+    "qwen-coder-7b": {
+      "ref": { "provider": "ollama", "model": "qwen2.5-coder:7b" },
+      "alias": "local-code",
+      "contextWindow": 32768,
+      "costTier": "free"
+    }
+  },
+  "cloud": {
+    "claude-opus": {
+      "ref": { "provider": "anthropic", "model": "claude-opus-4-6" },
+      "alias": "cloud",
+      "contextWindow": 200000,
+      "costTier": "expensive"
+    },
+    "claude-sonnet": {
+      "ref": { "provider": "anthropic", "model": "claude-sonnet-4-5-20250929" },
+      "alias": "cloud-fast",
+      "contextWindow": 200000,
+      "costTier": "cheap"
+    }
+  },
+  "defaults": {
+    "router": "router",
+    "local": "local",
+    "cloud": "cloud"
+  }
+}

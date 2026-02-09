@@ -1,0 +1,36 @@
+{
+  "agents": {
+    "comms": {
+      "id": "comms",
+      "defaultModel": "local",
+      "tools": ["email", "draft"],
+      "alwaysOn": false,
+      "approvalRequired": ["email_send"],
+      "skills": ["personal", "system"]
+    },
+    "browser": {
+      "id": "browser",
+      "defaultModel": "cloud",
+      "tools": ["browser", "search", "vault"],
+      "alwaysOn": false,
+      "approvalRequired": ["purchase", "form_submit", "login"],
+      "skills": ["personal", "system"]
+    },
+    "coder": {
+      "id": "coder",
+      "defaultModel": "cloud",
+      "tools": ["shell", "git", "read", "edit", "write"],
+      "alwaysOn": false,
+      "approvalRequired": ["deploy", "rm", "drop"],
+      "skills": ["coding", "system"]
+    },
+    "monitor": {
+      "id": "monitor",
+      "defaultModel": "router",
+      "tools": ["imap_poll", "cron", "healthcheck", "notify"],
+      "alwaysOn": true,
+      "approvalRequired": [],
+      "skills": ["system"]
+    }
+  }
+}
