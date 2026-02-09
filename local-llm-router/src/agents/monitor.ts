@@ -10,6 +10,7 @@ import { startEmailMonitor, type EmailMessage } from "../tools/email.js";
 import { runDailyAnalysis } from "../errors/analysis.js";
 import { runKnowledgeScout } from "../scout/knowledge-scout.js";
 import { ErrorJournal } from "../errors/journal.js";
+import type { TokenTracker } from "../monitoring/token-tracker.js";
 
 export interface CronJob {
   id: string;
@@ -177,6 +178,55 @@ export class MonitorAgent extends BaseAgent {
     }, 5 * 60_000); // Every 5 minutes
 
     console.log(`[monitor] Health checks started for ${endpoints.length} endpoints`);
+  }
+
+  /**
+   * Start periodic budget checks. Runs every 30 minutes.
+   * Calls the alert callback when budget thresholds are hit.
+   */
+  startBudgetMonitor(
+    tokenTracker: TokenTracker,
+    onAlert: (message: string) => void | Promise<void>,
+  ): void {
+    const interval = setInterval(async () => {
+      try {
+        const alerts = await tokenTracker.checkBudget();
+        for (const alert of alerts) {
+          if (alert.level === "warning" || alert.level === "critical") {
+            await onAlert(tokenTracker.formatAlertsForTelegram([alert]));
+          }
+        }
+      } catch (err) {
+        console.error("[monitor] Budget check failed:", err);
+      }
+    }, 30 * 60_000); // Every 30 minutes
+
+    this.cronIntervals.push(interval);
+    console.log("[monitor] Budget monitor started (every 30 min)");
+  }
+
+  /**
+   * Start daily cost summary. Sends a report at 23:00 each night.
+   */
+  startDailyCostSummary(
+    tokenTracker: TokenTracker,
+    onSummary: (message: string) => void | Promise<void>,
+  ): void {
+    const interval = setInterval(async () => {
+      const now = new Date();
+      if (now.getHours() === 23 && now.getMinutes() === 0) {
+        try {
+          const today = await tokenTracker.todaySummary();
+          const msg = tokenTracker.formatForTelegram(today);
+          await onSummary(msg);
+        } catch (err) {
+          console.error("[monitor] Daily cost summary failed:", err);
+        }
+      }
+    }, 60_000);
+
+    this.cronIntervals.push(interval);
+    console.log("[monitor] Daily cost summary started (23:00)");
   }
 
   /**

@@ -22,7 +22,8 @@ import { MonitorAgent } from "./agents/monitor.js";
 import type { AgentId, ModelsRegistry } from "./types.js";
 import type { RoutingConfig } from "./router/dispatcher.js";
 import type { AgentDeps } from "./agents/base-agent.js";
-import { createTelegramBot } from "./channels/telegram.js";
+import { createTelegramBot, sendNotification } from "./channels/telegram.js";
+import { TokenTracker } from "./monitoring/token-tracker.js";
 import * as readline from "node:readline";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
@@ -131,6 +132,16 @@ async function main(): Promise<void> {
   const auditLog = new AuditLog(path.join(PROJECT_ROOT, "logs", "audit"));
   const errorJournal = new ErrorJournal(path.join(PROJECT_ROOT, "errors"));
 
+  // Create token tracker
+  const tokenTracker = new TokenTracker(
+    path.join(PROJECT_ROOT, "logs", "tokens"),
+    {
+      dailyBudgetUsd: parseFloat(process.env.DAILY_BUDGET_USD ?? "5"),
+      monthlyBudgetUsd: parseFloat(process.env.MONTHLY_BUDGET_USD ?? "50"),
+    },
+  );
+  console.log("[init] Token tracker ready");
+
   // Create agent deps (shared by all agents)
   const agentDeps: AgentDeps = {
     auditLog,
@@ -139,6 +150,7 @@ async function main(): Promise<void> {
     modelsRegistry,
     allSkills,
     bootstrapContext,
+    tokenTracker,
   };
 
   // Load agent configs
@@ -239,12 +251,24 @@ async function main(): Promise<void> {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
       allowedUsers,
       router,
+      tokenTracker,
     });
 
     bot.start({
       onStart: () => console.log("[init] Telegram bot started"),
     });
     console.log(`[init] Telegram: ${allowedUsers.length} allowed users`);
+
+    // Start budget monitor — alerts via Telegram
+    const primaryChatId = allowedUsers[0];
+    if (primaryChatId) {
+      monitor.startBudgetMonitor(tokenTracker, async (msg) => {
+        await sendNotification(bot, primaryChatId, msg);
+      });
+      monitor.startDailyCostSummary(tokenTracker, async (msg) => {
+        await sendNotification(bot, primaryChatId, msg);
+      });
+    }
   }
 
   // Run terminal channel (blocks until quit)

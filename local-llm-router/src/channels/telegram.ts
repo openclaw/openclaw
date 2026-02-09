@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import type { Router } from "../router/index.js";
 import type { ApprovalLevel, Task } from "../types.js";
 import { checkRateLimit } from "../security/guards.js";
+import type { TokenTracker } from "../monitoring/token-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Approval queue — pending tasks awaiting user confirmation
@@ -31,6 +32,7 @@ export interface TelegramChannelConfig {
   botToken: string;
   allowedUsers: number[];
   router: Router;
+  tokenTracker?: TokenTracker;
 }
 
 export function createTelegramBot(config: TelegramChannelConfig): Bot {
@@ -115,13 +117,75 @@ export function createTelegramBot(config: TelegramChannelConfig): Bot {
   });
 
   bot.command("status", async (ctx) => {
-    // TODO: Show system status, task counts, error summary
-    await ctx.reply("Status: Running\nPending approvals: " + pendingApprovals.size);
+    const lines = ["Status: Running", `Pending approvals: ${pendingApprovals.size}`];
+
+    if (config.tokenTracker) {
+      try {
+        const today = await config.tokenTracker.todaySummary();
+        lines.push(``);
+        lines.push(`Today: ${today.totalCalls} calls, $${today.totalCostUsd.toFixed(4)}`);
+        lines.push(`Tokens: ${formatCompact(today.totalTokens)} (${formatCompact(today.totalInputTokens)} in / ${formatCompact(today.totalOutputTokens)} out)`);
+        lines.push(`Local: ${today.byEngine.local.calls} calls | Cloud: ${today.byEngine.cloud.calls} calls`);
+      } catch { /* tracker not ready yet */ }
+    }
+
+    await ctx.reply(lines.join("\n"));
   });
 
   bot.command("errors", async (ctx) => {
-    // TODO: Show recent errors from journal
     await ctx.reply("Error summary coming soon.");
+  });
+
+  // /usage [week|month] — token usage dashboard
+  bot.command("usage", async (ctx) => {
+    if (!config.tokenTracker) {
+      await ctx.reply("Token tracking not configured.");
+      return;
+    }
+
+    try {
+      const arg = (ctx.message?.text ?? "").split(" ")[1]?.toLowerCase();
+      let summary;
+
+      if (arg === "week") {
+        summary = await config.tokenTracker.periodSummary(7);
+      } else if (arg === "month") {
+        summary = await config.tokenTracker.periodSummary(30);
+      } else {
+        summary = await config.tokenTracker.todaySummary();
+      }
+
+      await ctx.reply(config.tokenTracker.formatForTelegram(summary));
+    } catch (err) {
+      await ctx.reply(`Error fetching usage: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  // /budget — check budget alerts
+  bot.command("budget", async (ctx) => {
+    if (!config.tokenTracker) {
+      await ctx.reply("Token tracking not configured.");
+      return;
+    }
+
+    try {
+      const alerts = await config.tokenTracker.checkBudget();
+      const today = await config.tokenTracker.todaySummary();
+      const monthly = await config.tokenTracker.periodSummary(30);
+
+      const lines = [
+        `Budget Status`,
+        ``,
+        `Today: $${today.totalCostUsd.toFixed(4)}`,
+        `This month: $${monthly.totalCostUsd.toFixed(4)}`,
+        ``,
+        config.tokenTracker.formatAlertsForTelegram(alerts),
+      ];
+
+      await ctx.reply(lines.join("\n"));
+    } catch (err) {
+      await ctx.reply(`Error checking budget: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
   return bot;
@@ -218,4 +282,14 @@ export async function sendAnalysisReport(
   await bot.api.sendMessage(chatId, message, {
     reply_markup: keyboard,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }

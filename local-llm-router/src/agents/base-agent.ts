@@ -17,6 +17,7 @@ import {
 import { runWithModelFallback } from "../router/model-fallback.js";
 import { filterSkillsForAgent, formatSkillsForPrompt, type Skill } from "../shared/skill-loader.js";
 import { guardOutput } from "../security/guards.js";
+import { TokenTracker, estimateTokens } from "../monitoring/token-tracker.js";
 
 export interface AgentDeps {
   auditLog: AuditLog;
@@ -25,6 +26,7 @@ export interface AgentDeps {
   modelsRegistry: ModelsRegistry;
   allSkills: Map<string, Skill>;
   bootstrapContext: string;
+  tokenTracker: TokenTracker;
 }
 
 export interface AgentResult {
@@ -126,6 +128,8 @@ export abstract class BaseAgent {
     const fallback = this.resolveFallbackModel(task);
 
     const systemPrompt = opts?.systemPrompt ?? this.buildSystemPrompt();
+    const callStart = Date.now();
+    const inputText = (systemPrompt ?? "") + prompt;
 
     const { result } = await runWithModelFallback({
       primary,
@@ -136,6 +140,18 @@ export abstract class BaseAgent {
           maxTokens: opts?.maxTokens ?? 4096,
           temperature: opts?.temperature,
         }),
+    });
+
+    // Track token usage
+    await this.deps.tokenTracker.record({
+      agent: this.id,
+      provider: primary.provider,
+      model: primary.model,
+      engine: task.route.model,
+      inputTokens: estimateTokens(inputText),
+      outputTokens: estimateTokens(result),
+      durationMs: Date.now() - callStart,
+      cached: false,
     });
 
     return result;
@@ -156,13 +172,29 @@ export abstract class BaseAgent {
   ): Promise<string> {
     const model = this.resolveModel(task);
     const systemPrompt = opts?.systemPrompt ?? this.buildSystemPrompt();
+    const callStart = Date.now();
+    const inputText = (systemPrompt ?? "") + messages.map((m) => m.content).join("");
 
-    return callModelStream(model, messages, {
+    const result = await callModelStream(model, messages, {
       systemPrompt,
       maxTokens: opts?.maxTokens ?? 4096,
       temperature: opts?.temperature,
       callbacks: opts?.callbacks,
     });
+
+    // Track token usage
+    await this.deps.tokenTracker.record({
+      agent: this.id,
+      provider: model.provider,
+      model: model.model,
+      engine: task.route.model,
+      inputTokens: estimateTokens(inputText),
+      outputTokens: estimateTokens(result),
+      durationMs: Date.now() - callStart,
+      cached: false,
+    });
+
+    return result;
   }
 
   /**
