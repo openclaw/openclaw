@@ -340,6 +340,31 @@ describe("plugin hook runner policies", () => {
     expect(handler).toHaveBeenCalledTimes(3);
   });
 
+  it("throws after retry exhaustion when mode is fail-closed", async () => {
+    const handler = vi.fn(() => {
+      throw new Error("still failing");
+    });
+
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "retry-fail-closed",
+          hookName: "before_tool_call",
+          source: "retry-fail-closed",
+          mode: "fail-closed",
+          retry: { count: 2 },
+          handler,
+        },
+      ]),
+      { logger: noopLogger, catchErrors: true },
+    );
+
+    await expect(
+      runner.runBeforeToolCall({ toolName: "echo", params: {} }, { toolName: "echo" }),
+    ).rejects.toThrow(/failed/);
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
   it("enforces maxConcurrency per hook registration", async () => {
     let inFlight = 0;
     let peak = 0;
