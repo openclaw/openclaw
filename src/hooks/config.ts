@@ -71,7 +71,10 @@ export function hasBinary(bin: string): boolean {
   const hasExt = path.extname(bin).length > 0;
   const exts =
     process.platform === "win32" && !hasExt
-      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .map((e) => e.trim())
+          .filter(Boolean)
       : [""];
   for (const part of parts) {
     for (const ext of exts) {
