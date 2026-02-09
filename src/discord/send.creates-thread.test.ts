@@ -69,6 +69,54 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("creates a forum thread with empty appliedTags", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      {
+        name: "Forum Thread",
+        message: { content: "Initial post" },
+        appliedTags: [],
+      },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1", undefined),
+      expect.objectContaining({
+        body: {
+          name: "Forum Thread",
+          message: { content: "Initial post" },
+          applied_tags: [],
+        },
+      }),
+    );
+  });
+
+  it("creates a forum thread with appliedTags", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      {
+        name: "Tagged Forum Thread",
+        message: { content: "Initial post" },
+        appliedTags: ["tag1", "tag2"],
+      },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1", undefined),
+      expect.objectContaining({
+        body: {
+          name: "Tagged Forum Thread",
+          message: { content: "Initial post" },
+          applied_tags: ["tag1", "tag2"],
+        },
+      }),
+    );
+  });
+
   it("lists active threads by guild", async () => {
     const { rest, getMock } = makeRest();
     getMock.mockResolvedValue({ threads: [] });

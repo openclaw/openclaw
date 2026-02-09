@@ -109,8 +109,8 @@ export async function createThreadDiscord(
   if (payload.message) {
     body.message = payload.message;
   }
-  // Forum channel tags
-  if (payload.appliedTags?.length) {
+  // Forum channel tags (required for forum channels, even if empty)
+  if (payload.appliedTags !== undefined) {
     body.applied_tags = payload.appliedTags;
   }
   const route = Routes.threads(channelId, payload.messageId);
