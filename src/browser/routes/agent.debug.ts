@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { DEFAULT_LOG_DIR } from "../../logging/logger.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -131,7 +132,7 @@ export function registerBrowserAgentDebugRoutes(
         return;
       }
       const id = crypto.randomUUID();
-      const dir = "/tmp/openclaw";
+      const dir = DEFAULT_LOG_DIR;
       await fs.mkdir(dir, { recursive: true });
       const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
       await pw.traceStopViaPlaywright({

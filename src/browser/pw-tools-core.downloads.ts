@@ -2,6 +2,7 @@ import type { Page } from "playwright-core";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_LOG_DIR } from "../logging/logger.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -20,7 +21,7 @@ import {
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
   const safeName = fileName.trim() ? fileName.trim() : "download.bin";
-  return path.join("/tmp/openclaw/downloads", `${id}-${safeName}`);
+  return path.join(DEFAULT_LOG_DIR, "downloads", `${id}-${safeName}`);
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
