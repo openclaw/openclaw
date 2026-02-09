@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { WebhooksConfigResolved } from "./webhooks-http.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
@@ -230,4 +231,27 @@ export function normalizeAgentPayload(
       timeoutSeconds,
     },
   };
+}
+
+export function resolveWebhooksConfig(cfg: OpenClawConfig): WebhooksConfigResolved | null {
+  if (cfg.hooks?.enabled !== true) {
+    return null;
+  }
+  const webhooks = cfg.hooks?.webhooks;
+  if (!webhooks || webhooks.enabled === false) {
+    return null;
+  }
+  const token = cfg.hooks?.token?.trim();
+  if (!token) {
+    return null;
+  }
+  const presets = webhooks.presets ?? [];
+  if (presets.length === 0) {
+    return null;
+  }
+  const maxBodyBytes =
+    cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
+      ? cfg.hooks.maxBodyBytes
+      : DEFAULT_HOOKS_MAX_BODY_BYTES;
+  return { token, presets, maxBodyBytes };
 }

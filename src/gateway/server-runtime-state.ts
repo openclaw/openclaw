@@ -11,6 +11,7 @@ import type { HooksConfigResolved } from "./hooks.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import type { WebhooksConfigResolved } from "./webhooks-http.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import { resolveGatewayListenHosts } from "./net.js";
@@ -25,6 +26,7 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { createGatewayWebhooksRequestHandler } from "./server/webhooks.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -39,6 +41,7 @@ export async function createGatewayRuntimeState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
+  webhooksConfig: () => WebhooksConfigResolved | null;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
@@ -47,6 +50,7 @@ export async function createGatewayRuntimeState(params: {
   logCanvas: { info: (msg: string) => void; warn: (msg: string) => void };
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
+  logWebhooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
@@ -118,6 +122,14 @@ export async function createGatewayRuntimeState(params: {
     logHooks: params.logHooks,
   });
 
+  const handleWebhooksRequest = createGatewayWebhooksRequestHandler({
+    deps: params.deps,
+    getWebhooksConfig: params.webhooksConfig,
+    bindHost: params.bindHost,
+    port: params.port,
+    logWebhooks: params.logWebhooks,
+  });
+
   const handlePluginRequest = createGatewayPluginRequestHandler({
     registry: params.pluginRegistry,
     log: params.logPlugins,
@@ -137,6 +149,7 @@ export async function createGatewayRuntimeState(params: {
       openResponsesEnabled: params.openResponsesEnabled,
       openResponsesConfig: params.openResponsesConfig,
       handleHooksRequest,
+      handleWebhooksRequest,
       handlePluginRequest,
       resolvedAuth: params.resolvedAuth,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,

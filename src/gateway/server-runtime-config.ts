@@ -10,7 +10,7 @@ import {
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { resolveHooksConfig, resolveWebhooksConfig } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "./net.js";
 
 export type GatewayRuntimeConfig = {
@@ -26,6 +26,7 @@ export type GatewayRuntimeConfig = {
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  webhooksConfig: ReturnType<typeof resolveWebhooksConfig>;
   canvasHostEnabled: boolean;
 };
 
@@ -82,6 +83,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
+  const webhooksConfig = resolveWebhooksConfig(params.cfg);
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
@@ -115,6 +117,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleConfig,
     tailscaleMode,
     hooksConfig,
+    webhooksConfig,
     canvasHostEnabled,
   };
 }

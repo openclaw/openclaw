@@ -110,6 +110,11 @@ export type InternalHooksConfig = {
   installs?: Record<string, HookInstallRecord>;
 };
 
+export type WebhooksConfig = {
+  enabled?: boolean;
+  presets?: string[];
+};
+
 export type HooksConfig = {
   enabled?: boolean;
   path?: string;
@@ -121,4 +126,6 @@ export type HooksConfig = {
   gmail?: HooksGmailConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
+  /** Webhook receiving for external apps (e.g., Read.ai) */
+  webhooks?: WebhooksConfig;
 };

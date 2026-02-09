@@ -153,6 +153,13 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
   -d '{"source":"gmail","messages":[{"from":"Ada","subject":"Hello","snippet":"Hi"}]}'
 ```
 
+## External App Webhooks (`/webhooks/`)
+
+For external services that cannot set custom auth headers (e.g., Read.ai, QuickBooks),
+OpenClaw provides a URL-path-based auth endpoint at `/webhooks/{token}/{source}`.
+
+See [External App Webhooks](/automation/webhooks-external) for setup and supported services.
+
 ## Security
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
@@ -161,3 +168,5 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
   If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
   in that hook's mapping (dangerous).
+- The `/webhooks/{token}/` path embeds the token in the URL. This is safe over HTTPS
+  (the path is encrypted) and follows the same pattern used by GitHub, Stripe, and Slack.

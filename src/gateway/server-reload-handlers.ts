@@ -12,12 +12,13 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { resolveHooksConfig, resolveWebhooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  webhooksConfig: ReturnType<typeof resolveWebhooksConfig>;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
@@ -51,6 +52,7 @@ export function createGatewayReloadHandlers(params: {
     if (plan.reloadHooks) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
+        nextState.webhooksConfig = resolveWebhooksConfig(nextConfig);
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
