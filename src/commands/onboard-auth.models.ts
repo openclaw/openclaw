@@ -3,6 +3,26 @@ import { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID } from "../agents/models-con
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+
+export const MINIMAX_CHINA_BASE_URL = "https://api.minimaxi.com/v1";
+export const MINIMAX_CHINA_API_BASE_URL = "https://api.minimaxi.com/anthropic";
+
+/**
+ * Returns the appropriate MiniMax base URL based on region.
+ *
+ * @param isChinaRegion - Whether the user is in China/Greater China
+ * @param api - Which API variant to use: "v1" for OpenAI-compatible, "anthropic" for Anthropic-compatible
+ * @returns The appropriate base URL for the region and API variant
+ */
+export function getMinimaxBaseUrl(
+  isChinaRegion: boolean,
+  api: "v1" | "anthropic" = "anthropic",
+): string {
+  if (isChinaRegion) {
+    return api === "v1" ? MINIMAX_CHINA_BASE_URL : MINIMAX_CHINA_API_BASE_URL;
+  }
+  return api === "v1" ? DEFAULT_MINIMAX_BASE_URL : MINIMAX_API_BASE_URL;
+}
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;

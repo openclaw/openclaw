@@ -167,12 +167,49 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 ## Configuration options
 
-- `models.providers.minimax.baseUrl`: prefer `https://api.minimax.io/anthropic` (Anthropic-compatible); `https://api.minimax.io/v1` is optional for OpenAI-compatible payloads.
+- `models.providers.minimax.baseUrl`: auto-detected based on timezone:
+  - China mainland/HK/TW: `https://api.minimaxi.com/anthropic` (domestic)
+  - Overseas: `https://api.minimax.io/anthropic` (default)
+  - For OpenAI-compatible payloads, replace `/anthropic` with `/v1`
 - `models.providers.minimax.api`: prefer `anthropic-messages`; `openai-completions` is optional for OpenAI-compatible payloads.
 - `models.providers.minimax.apiKey`: MiniMax API key (`MINIMAX_API_KEY`).
 - `models.providers.minimax.models`: define `id`, `name`, `reasoning`, `contextWindow`, `maxTokens`, `cost`.
 - `agents.defaults.models`: alias models you want in the allowlist.
 - `models.mode`: keep `merge` if you want to add MiniMax alongside built-ins.
+
+## China Mainland Users
+
+OpenClaw automatically detects China mainland timezones (Asia/Shanghai, Asia/Hong_Kong,
+Asia/Taipei, etc.) and uses the domestic endpoint (`api.minimaxi.com`) for faster,
+more reliable connections.
+
+> [!NOTE]
+> The domain difference is subtle: `minimaxi.com` (with extra 'i') vs `minimax.io`.
+
+To manually override the baseUrl (e.g., if timezone detection doesn't work for your setup):
+
+```bash
+openclaw config set models.providers.minimax.baseUrl "https://api.minimaxi.com/anthropic"
+```
+
+Or edit `openclaw.json` directly:
+
+```json5
+{
+  models: {
+    providers: {
+      minimax: {
+        baseUrl: "https://api.minimaxi.com/anthropic",
+        apiKey: "${MINIMAX_API_KEY}",
+        api: "anthropic-messages",
+        models: [...]
+      }
+    }
+  }
+}
+```
+
+Then restart the gateway with `openclaw gateway restart`.
 
 ## Notes
 

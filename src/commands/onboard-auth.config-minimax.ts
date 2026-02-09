@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isChinaRegion } from "../infra/region-utils.js";
 import {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
-  DEFAULT_MINIMAX_BASE_URL,
   DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
-  MINIMAX_API_BASE_URL,
+  getMinimaxBaseUrl,
   MINIMAX_HOSTED_COST,
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_HOSTED_MODEL_REF,
@@ -81,7 +81,7 @@ export function applyMinimaxHostedProviderConfig(
   const mergedModels = hasHostedModel ? existingModels : [...existingModels, hostedModel];
   providers.minimax = {
     ...existingProvider,
-    baseUrl: params?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
+    baseUrl: params?.baseUrl?.trim() || getMinimaxBaseUrl(isChinaRegion(), "v1"),
     apiKey: "minimax",
     api: "openai-completions",
     models: mergedModels.length > 0 ? mergedModels : [hostedModel],
@@ -164,7 +164,7 @@ export function applyMinimaxApiProviderConfig(
   const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
   providers.minimax = {
     ...existingProviderRest,
-    baseUrl: MINIMAX_API_BASE_URL,
+    baseUrl: getMinimaxBaseUrl(isChinaRegion(), "anthropic"),
     api: "anthropic-messages",
     ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
