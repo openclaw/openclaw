@@ -164,6 +164,29 @@ export async function createVoiceCallRuntime(params: {
     (provider as TwilioProvider).setPublicUrl(publicUrl);
   }
 
+  if (provider.name === "asterisk-ari") {
+    const ariProvider = provider as AsteriskAriProvider;
+    if (ttsRuntime?.textToSpeechTelephony) {
+      try {
+        const ttsProvider = createTelephonyTtsProvider({
+          coreConfig,
+          ttsOverride: config.tts,
+          runtime: ttsRuntime,
+        });
+        ariProvider.setTTSProvider(ttsProvider);
+        log.info("[voice-call] Telephony TTS provider configured for asterisk-ari");
+      } catch (err) {
+        log.warn(
+          `[voice-call] Failed to initialize telephony TTS for asterisk-ari: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    } else {
+      log.warn("[voice-call] Telephony TTS unavailable; asterisk-ari playback disabled");
+    }
+  }
+
   if (provider.name === "twilio" && config.streaming?.enabled) {
     const twilioProvider = provider as TwilioProvider;
     if (ttsRuntime?.textToSpeechTelephony) {

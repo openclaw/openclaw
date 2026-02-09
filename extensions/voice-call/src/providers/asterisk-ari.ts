@@ -195,7 +195,8 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     if (!state || !state.media) return;
 
     if (!this.ttsProvider) {
-      throw new Error("Telephony TTS provider not configured for asterisk-ari");
+      console.warn("[ari] Telephony TTS provider not configured; skipping playback");
+      return;
     }
     const mulaw = await this.ttsProvider.synthesizeForTelephony(input.text);
 
