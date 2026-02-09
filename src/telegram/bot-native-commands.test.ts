@@ -78,4 +78,41 @@ describe("registerTelegramNativeCommands", () => {
 
     expect(listSkillCommandsForAgents).toHaveBeenCalledWith({ cfg });
   });
+
+  it("truncates Telegram command registration to 100 commands", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = Array.from({ length: 120 }, (_, index) => ({
+      command: `cmd_${index}`,
+      description: `Command ${index}`,
+    }));
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      runtime: { log: runtimeLog } as RuntimeEnv,
+      telegramCfg: { customCommands } as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registeredCommands).toHaveLength(100);
+    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "telegram: truncating 120 commands to 100 (Telegram Bot API limit)",
+    );
+  });
 });
