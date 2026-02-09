@@ -8,7 +8,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -198,6 +198,12 @@ export async function runReplyAgent(params: {
   }
 
   await typingSignals.signalRunStart();
+
+  // When typing TTL expires (no tokens/tool output for 2 min), abort the run
+  // as a timeout so the model fallback chain can try the next provider.
+  typing.setTtlExpiredHandler(() => {
+    abortEmbeddedPiRun(followupRun.run.sessionId, true);
+  });
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
@@ -520,6 +526,7 @@ export async function runReplyAgent(params: {
     );
   } finally {
     blockReplyPipeline?.stop();
+    typing.setTtlExpiredHandler(undefined);
     typing.markRunComplete();
   }
 }

@@ -13,6 +13,7 @@ export function createMockTypingController(
     markRunComplete: vi.fn(),
     markDispatchIdle: vi.fn(),
     cleanup: vi.fn(),
+    setTtlExpiredHandler: vi.fn(),
     ...overrides,
   };
 }

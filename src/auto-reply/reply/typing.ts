@@ -9,6 +9,8 @@ export type TypingController = {
   markRunComplete: () => void;
   markDispatchIdle: () => void;
   cleanup: () => void;
+  /** Register a handler called when typing TTL expires (e.g. to abort a stuck run). */
+  setTtlExpiredHandler: (handler: (() => void) | undefined) => void;
 };
 
 export function createTypingController(params: {
@@ -37,6 +39,7 @@ export function createTypingController(params: {
   let sealed = false;
   let typingTimer: NodeJS.Timeout | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
+  let ttlExpiredHandler: (() => void) | undefined;
   const typingIntervalMs = typingIntervalSeconds * 1000;
 
   const formatTypingTtl = (ms: number) => {
@@ -92,6 +95,7 @@ export function createTypingController(params: {
         return;
       }
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
+      ttlExpiredHandler?.();
       cleanup();
     }, typingTtlMs);
   };
@@ -183,6 +187,10 @@ export function createTypingController(params: {
     maybeStopOnIdle();
   };
 
+  const setTtlExpiredHandler = (handler: (() => void) | undefined) => {
+    ttlExpiredHandler = handler;
+  };
+
   return {
     onReplyStart: ensureStart,
     startTypingLoop,
@@ -192,5 +200,6 @@ export function createTypingController(params: {
     markRunComplete,
     markDispatchIdle,
     cleanup,
+    setTtlExpiredHandler,
   };
 }
