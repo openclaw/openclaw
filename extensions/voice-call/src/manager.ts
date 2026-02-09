@@ -567,7 +567,7 @@ export class CallManager {
             .hangupCall({
               callId: event.providerCallId ?? event.callId,
               providerCallId: event.providerCallId,
-              reason: "rejected",
+              reason: "hangup-bot",
             })
             .catch((err) => {
               console.warn(

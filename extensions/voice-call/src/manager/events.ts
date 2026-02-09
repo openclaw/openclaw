@@ -99,7 +99,7 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
           .hangupCall({
             callId: event.providerCallId ?? event.callId,
             providerCallId: event.providerCallId,
-            reason: "rejected",
+            reason: "hangup-bot",
           })
           .catch((err) => {
             console.warn(
