@@ -9,8 +9,8 @@
 #
 # See https://fly.io/docs/reference/configuration/
 
-app = "my-openclaw" # change to your app name
-primary_region = "iad" # change to your closest region
+app = "openclaw-lisan-al-gaib" # change to your app name
+primary_region = "fra" # change to your closest region
 
 [build]
 dockerfile = "Dockerfile"
@@ -18,15 +18,17 @@ dockerfile = "Dockerfile"
 [env]
 NODE_ENV = "production"
 OPENCLAW_PREFER_PNPM = "1"
-OPENCLAW_STATE_DIR = "/data"
+OPENCLAW_STATE_DIR = "/data/.openclaw"
 NODE_OPTIONS = "--max-old-space-size=1536"
+OPENCLAW_DISABLE_BONJOUR = "1"
 
 [processes]
-app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+app = "node dist/index.js gateway --allow-unconfigured --port 17568 --bind loopback"
 
 # NOTE: No [http_service] block = no public ingress allocated.
 # The gateway will only be accessible via:
-#   - fly proxy 3000:3000 -a <app-name>
+#   - Tailscale Serve: https://<machine-name>.tailnet-xxxx.ts.net/
+#   - fly proxy 17568:17568 -a <app-name>
 #   - fly wireguard (then access via internal IPv6)
 #   - fly ssh console
 
@@ -37,3 +39,14 @@ memory = "2048mb"
 [mounts]
 source = "openclaw_data"
 destination = "/data"
+
+# NOTE: Restart policy must be set via CLI, not in fly.toml:
+#   fly m update <machine-id> --restart always
+# 
+# Options:
+#   - "always": Restart even on clean exit (code 0) - ensures gateway restarts work
+#   - "on-fail": Only restart on non-zero exit codes (default) - works with our code fix
+#   - "no": Never restart automatically
+#
+# With our code fix, gateway exits with code 1 when restart is needed in containers,
+# so "on-fail" policy will work. Use "always" if you want restarts even on code 0.
