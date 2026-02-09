@@ -260,4 +260,58 @@ describe("tool-request guardrail", () => {
     });
     expect(result).toEqual({ text: "Hello there!", isFull: true });
   });
+
+  it("overrides FULL to ACK for calendar requests", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: I don't have access to your calendar."));
+    const result = await generateSmartAck({
+      message: "what's on my calendar today",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
+
+  it("overrides FULL to ACK for schedule requests", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: I can't check your schedule."));
+    const result = await generateSmartAck({
+      message: "tell me what's on my schedule for tomorrow",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
+
+  it("overrides FULL to ACK for agenda requests", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: No meetings today."));
+    const result = await generateSmartAck({
+      message: "check my agenda for this week",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
+
+  it("overrides FULL to ACK for gog command requests", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Your calendar shows..."));
+    const result = await generateSmartAck({
+      message: "run gog calendar events",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
+
+  it("overrides FULL to ACK for 'events for tomorrow'", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: Here are your events..."));
+    const result = await generateSmartAck({
+      message: "what events for tomorrow do I have",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
+
+  it("overrides FULL to ACK for system info requests", async () => {
+    mockedRun.mockResolvedValue(cliJsonResult("FULL: You have macOS 15..."));
+    const result = await generateSmartAck({
+      message: "give me system info",
+      cfg: baseCfg,
+    });
+    expect(result?.isFull).toBe(false);
+  });
 });

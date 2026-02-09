@@ -115,6 +115,11 @@ function buildTriagePrompt(params: {
       `send messages, generate images/audio, or perform any action beyond pure conversation. ` +
       `Never fabricate tool results; always defer these to the main model.\n\n` +
       `You MUST start your response with either "FULL: " or "ACK: " and nothing else.\n\n` +
+      `IMPORTANT TOOL CONTEXT: The main model has full shell/terminal access ` +
+      `(calendars via gog, system info, apps, etc.), file system access, ` +
+      `web search, browser automation, and message sending. Never claim you ` +
+      `cannot do something these tools can handle. If the request involves ` +
+      `any of these capabilities, classify as ACK.\n\n` +
       `Writing style: never use em-dashes or hyphens as grammatical punctuation. ` +
       `Use commas, periods, or semicolons instead.\n\n` +
       `User's message:\n${message}`,
@@ -150,6 +155,15 @@ const TOOL_REQUEST_PATTERNS: RegExp[] = [
   /\binstall\b/i,
   /\bdeploy\b/i,
   /\bssh\b/i,
+  // Calendar, schedule, and system-info patterns
+  /\b(calendar|calendars)\b/i,
+  /\b(schedule|agenda)\b/i,
+  /\bevents?\s+(for|today|tomorrow|this\s+week|next\s+week)\b/i,
+  /\bgog\b/i,
+  /\bwhat('s| is)\s+(on\s+)?(my|the)\s+(schedule|calendar|agenda)\b/i,
+  /\bcheck\b.*\b(calendar|schedule)\b/i,
+  /\bsystem\s*info/i,
+  /\bwhat('s| is)\s+running\b/i,
 ];
 
 function looksLikeToolRequest(message: string): boolean {
