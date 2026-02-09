@@ -134,4 +134,14 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(options.some((opt) => opt.value === "xai-api-key")).toBe(true);
   });
+
+  it("includes vLLM auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "vllm")).toBe(true);
+  });
 });
