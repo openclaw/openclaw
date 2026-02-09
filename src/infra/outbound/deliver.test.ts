@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -473,6 +474,43 @@ describe("deliverOutboundPayloads", () => {
       expect.any(Error),
       expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
     );
+  });
+
+  it("keeps message_sent content non-empty for multi-media success and failure", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockRejectedValueOnce(new Error("boom"));
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    const getGlobalHookRunnerSpy = vi
+      .spyOn(hookRunnerGlobal, "getGlobalHookRunner")
+      .mockReturnValue({
+        hasHooks: (name: string) => name === "message_sent",
+        runMessageSent,
+      } as any);
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "caption", mediaUrls: ["https://x.test/a.jpg", "https://x.test/b.jpg"] }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+    });
+
+    expect(runMessageSent).toHaveBeenCalledTimes(2);
+    expect(runMessageSent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ content: "caption", success: true }),
+      expect.any(Object),
+    );
+    expect(runMessageSent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ content: "caption", success: false, error: "boom" }),
+      expect.any(Object),
+    );
+
+    getGlobalHookRunnerSpy.mockRestore();
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {
