@@ -5,6 +5,7 @@ import { deepgramProvider } from "./deepgram/index.js";
 import { googleProvider } from "./google/index.js";
 import { groqProvider } from "./groq/index.js";
 import { minimaxProvider } from "./minimax/index.js";
+import { mistralProvider } from "./mistral/index.js";
 import { openaiProvider } from "./openai/index.js";
 
 const PROVIDERS: MediaUnderstandingProvider[] = [
@@ -13,6 +14,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   googleProvider,
   anthropicProvider,
   minimaxProvider,
+  mistralProvider,
   deepgramProvider,
 ];
 
