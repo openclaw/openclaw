@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
+  logWarnMock: vi.fn(),
+  logDebugMock: vi.fn(),
+  logInfoMock: vi.fn(),
+}));
+
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
   stderr: EventEmitter;
@@ -38,6 +44,18 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   return child;
 }
 
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => {
+    const logger = {
+      warn: logWarnMock,
+      debug: logDebugMock,
+      info: logInfoMock,
+      child: () => logger,
+    };
+    return logger;
+  },
+}));
+
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn as mockedSpawn } from "node:child_process";
@@ -57,6 +75,9 @@ describe("QmdMemoryManager", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
     spawnMock.mockImplementation(() => createMockChild());
+    logWarnMock.mockReset();
+    logDebugMock.mockReset();
+    logInfoMock.mockReset();
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-manager-test-"));
     workspaceDir = path.join(tmpRoot, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -459,6 +480,42 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("logs when qmd scope denies search", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          scope: {
+            default: "deny",
+            rules: [{ action: "allow", match: { chatType: "direct" } }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+
+    logWarnMock.mockClear();
+    const beforeCalls = spawnMock.mock.calls.length;
+    await expect(
+      manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
+    ).resolves.toEqual([]);
+
+    expect(spawnMock.mock.calls.length).toBe(beforeCalls);
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd search denied by scope"));
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("chatType=channel"));
+
+    await manager.close();
+  });
+
   it("blocks non-markdown or symlink reads for qmd paths", async () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
@@ -546,6 +603,89 @@ describe("QmdMemoryManager", () => {
       manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
     ).rejects.toThrow("qmd index busy while reading results");
     await manager.close();
+  });
+
+  describe("model cache symlink", () => {
+    let defaultModelsDir: string;
+    let customModelsDir: string;
+    let savedXdgCacheHome: string | undefined;
+
+    beforeEach(async () => {
+      // Redirect XDG_CACHE_HOME so symlinkSharedModels finds our fake models
+      // directory instead of the real ~/.cache.
+      savedXdgCacheHome = process.env.XDG_CACHE_HOME;
+      const fakeCacheHome = path.join(tmpRoot, "fake-cache");
+      process.env.XDG_CACHE_HOME = fakeCacheHome;
+
+      defaultModelsDir = path.join(fakeCacheHome, "qmd", "models");
+      await fs.mkdir(defaultModelsDir, { recursive: true });
+      await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
+
+      customModelsDir = path.join(stateDir, "agents", agentId, "qmd", "xdg-cache", "qmd", "models");
+    });
+
+    afterEach(() => {
+      if (savedXdgCacheHome === undefined) {
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = savedXdgCacheHome;
+      }
+    });
+
+    it("symlinks default model cache into custom XDG_CACHE_HOME on first run", async () => {
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      const stat = await fs.lstat(customModelsDir);
+      expect(stat.isSymbolicLink()).toBe(true);
+      const target = await fs.readlink(customModelsDir);
+      expect(target).toBe(defaultModelsDir);
+
+      // Models are accessible through the symlink.
+      const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
+      expect(content).toBe("fake-model");
+
+      await manager!.close();
+    });
+
+    it("does not overwrite existing models directory", async () => {
+      // Pre-create the custom models dir with different content.
+      await fs.mkdir(customModelsDir, { recursive: true });
+      await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      // Should still be a real directory, not a symlink.
+      const stat = await fs.lstat(customModelsDir);
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(stat.isDirectory()).toBe(true);
+
+      // Custom content should be preserved.
+      const content = await fs.readFile(path.join(customModelsDir, "custom-model.bin"), "utf-8");
+      expect(content).toBe("custom");
+
+      await manager!.close();
+    });
+
+    it("skips symlink when no default models exist", async () => {
+      // Remove the default models dir.
+      await fs.rm(defaultModelsDir, { recursive: true, force: true });
+
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+      const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+      expect(manager).toBeTruthy();
+
+      // Custom models dir should not exist (no symlink created).
+      await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+      expect(logWarnMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("failed to symlink qmd models directory"),
+      );
+
+      await manager!.close();
+    });
   });
 });
 
