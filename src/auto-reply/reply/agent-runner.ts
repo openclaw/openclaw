@@ -234,6 +234,7 @@ export async function runReplyAgent(params: {
   // branches delivered to the user (see #8063).  The next heartbeat interval
   // will re-check the session independently.
   if (isHeartbeat && isActive) {
+    typing.markRunComplete();
     typing.cleanup();
     return undefined;
   }
