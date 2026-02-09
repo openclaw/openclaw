@@ -33,11 +33,11 @@ vi.mock("../agents/model-auth.js", () => ({
 }));
 
 describe("promptDefaultModel", () => {
-  it("filters internal router models from the selection list", async () => {
+  it("includes openrouter/auto in the selection list with correct key format", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "openrouter",
-        id: "auto",
+        id: "openrouter/auto",
         name: "OpenRouter Auto",
       },
       {
@@ -63,7 +63,7 @@ describe("promptDefaultModel", () => {
     });
 
     const options = select.mock.calls[0]?.[0]?.options ?? [];
-    expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
+    expect(options.some((opt) => opt.value === "openrouter/openrouter/auto")).toBe(true);
     expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
       true,
     );
@@ -71,11 +71,11 @@ describe("promptDefaultModel", () => {
 });
 
 describe("promptModelAllowlist", () => {
-  it("filters internal router models from the selection list", async () => {
+  it("includes openrouter/auto in the selection list with correct key format", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "openrouter",
-        id: "auto",
+        id: "openrouter/auto",
         name: "OpenRouter Auto",
       },
       {
@@ -94,7 +94,9 @@ describe("promptModelAllowlist", () => {
     await promptModelAllowlist({ config, prompter });
 
     const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
-    expect(options.some((opt: { value: string }) => opt.value === "openrouter/auto")).toBe(false);
+    expect(
+      options.some((opt: { value: string }) => opt.value === "openrouter/openrouter/auto"),
+    ).toBe(true);
     expect(
       options.some(
         (opt: { value: string }) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free",
