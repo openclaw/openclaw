@@ -230,7 +230,6 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       return;
     }
 
-    await this.client.safeHangupChannel(state.sipChannelId);
     await this.cleanup(input.providerCallId, input.reason);
   }
 
