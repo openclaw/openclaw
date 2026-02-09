@@ -22,6 +22,12 @@ const MAX_TIMER_DELAY_MS = 60_000;
  */
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
+/** Threshold for treating state.running as stale (hung onTimer). Must exceed max job duration. */
+const STALE_RUNNING_MS = 2 * DEFAULT_JOB_TIMEOUT_MS;
+
+/** Watchdog fires every 2.5 minutes to detect and recover from a dead timer. */
+const WATCHDOG_INTERVAL_MS = 2.5 * 60_000;
+
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
@@ -148,6 +154,7 @@ export function armTimer(state: CronServiceState) {
       await onTimer(state);
     } catch (err) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      armTimer(state); // Defensive: ensure next wake is scheduled
     }
   }, clampedDelay);
   state.deps.log.debug(
@@ -157,10 +164,24 @@ export function armTimer(state: CronServiceState) {
 }
 
 export async function onTimer(state: CronServiceState) {
-  if (state.running) {
+  const now = state.deps.nowMs();
+  // Recover from hung onTimer: if running has been true for too long, reset and proceed.
+  if (state.running && typeof state.runningStartedAtMs === "number") {
+    if (now - state.runningStartedAtMs > STALE_RUNNING_MS) {
+      state.deps.log.warn(
+        { runningStartedAtMs: state.runningStartedAtMs, staleAfterMs: STALE_RUNNING_MS },
+        "cron: recovering from hung run, resetting state.running",
+      );
+      state.running = false;
+      state.runningStartedAtMs = null;
+    } else {
+      return;
+    }
+  } else if (state.running) {
     return;
   }
   state.running = true;
+  state.runningStartedAtMs = now;
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -309,6 +330,7 @@ export async function onTimer(state: CronServiceState) {
     }
   } finally {
     state.running = false;
+    state.runningStartedAtMs = null;
     armTimer(state);
   }
 }
@@ -556,6 +578,38 @@ export function stopTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
+  if (state.watchdogTimer) {
+    clearInterval(state.watchdogTimer);
+  }
+  state.watchdogTimer = null;
+}
+
+/**
+ * Start the watchdog that re-arms the timer if it dies (e.g. hung onTimer).
+ * Call when cron service starts; stopTimer clears it on stop.
+ */
+export function startWatchdog(state: CronServiceState) {
+  if (state.watchdogTimer) {
+    return;
+  }
+  if (!state.deps.cronEnabled) {
+    return;
+  }
+  state.watchdogTimer = setInterval(() => {
+    if (!state.deps.cronEnabled || state.store === null) {
+      return;
+    }
+    const nextAt = nextWakeAtMs(state);
+    if (nextAt == null) {
+      return;
+    }
+    if (state.timer !== null) {
+      return; // Timer is armed
+    }
+    state.deps.log.info({}, "cron: watchdog re-arming timer (recovered from stale state)");
+    armTimer(state);
+  }, WATCHDOG_INTERVAL_MS);
+  state.watchdogTimer.unref?.();
 }
 
 export function emit(state: CronServiceState, evt: CronEvent) {

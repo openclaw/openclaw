@@ -58,6 +58,10 @@ export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
+  /** When state.running was set to true; used to detect hung onTimer. */
+  runningStartedAtMs: number | null;
+  /** Background watchdog that re-arms the timer if it dies. */
+  watchdogTimer: NodeJS.Timeout | null;
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -70,6 +74,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
     timer: null,
+    runningStartedAtMs: null,
+    watchdogTimer: null,
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,

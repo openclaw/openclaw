@@ -11,7 +11,15 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
-import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+import {
+  armTimer,
+  emit,
+  executeJob,
+  runMissedJobs,
+  startWatchdog,
+  stopTimer,
+  wake,
+} from "./timer.js";
 
 export async function start(state: CronServiceState) {
   await locked(state, async () => {
@@ -34,6 +42,7 @@ export async function start(state: CronServiceState) {
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
+    startWatchdog(state);
     state.deps.log.info(
       {
         enabled: true,
@@ -58,6 +67,11 @@ export async function status(state: CronServiceState) {
         await persist(state);
       }
     }
+    // Recover from zombie: if timer is dead but we have jobs to run, re-arm.
+    if (state.deps.cronEnabled && nextWakeAtMs(state) != null && state.timer === null) {
+      state.deps.log.info({}, "cron: re-arming timer (recovered from stale state)");
+      armTimer(state);
+    }
     return {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
@@ -75,6 +89,11 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
       if (changed) {
         await persist(state);
       }
+    }
+    // Recover from zombie: if timer is dead but we have jobs to run, re-arm.
+    if (state.deps.cronEnabled && nextWakeAtMs(state) != null && state.timer === null) {
+      state.deps.log.info({}, "cron: re-arming timer (recovered from stale state)");
+      armTimer(state);
     }
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);

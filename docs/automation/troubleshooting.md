@@ -50,6 +50,14 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick crashed; inspect surrounding stack/log context.
 - `reason: not-due` in run output → manual run called without `--force` and job not due yet.
 
+### Cron stuck (zombie scheduler)
+
+If jobs show "Next: Xm ago" but never run, the scheduler timer may have stopped.
+
+1. Run `openclaw cron list` or `openclaw cron status` — this may re-arm the timer automatically.
+2. Restart the Gateway if the problem persists.
+3. Check logs for `cron: timer tick failed`, `cron: job failed` (timeout), or `cron: recovering from hung run`.
+
 ## Cron fired but no delivery
 
 ```bash
