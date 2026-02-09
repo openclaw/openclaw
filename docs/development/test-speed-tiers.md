@@ -66,7 +66,7 @@ Examples:
 
 Tests are classified as "slow" when they:
 
-- Have file names matching `*.e2e.test.ts`, `*.live.test.ts`, `*.integration.test.ts`, or `*.browser.test.ts`
+- Have file names matching `*.e2e.test.ts`, `*.live.test.ts`, or `*.integration.test.ts`
 - Spawn child processes
 - Have high timeout values (≥5000ms)
 - Make network calls
@@ -74,8 +74,11 @@ Tests are classified as "slow" when they:
 Examples:
 
 - E2E tests
-- Browser automation tests
 - Integration tests with real services
+- Provider contract tests
+
+**Note**: UI browser tests (`ui/**/*.browser.test.ts`) are **not** included in the slow tier.
+They require the Playwright browser environment and run separately via `pnpm test:ui`.
 
 ## CI Configuration
 
@@ -98,6 +101,19 @@ This approach:
 - `vitest.tier-slow.config.ts` - Slow tier configuration
 - `scripts/test-tiered.mjs` - Tiered test runner
 - `scripts/test-tier-analyzer.ts` - Classification analyzer
+
+## UI Browser Tests
+
+UI browser tests (`ui/src/**/*.browser.test.ts`) run separately from the tiered test system
+because they require a browser environment (Playwright):
+
+```bash
+# Run UI browser tests
+pnpm test:ui
+```
+
+These tests use the `ui/vitest.config.ts` configuration which enables browser mode with Playwright.
+They are excluded from the tiered configs to avoid environment conflicts.
 
 ## Environment Variables
 
