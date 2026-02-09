@@ -582,13 +582,13 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       sendJson(res, 200, response);
-    } catch (err) {
+    } catch {
       const response = createResponseResource({
         id: responseId,
         model,
         status: "failed",
         output: [],
-        error: { code: "api_error", message: String(err) },
+        error: { code: "api_error", message: "internal error" },
       });
       sendJson(res, 500, response);
     }
@@ -877,7 +877,7 @@ export async function handleOpenResponsesHttpRequest(
           delta: content,
         });
       }
-    } catch (err) {
+    } catch {
       if (closed) {
         return;
       }
@@ -888,7 +888,7 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "failed",
         output: [],
-        error: { code: "api_error", message: String(err) },
+        error: { code: "api_error", message: "internal error" },
         usage: finalUsage,
       });
 
