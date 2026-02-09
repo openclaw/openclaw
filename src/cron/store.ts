@@ -8,7 +8,15 @@ import { CONFIG_DIR } from "../utils.js";
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 
-export function resolveCronStorePath(storePath?: string) {
+/**
+ * Resolves the cron store path.
+ * Priority:
+ * 1. Explicit storePath from config
+ * 2. OPENCLAW_STATE_DIR / CLAWDBOT_STATE_DIR environment variable
+ * 3. Default path (CONFIG_DIR/cron/jobs.json)
+ */
+export function resolveCronStorePath(storePath?: string): string {
+  // Priority 1: Explicit config path
   if (storePath?.trim()) {
     const raw = storePath.trim();
     if (raw.startsWith("~")) {
@@ -16,6 +24,18 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
+
+  // Priority 2: Check for OPENCLAW_STATE_DIR environment variable at runtime
+  const stateDirOverride =
+    process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  if (stateDirOverride) {
+    const expandedStateDir = stateDirOverride.startsWith("~")
+      ? expandHomePrefix(stateDirOverride)
+      : stateDirOverride;
+    return path.join(path.resolve(expandedStateDir), "cron", "jobs.json");
+  }
+
+  // Priority 3: Fall back to default
   return DEFAULT_CRON_STORE_PATH;
 }
 
