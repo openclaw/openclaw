@@ -246,6 +246,11 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Plugin Hook Events
+
+- **`message_received`**, **`message_sending`**, **`message_sent`**
+- `message_sent` also fires for canceled sends with `success: false` and `error: "canceled by message_sending hook"`.
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
