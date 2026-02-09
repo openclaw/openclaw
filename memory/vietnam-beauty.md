@@ -331,6 +331,7 @@
 | I012 | M01 후처리 — BGM + 자막 + 세로 변환 (FFmpeg) | ✅ Complete |
 | A008 | TikTok Content Posting API 리서치 | ✅ Complete |
 | T004-LL | Lessons Learned: qwen3 /no_think 버그 | Complete |
+| T022 | 제품 등록 + AI 콘텐츠 + 영상 생성 E2E (2026-02-09) | ✅ Complete |
 
 ---
 
@@ -646,13 +647,95 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ---
 
+### 2026-02-08 (오후) — R2 스토리지 + 코드 품질 + 판매 전략 + 테스트 스위트
+
+#### Cloudflare R2 스토리지 구축
+- [x] `maibeauty-media` 버킷 생성 (APAC, Public Access ON)
+- [x] R2 Access Key + `.env` 설정 (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`)
+- [x] `src/storage/r2.ts` — S3 호환 클라이언트 (AWS SDK v3)
+- [x] `src/storage/r2-utils.ts` — 유틸리티 (업로드/삭제/목록/URL 생성)
+- [x] `src/storage/r2-cleanup.ts` — temp/ 24시간 TTL 자동 정리
+- [x] Express API `/api/v1/media/upload` 엔드포인트
+- [x] 6개 디렉토리 초기화: products/tiktok/viral/copywriting/templates/temp
+- [x] M01 Worker + 상품등록 + UCP Feed → R2 URL 파이프라인 연동
+- [x] D030 (통합 계획) + I036 (구축 기록) 문서 작성
+- Public URL: `https://pub-256514584116411a85e99da201cfc4a6.r2.dev`
+
+#### D031 — UCP 제품등록 및 판매 프로세스 가이드 (574줄)
+- [x] Admin 등록 → DB 저장 → UCP Discovery → AI 상담 → 장바구니 → 결제 전체 플로우
+- [x] 이미지 업로드 3경로 + Cloudflare R2 반영
+
+#### 판매 전략 문서 3건
+- [x] D027 — 🇻🇳 베트남 시장 판매 전략 (시장분석, 채널전략, AI 6대 모델 ROI, 3개월 로드맵)
+- [x] D028 — 🇺🇸 미주 시장 진출 전략 (FDA 규제, Amazon FBA, D2C+UCP, 6개월 로드맵)
+- [x] D029 — 🌏 글로벌 확장 로드맵 (7개국 우선순위, 다국가 UCP, 12개월 실행계획)
+
+#### A013 코드 품질 개선 (MAIBOT 직접)
+- [x] T4: CORS `*` → 명시적 origin 화이트리스트 (`c4ffda2`)
+- [x] T5: `api.ts` 1,383줄 → 10개 도메인별 API 모듈 분할 (`4620854`)
+- [x] T6: USE_MOCK 7개 훅 환경변수 통일 (`4620854`)
+- [x] T7: AI Job 메모리 누수 방지 — 자동 cleanup (1시간 주기, MAX 100개) (`c4ffda2`)
+- [x] I037 — 구현 기록 문서 (`438741a`)
+
+#### 보안 수정 + 테스트 스위트 (Claude Code Agent Teams)
+- [x] Register API `require_role(["admin"])` — 비인증 사용자 등록 차단
+- [x] asyncpg UTF-8 `client_encoding` — 한글 인코딩 수정
+- [x] UCP stats GROUP BY SQL — `func.coalesce` 제거
+- [x] 754개 테스트 추가 (153 API + 328 unit + 273 service)
+- [x] SQLite/PostgreSQL 호환성 수정
+- 커밋: `0a1b7b4`, `a13de35`
+
+#### 배포 (2026-02-08)
+- [x] Frontend (GitHub Pages) → ✅ SUCCESS (`4620854`)
+- [x] Backend (Railway) → ✅ SUCCESS (`c2ac1167`)
+- [x] R2 (Cloudflare) → ✅ Public Access 정상
+
+#### 결정사항 추가
+| 날짜 | 결정 | 사유 |
+|------|------|------|
+| 2026-02-08 | Cloudflare R2 스토리지 도입 | 상품 이미지/TikTok 영상 클라우드 저장 + 퍼블릭 URL |
+| 2026-02-08 | A013 코드 품질 개선 4건 실행 | 보안(CORS) + 유지보수성(분할) + 안정성(cleanup) |
+| 2026-02-08 | 테스트 스위트 754건 도입 | Claude Code Agent Teams 병렬 테스트 자동화 |
+| 2026-02-09 | 제품→AI콘텐츠→영상 E2E 13/13 PASS | 전체 파이프라인 정상 동작 확인 |
+| 2026-02-09 | Worker 수동 기동 방식 유지 | 자동 기동은 다음 단계 (Task Scheduler 검토) |
+
+---
+
+### 2026-02-09 — 제품 등록 + AI 콘텐츠 + 영상 생성 E2E 테스트
+- [x] **T022 — 제품 등록 + AI 콘텐츠 생성 E2E 테스트 (8/8 PASS)**
+  - API 로그인 (admin@maibeauty.com)
+  - DERMAEL 어성초 마스크 28매 제품 등록 (ID: `87b5017a-fb0d-4b28-943c-8bd1a73efa22`)
+  - 사진 3장 업로드 (HTTP 201)
+  - AI USP 추천 (5종) + 마케팅 카피 (3종) + 번역 + 전체 생성 + 사진 처리 모두 PASS
+  - 프론트엔드 확인 완료
+- [x] **Video Worker 기동 + 영상 생성 (5/5 PASS)**
+  - Worker 미실행 발견 → `railway variables`로 VIDEO_WORKER_KEY 확인
+  - Worker 실행: `python src/workers/video_worker.py --api-url <URL> --worker-key <KEY>`
+  - 5단계 영상 생성: 스크립트(11초) → 발음후처리(<1초) → TTS(14초) → 아바타(161초) → FFmpeg(6초)
+  - 총 ~3분 13초, 720×1280 세로영상, 66초, 2.7MB, $0 비용
+  - 출력: `output/m01-worker/87a1b413_2026_02_09_13.13.37/final.mp4`
+- [x] **문서화**: T022 테스트 문서, Obsidian Daily Note, memory 업데이트
+
+#### Worker 기동 방법 (2026-02-09 재확인)
+```powershell
+# 1. VIDEO_WORKER_KEY 확인
+cd C:\TEST\MAIBEAUTY
+railway variables
+# → VIDEO_WORKER_KEY=0aP87uilc4OH93kTwjYbXpNnhBgrQx6e
+
+# 2. Worker 실행
+python src/workers/video_worker.py --api-url https://maibeauty-api-production.up.railway.app --worker-key 0aP87uilc4OH93kTwjYbXpNnhBgrQx6e
+```
+
+---
+
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
 - `a13de35 fix: resolve 3 E2E issues - encoding, UCP stats, register security (02-08)`
 - `0a1b7b4 test: add comprehensive test suite (753 tests) + fix SQLite/PostgreSQL compat (02-08)`
 - `438741a docs: I037 A013 code quality improvements record (02-08)`
 - `4620854 refactor: split api.ts into domain modules + unify USE_MOCK (A013 T5+T6) (02-08)`
-- `c4ffda2 fix: CORS whitelist + AI job auto-cleanup (A013 T4+T7) (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
-*Last updated: 2026-02-08*
+*Last updated: 2026-02-09*
