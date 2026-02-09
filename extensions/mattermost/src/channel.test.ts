@@ -68,6 +68,12 @@ describe("mattermostPlugin", () => {
       const result = normalizeMention(input, "bot");
       expect(result).toBe("# Heading\n> quote\n- item");
     });
+
+    it("preserves CRLF newlines with mention", () => {
+      const input = "@bot line1\r\nline2\r\nline3";
+      const result = normalizeMention(input, "bot");
+      expect(result).toBe("line1\r\nline2\r\nline3");
+    });
   });
 
   describe("config", () => {

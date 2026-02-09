@@ -102,7 +102,7 @@ export function normalizeMention(text: string, mention: string | undefined): str
   const re = new RegExp(`@${escaped}\\b`, "gi");
   return text
     .replace(re, " ")
-    .replace(/[^\S\n]+/g, " ")
+    .replace(/[^\S\r\n]+/g, " ")
     .trim();
 }
 
