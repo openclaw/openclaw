@@ -88,6 +88,7 @@ Is the code properly scoped?
 Is the code properly typed?
 Is the code hardened?
 Do we have enough tests?
+Are tests using fake timers where relevant? (e.g., debounce/throttle, retry backoff, timeout branches, delayed callbacks, polling loops)
 Do not add performative tests, ensure tests are real and there are no regressions.
 Take your time, fix it properly, refactor if necessary.
 Do you see any follow-up refactors we should do?
