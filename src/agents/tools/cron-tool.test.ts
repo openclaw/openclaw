@@ -75,6 +75,51 @@ describe("cron tool", () => {
     expect(call?.params).toEqual({ id: "job-due", mode: "due" });
   });
 
+  it("accepts flat params for add action (name, schedule, payload at top level)", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-flat", {
+      action: "add",
+      name: "test-job",
+      schedule: { kind: "cron", expr: "0 5 * * *" },
+      payload: { kind: "systemEvent", text: "hello" },
+      sessionTarget: "main",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string; schedule?: unknown; payload?: unknown };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("test-job");
+    expect(call.params?.schedule).toEqual({ kind: "cron", expr: "0 5 * * *" });
+    expect(call.params?.payload).toEqual({ kind: "systemEvent", text: "hello" });
+  });
+
+  it("prefers flat params over nested job when both provided", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-both", {
+      action: "add",
+      name: "flat-name",
+      schedule: { kind: "cron", expr: "0 6 * * *" },
+      payload: { kind: "systemEvent", text: "flat payload" },
+      sessionTarget: "main",
+      job: {
+        name: "nested-name",
+        schedule: { kind: "cron", expr: "0 7 * * *" },
+        payload: { kind: "systemEvent", text: "nested payload" },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("flat-name");
+  });
+
   it("normalizes cron.add job payloads", async () => {
     const tool = createCronTool();
     await tool.execute("call2", {

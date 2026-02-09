@@ -26,13 +26,26 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 // Flattened schema: runtime validates per-action requirements.
+// For "add" action, accepts EITHER nested job:{...} OR flat top-level params (name, schedule, etc.)
 const CronToolSchema = Type.Object({
   action: stringEnum(CRON_ACTIONS),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
   includeDisabled: Type.Optional(Type.Boolean()),
+  // Nested job object (legacy/alternative format)
   job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  // Flat job parameters (preferred format, matches Gateway schema)
+  name: Type.Optional(Type.String()),
+  description: Type.Optional(Type.String()),
+  schedule: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  payload: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  sessionTarget: Type.Optional(Type.String()),
+  wakeMode: Type.Optional(Type.String()),
+  delivery: Type.Optional(Type.Object({}, { additionalProperties: true })),
+  enabled: Type.Optional(Type.Boolean()),
+  deleteAfterRun: Type.Optional(Type.Boolean()),
+  // Other params
   jobId: Type.Optional(Type.String()),
   id: Type.Optional(Type.String()),
   patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
@@ -233,22 +246,26 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
 ACTIONS:
 - status: Check cron scheduler status
 - list: List jobs (use includeDisabled:true to include disabled)
-- add: Create job (requires job object, see schema below)
+- add: Create job (use flat params OR nested job object)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
 - run: Trigger job immediately (requires jobId)
 - runs: Get job run history (requires jobId)
 - wake: Send wake event (requires text, optional mode)
 
-JOB SCHEMA (for add action):
-{
-  "name": "string (optional)",
-  "schedule": { ... },      // Required: when to run
-  "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary (isolated only)
-  "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
-}
+ADD ACTION FORMATS (either works):
+1. Flat params (PREFERRED):
+   { "action": "add", "name": "...", "schedule": {...}, "payload": {...}, "sessionTarget": "..." }
+2. Nested job object:
+   { "action": "add", "job": { "name": "...", "schedule": {...}, ... } }
+
+JOB FIELDS (for add action):
+  name: string (optional)
+  schedule: { ... }         // Required: when to run
+  payload: { ... }          // Required: what to execute
+  delivery: { ... }         // Optional: announce summary (isolated only)
+  sessionTarget: "main" | "isolated"  // Required
+  enabled: true | false     // Optional, default true
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
@@ -301,10 +318,42 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
-          if (!params.job || typeof params.job !== "object") {
-            throw new Error("job required");
+          // Accept either nested job:{...} or flat top-level params (name, schedule, payload, etc.)
+          // This fixes schema mismatch issues where LLMs may use either format.
+          let jobInput: Record<string, unknown>;
+          const hasNestedJob = params.job && typeof params.job === "object";
+          const hasFlatParams =
+            typeof params.name === "string" ||
+            (params.schedule && typeof params.schedule === "object") ||
+            (params.payload && typeof params.payload === "object");
+
+          if (hasFlatParams) {
+            // Build job from flat params (preferred format, matches Gateway schema)
+            jobInput = {};
+            if (typeof params.name === "string") jobInput.name = params.name;
+            if (typeof params.description === "string") jobInput.description = params.description;
+            if (params.schedule && typeof params.schedule === "object")
+              jobInput.schedule = params.schedule;
+            if (params.payload && typeof params.payload === "object")
+              jobInput.payload = params.payload;
+            if (typeof params.sessionTarget === "string")
+              jobInput.sessionTarget = params.sessionTarget;
+            if (typeof params.wakeMode === "string") jobInput.wakeMode = params.wakeMode;
+            if (params.delivery && typeof params.delivery === "object")
+              jobInput.delivery = params.delivery;
+            if (typeof params.enabled === "boolean") jobInput.enabled = params.enabled;
+            if (typeof params.deleteAfterRun === "boolean")
+              jobInput.deleteAfterRun = params.deleteAfterRun;
+          } else if (hasNestedJob) {
+            // Use nested job object (legacy format)
+            jobInput = params.job as Record<string, unknown>;
+          } else {
+            throw new Error(
+              "job required: provide either flat params (name, schedule, payload, sessionTarget) " +
+                "or a nested job:{...} object",
+            );
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+          const job = normalizeCronJobCreate(jobInput) ?? jobInput;
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
             const agentId = opts?.agentSessionKey
