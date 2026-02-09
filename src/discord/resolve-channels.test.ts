@@ -31,6 +31,128 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.channelId).toBe("c1");
   });
 
+  it("resolves guildId/channelId when both are numeric", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111222333", name: "Test Server" }]);
+      }
+      if (url.endsWith("/channels/444555666")) {
+        return jsonResponse({
+          id: "444555666",
+          name: "general",
+          guild_id: "111222333",
+          type: 0,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111222333/444555666"],
+      fetcher,
+    });
+
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("111222333");
+    expect(res[0]?.channelId).toBe("444555666");
+  });
+
+  it("rejects guildId/channelId when channel belongs to a different guild", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([
+          { id: "111222333", name: "Guild A" },
+          { id: "999888777", name: "Guild B" },
+        ]);
+      }
+      if (url.endsWith("/channels/444555666")) {
+        return jsonResponse({
+          id: "444555666",
+          name: "general",
+          guild_id: "999888777",
+          type: 0,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111222333/444555666"],
+      fetcher,
+    });
+
+    expect(res[0]?.resolved).toBe(false);
+    expect(res[0]?.note).toMatch(/guild/i);
+  });
+
+  it("marks invalid numeric channelId as unresolved without aborting batch", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111222333", name: "Test Server" }]);
+      }
+      if (url.endsWith("/channels/444555666")) {
+        return jsonResponse({
+          id: "444555666",
+          name: "general",
+          guild_id: "111222333",
+          type: 0,
+        });
+      }
+      if (url.endsWith("/channels/999000111")) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111222333/999000111", "111222333/444555666"],
+      fetcher,
+    });
+
+    expect(res).toHaveLength(2);
+    expect(res[0]?.resolved).toBe(false);
+    expect(res[0]?.channelId).toBe("999000111");
+    expect(res[0]?.guildId).toBe("111222333");
+    expect(res[1]?.resolved).toBe(true);
+    expect(res[1]?.channelId).toBe("444555666");
+  });
+
+  it("treats 403 channel lookup as unresolved without aborting batch", async () => {
+    const fetcher = async (url: string) => {
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111222333", name: "Test Server" }]);
+      }
+      if (url.endsWith("/channels/777888999")) {
+        return new Response("Missing Access", { status: 403 });
+      }
+      if (url.endsWith("/channels/444555666")) {
+        return jsonResponse({
+          id: "444555666",
+          name: "general",
+          guild_id: "111222333",
+          type: 0,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111222333/777888999", "111222333/444555666"],
+      fetcher,
+    });
+
+    expect(res).toHaveLength(2);
+    expect(res[0]?.resolved).toBe(false);
+    expect(res[0]?.channelId).toBe("777888999");
+    expect(res[0]?.guildId).toBe("111222333");
+    expect(res[1]?.resolved).toBe(true);
+    expect(res[1]?.channelId).toBe("444555666");
+  });
+
   it("resolves channel id to guild", async () => {
     const fetcher = async (url: string) => {
       if (url.endsWith("/users/@me/guilds")) {
