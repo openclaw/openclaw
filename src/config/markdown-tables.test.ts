@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "./config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -20,15 +20,19 @@ const stubPlugin = (id: string): ChannelPlugin => ({
   },
 });
 
+const testRegistry = createTestRegistry([
+  { pluginId: "mattermost", plugin: stubPlugin("mattermost"), source: "test" },
+  { pluginId: "signal", plugin: stubPlugin("signal"), source: "test" },
+  { pluginId: "whatsapp", plugin: stubPlugin("whatsapp"), source: "test" },
+  { pluginId: "discord", plugin: stubPlugin("discord"), source: "test" },
+]);
+
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([
-      { pluginId: "mattermost", plugin: stubPlugin("mattermost"), source: "test" },
-      { pluginId: "signal", plugin: stubPlugin("signal"), source: "test" },
-      { pluginId: "whatsapp", plugin: stubPlugin("whatsapp"), source: "test" },
-      { pluginId: "discord", plugin: stubPlugin("discord"), source: "test" },
-    ]),
-  );
+  setActivePluginRegistry(testRegistry);
+});
+
+afterEach(() => {
+  setActivePluginRegistry(testRegistry);
 });
 
 describe("resolveMarkdownTableMode", () => {
