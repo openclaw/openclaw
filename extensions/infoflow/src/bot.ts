@@ -123,11 +123,11 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
     | Record<string, unknown>
     | undefined;
   const fromuser = String(header?.fromuserid ?? msgData.fromuserid ?? msgData.from ?? "");
-  
+
   // Extract message ID (priority: header.messageid > header.msgid > MsgId)
   const messageId = header?.messageid ?? header?.msgid ?? msgData.MsgId;
   const messageIdStr = messageId != null ? String(messageId) : undefined;
-  
+
   const rawGroupId = msgData.groupid ?? header?.groupid;
   const groupid =
     typeof rawGroupId === "number" ? rawGroupId : rawGroupId ? Number(rawGroupId) : undefined;
@@ -311,7 +311,7 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     WasMentioned: isGroup ? event.wasMentioned : undefined,
     CommandAuthorized: true,
   });
-  
+
   if (verbose) {
     console.log("======ctxPayload======");
     console.log(ctxPayload);

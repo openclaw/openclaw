@@ -230,7 +230,9 @@ export async function sendInfoflowGroupMessage(params: {
     }
 
     // API may return 'messageid' or 'msgid' depending on version
-    const innerData = data.data as { messageid?: number | string; msgid?: number | string } | undefined;
+    const innerData = data.data as
+      | { messageid?: number | string; msgid?: number | string }
+      | undefined;
     const rawMsgId = innerData?.messageid ?? innerData?.msgid;
     const messageid = rawMsgId != null ? String(rawMsgId) : undefined;
     return { ok: true, messageid };
