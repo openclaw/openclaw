@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hookRunner, triggerInternalHook } = vi.hoisted(() => ({
+const { hookRunner, triggerInternalHook, sanitizeSessionHistoryMock } = vi.hoisted(() => ({
   hookRunner: {
     hasHooks: vi.fn(),
     runBeforeCompaction: vi.fn(),
     runAfterCompaction: vi.fn(),
   },
   triggerInternalHook: vi.fn(),
+  sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -122,7 +123,7 @@ vi.mock("../pi-tools.js", () => ({
 
 vi.mock("./google.js", () => ({
   logToolSchemasForGoogle: vi.fn(),
-  sanitizeSessionHistory: vi.fn(async (params: { messages: unknown[] }) => params.messages),
+  sanitizeSessionHistory: sanitizeSessionHistoryMock,
   sanitizeToolsForGoogle: vi.fn(({ tools }: { tools: unknown[] }) => tools),
 }));
 
@@ -234,14 +235,29 @@ const sessionHook = (action: string) =>
   )?.[0];
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
+  beforeEach(() => {
+    triggerInternalHook.mockClear();
+    hookRunner.hasHooks.mockReset();
+    hookRunner.runBeforeCompaction.mockReset();
+    hookRunner.runAfterCompaction.mockReset();
+    sanitizeSessionHistoryMock.mockReset();
+    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
+      return params.messages;
+    });
+  });
+
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) =>
+      params.messages.slice(1),
+    );
 
     const result = await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
+      messageChannel: "telegram",
       customInstructions: "focus on decisions",
     });
 
@@ -256,12 +272,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(beforeContext).toMatchObject({
       messageCount: 2,
       tokenCount: 20,
-      messageCountOriginal: 3,
-      tokenCountOriginal: 30,
+      messageCountOriginal: 2,
+      tokenCountOriginal: 20,
     });
     expect(afterContext).toMatchObject({
       messageCount: 1,
-      compactedCount: 2,
+      compactedCount: 1,
     });
     expect(afterContext?.compactedCount).toBe(
       (beforeContext?.messageCountOriginal as number) - (afterContext?.messageCount as number),
@@ -272,15 +288,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         messageCount: 2,
         tokenCount: 20,
       }),
-      expect.objectContaining({ sessionKey: "agent:main:session-1" }),
+      expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
     expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
       {
         messageCount: 1,
         tokenCount: 10,
-        compactedCount: 2,
+        compactedCount: 1,
       },
-      expect.objectContaining({ sessionKey: "agent:main:session-1" }),
+      expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
   });
 });
