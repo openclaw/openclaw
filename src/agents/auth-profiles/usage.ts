@@ -32,9 +32,19 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
 const PROACTIVE_SWITCH_ERROR_THRESHOLD = 2;
 
 /**
+ * Maximum age (in ms) for error counts to be considered "approaching cooldown".
+ * If the last failure was longer ago than this, the errors are stale and should
+ * not trigger proactive model switching. Matches the default failureWindowHours.
+ */
+const STALE_ERROR_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+/**
  * Check if a profile is approaching cooldown based on error count.
  * Returns true if the profile has accumulated errors that suggest
  * switching to another model proactively before cooldown triggers.
+ *
+ * Stale errors (last failure older than STALE_ERROR_WINDOW_MS) are ignored
+ * to prevent perpetual proactive switching after a cooldown has expired.
  */
 export function isProfileApproachingCooldown(
   store: AuthProfileStore,
@@ -50,7 +60,18 @@ export function isProfileApproachingCooldown(
     return false;
   }
   const errorCount = stats.errorCount ?? 0;
-  return errorCount >= threshold;
+  if (errorCount < threshold) {
+    return false;
+  }
+  // Ignore stale errors: if the last failure was long ago, the errors are from
+  // a previous incident and should not trigger proactive switching.
+  const lastFailureAt = stats.lastFailureAt;
+  if (typeof lastFailureAt === "number" && lastFailureAt > 0) {
+    if (Date.now() - lastFailureAt > STALE_ERROR_WINDOW_MS) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

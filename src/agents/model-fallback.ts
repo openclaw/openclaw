@@ -467,11 +467,16 @@ export async function runWithModelFallback<T>(params: {
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
 
-  // Sort non-primary candidates by provider health so healthy providers are tried first.
-  if (authStore && candidates.length > 2) {
+  // Sort non-primary candidates: paid models before free-tier, then by provider health.
+  if (candidates.length > 2) {
     const [primary, ...tail] = candidates;
 
+    const isFreeModel = (c: ModelCandidate): boolean => c.model.endsWith(":free");
+
     const healthScore = (c: ModelCandidate): number => {
+      if (!authStore) {
+        return 0;
+      }
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
@@ -489,7 +494,17 @@ export async function runWithModelFallback<T>(params: {
       return 0; // healthy
     };
 
-    tail.sort((a, b) => healthScore(a) - healthScore(b));
+    tail.sort((a, b) => {
+      // Deprioritize free-tier models: paid first, free last
+      const aFree = isFreeModel(a) ? 1 : 0;
+      const bFree = isFreeModel(b) ? 1 : 0;
+      if (aFree !== bFree) {
+        return aFree - bFree;
+      }
+      // Within same tier (both paid or both free), sort by provider health
+      return healthScore(a) - healthScore(b);
+    });
+
     candidates = [primary, ...tail];
   }
 
