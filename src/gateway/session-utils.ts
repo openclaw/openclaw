@@ -774,8 +774,22 @@ export function listSessionsFromStore(params: {
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   // Add deleted sessions to the list
-  // storePath points to sessions.json, so get the directory containing it
-  const sessionsDir = path.dirname(storePath);
+  // Get the sessions directory - handle both single and combined mode
+  let sessionsDir: string;
+
+  if (storePath === "(multiple)") {
+    // Combined mode - use default agent's sessions directory
+    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+    const agentDir = path.join(resolveStateDir(), "agents", defaultAgentId);
+    sessionsDir = path.join(agentDir, "sessions");
+  } else if (storePath.endsWith("sessions.json")) {
+    // Single agent mode with full path to sessions.json
+    sessionsDir = path.dirname(storePath);
+  } else {
+    // Fallback - storePath might already be the sessions directory
+    sessionsDir = storePath;
+  }
+
   const deletedSessions = scanDeletedSessions({ cfg, storePath: sessionsDir });
   const deletedRows = deletedSessions.map(({ key, sessionId, deletedAt, metadata }) => {
     const entry = metadata;
