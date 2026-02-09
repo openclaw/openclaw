@@ -1,7 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import {
+  emptyPluginConfigSchema,
+  type OpenClawPluginApi,
+  type ProviderAuthContext,
+} from "openclaw/plugin-sdk";
 
 // OAuth constants - decoded from pi-ai's base64 encoded values to stay in sync
 const decode = (s: string) => Buffer.from(s, "base64").toString();
@@ -392,7 +396,7 @@ const antigravityPlugin = {
   name: "Google Antigravity Auth",
   description: "OAuth flow for Google Antigravity (Cloud Code Assist)",
   configSchema: emptyPluginConfigSchema(),
-  register(api) {
+  register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: "google-antigravity",
       label: "Google Antigravity",
@@ -404,7 +408,7 @@ const antigravityPlugin = {
           label: "Google OAuth",
           hint: "PKCE + localhost callback",
           kind: "oauth",
-          run: async (ctx) => {
+          run: async (ctx: ProviderAuthContext) => {
             const spin = ctx.prompter.progress("Starting Antigravity OAuth…");
             try {
               const result = await loginAntigravity({

@@ -148,7 +148,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
       const normalizedTo = normalizePubkey(to);
       await bus.sendDm(normalizedTo, message);
-      return { channel: "nostr", to: normalizedTo };
+      return {
+        channel: "nostr" as const,
+        to: normalizedTo,
+        messageId: `nostr-${Date.now()}`,
+      };
     },
   },
 
@@ -224,10 +228,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         privateKey: account.privateKey,
         relays: account.relays,
         onMessage: async (senderPubkey, text, reply) => {
-          ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
+          ctx.log?.debug?.(
+            `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,
+          );
 
           // Forward to OpenClaw's message pipeline
-          await runtime.channel.reply.handleInboundMessage({
+          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
+          await (
+            runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
+          ).handleInboundMessage?.({
             channel: "nostr",
             accountId: account.accountId,
             senderId: senderPubkey,
@@ -240,31 +249,33 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
           });
         },
         onError: (error, context) => {
-          ctx.log?.error(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
+          ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
-          ctx.log?.debug(`[${account.accountId}] Connected to relay: ${relay}`);
+          ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
-          ctx.log?.debug(`[${account.accountId}] Disconnected from relay: ${relay}`);
+          ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {
-          ctx.log?.debug(`[${account.accountId}] EOSE received from relays: ${relays}`);
+          ctx.log?.debug?.(`[${account.accountId}] EOSE received from relays: ${relays}`);
         },
         onMetric: (event: MetricEvent) => {
           // Log significant metrics at appropriate levels
           if (event.name.startsWith("event.rejected.")) {
-            ctx.log?.debug(`[${account.accountId}] Metric: ${event.name}`, event.labels);
+            ctx.log?.debug?.(
+              `[${account.accountId}] Metric: ${event.name} ${JSON.stringify(event.labels)}`,
+            );
           } else if (event.name === "relay.circuit_breaker.open") {
-            ctx.log?.warn(
+            ctx.log?.warn?.(
               `[${account.accountId}] Circuit breaker opened for relay: ${event.labels?.relay}`,
             );
           } else if (event.name === "relay.circuit_breaker.close") {
-            ctx.log?.info(
+            ctx.log?.info?.(
               `[${account.accountId}] Circuit breaker closed for relay: ${event.labels?.relay}`,
             );
           } else if (event.name === "relay.error") {
-            ctx.log?.debug(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
+            ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
           }
           // Update cached metrics snapshot
           if (busHandle) {
