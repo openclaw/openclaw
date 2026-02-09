@@ -77,6 +77,7 @@ export class AsteriskAriProvider implements VoiceCallProvider {
 
   // providerCallId -> state
   private readonly calls = new Map<string, CallState>();
+  private readonly pendingInboundChannels = new Set<string>();
 
   constructor(params: {
     config: VoiceCallConfig;
@@ -173,8 +174,15 @@ export class AsteriskAriProvider implements VoiceCallProvider {
   async hangupCall(input: HangupCallInput): Promise<void> {
     const state = this.calls.get(input.providerCallId);
     if (!state) {
-      const call = this.manager.getCall(input.callId);
-      const channelId = call?.providerCallId ?? input.providerCallId;
+      if (this.pendingInboundChannels.has(input.providerCallId)) {
+        this.pendingInboundChannels.delete(input.providerCallId);
+        await this.client.safeHangupChannel(input.providerCallId).catch(() => {});
+        return;
+      }
+      const call =
+        this.manager.getCall(input.callId) ??
+        this.manager.getCallByProviderCallId(input.providerCallId);
+      const channelId = call?.providerCallId;
       if (!channelId) {
         console.warn("[ari] hangup skipped; missing channel id", {
           callId: input.callId,
@@ -785,6 +793,8 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     const from = evt.channel?.caller?.number;
     const to = evt.channel?.name;
 
+    this.pendingInboundChannels.add(providerCallId);
+
     this.manager.processEvent(
       makeEvent({
         type: "call.initiated",
@@ -800,6 +810,8 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     if (!call) {
       return;
     }
+
+    this.pendingInboundChannels.delete(providerCallId);
 
     const state: CallState = {
       callId: call.callId,
