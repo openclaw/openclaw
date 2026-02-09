@@ -453,7 +453,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         cfg,
         channel: "telegram",
         accountId: account.accountId,
-        peer: { kind: isGroup ? "group" : "dm", id: peerId },
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
         parentPeer,
       });
       const sessionKey = route.sessionKey;

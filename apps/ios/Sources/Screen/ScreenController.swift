@@ -52,6 +52,20 @@ final class ScreenController {
 
     func navigate(to urlString: String) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            self.urlString = ""
+            self.reload()
+            return
+        }
+        if let url = URL(string: trimmed),
+           !url.isFileURL,
+           let host = url.host,
+           Self.isLoopbackHost(host)
+        {
+            // Never try to load loopback URLs from a remote gateway.
+            self.showDefaultCanvas()
+            return
+        }
         self.urlString = (trimmed == "/" ? "" : trimmed)
         self.reload()
     }
@@ -239,6 +253,18 @@ final class ScreenController {
         name: "scaffold",
         ext: "html",
         subdirectory: "CanvasScaffold")
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.isEmpty { return true }
+        if normalized == "localhost" || normalized == "::1" || normalized == "0.0.0.0" {
+            return true
+        }
+        if normalized == "127.0.0.1" || normalized.hasPrefix("127.") {
+            return true
+        }
+        return false
+    }
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
         let std = url.standardizedFileURL

@@ -495,7 +495,7 @@ export const registerTelegramNativeCommands = ({
             channel: "telegram",
             accountId,
             peer: {
-              kind: isGroup ? "group" : "dm",
+              kind: isGroup ? "group" : "direct",
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
             parentPeer,
@@ -675,6 +675,10 @@ export const registerTelegramNativeCommands = ({
             isForum,
             messageThreadId,
           });
+          const from = isGroup
+            ? buildTelegramGroupFrom(chatId, threadSpec.id)
+            : `telegram:${chatId}`;
+          const to = `telegram:${chatId}`;
 
           const result = await executePluginCommand({
             command: match.command,
@@ -684,6 +688,10 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             commandBody,
             config: cfg,
+            from,
+            to,
+            accountId,
+            messageThreadId: threadSpec.id,
           });
           const tableMode = resolveMarkdownTableMode({
             cfg,

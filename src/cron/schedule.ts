@@ -49,17 +49,13 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  let cursor = nowMs;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const next = cron.nextRun(new Date(cursor));
-    if (!next) {
-      return undefined;
-    }
-    const nextMs = next.getTime();
-    if (Number.isFinite(nextMs) && nextMs > nowMs) {
-      return nextMs;
-    }
-    cursor += 1_000;
+  // Use a tiny lookback (1ms) so croner doesn't skip the current second
+  // boundary. Without this, a job updated at exactly its cron time would
+  // be scheduled for the *next* matching time (e.g. 24h later for daily).
+  const next = cron.nextRun(new Date(nowMs - 1));
+  if (!next) {
+    return undefined;
   }
-  return undefined;
+  const nextMs = next.getTime();
+  return Number.isFinite(nextMs) && nextMs >= nowMs ? nextMs : undefined;
 }

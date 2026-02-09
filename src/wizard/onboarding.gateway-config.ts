@@ -10,6 +10,20 @@ import type { WizardPrompter } from "./prompts.js";
 import { normalizeGatewayTokenInput, randomToken } from "../commands/onboard-helpers.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 
+// These commands are "high risk" (privacy writes/recording) and should be
+// explicitly armed by the user when they want to use them.
+//
+// This only affects what the gateway will accept via node.invoke; the iOS app
+// still prompts for OS permissions (camera/photos/contacts/etc) on first use.
+const DEFAULT_DANGEROUS_NODE_DENY_COMMANDS = [
+  "camera.snap",
+  "camera.clip",
+  "screen.record",
+  "calendar.add",
+  "contacts.add",
+  "reminders.add",
+];
+
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
   baseConfig: OpenClawConfig;
@@ -235,6 +249,27 @@ export async function configureGatewayForOnboarding(
       },
     },
   };
+
+  // If this is a new gateway setup (no existing gateway settings), start with a
+  // denylist for high-risk node commands. Users can arm these temporarily via
+  // /phone arm ... (phone-control plugin).
+  if (
+    !quickstartGateway.hasExisting &&
+    nextConfig.gateway?.nodes?.denyCommands === undefined &&
+    nextConfig.gateway?.nodes?.allowCommands === undefined &&
+    nextConfig.gateway?.nodes?.browser === undefined
+  ) {
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        nodes: {
+          ...nextConfig.gateway?.nodes,
+          denyCommands: [...DEFAULT_DANGEROUS_NODE_DENY_COMMANDS],
+        },
+      },
+    };
+  }
 
   return {
     nextConfig,
