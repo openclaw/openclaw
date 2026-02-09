@@ -8,6 +8,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
+import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -140,9 +141,17 @@ export function registerPluginsCli(program: Command) {
 
       if (!opts.verbose) {
         const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        const sourceRoots = resolvePluginSourceRoots({
+          workspaceDir: report.workspaceDir,
+        });
+        const usedRoots = new Set<keyof typeof sourceRoots>();
         const rows = list.map((plugin) => {
           const desc = plugin.description ? theme.muted(plugin.description) : "";
-          const sourceLine = desc ? `${plugin.source}\n${desc}` : plugin.source;
+          const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
+          if (formattedSource.rootKey) {
+            usedRoots.add(formattedSource.rootKey);
+          }
+          const sourceLine = desc ? `${formattedSource.value}\n${desc}` : formattedSource.value;
           return {
             Name: plugin.name || plugin.id,
             ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
@@ -156,6 +165,22 @@ export function registerPluginsCli(program: Command) {
             Version: plugin.version ?? "",
           };
         });
+
+        if (usedRoots.size > 0) {
+          defaultRuntime.log(theme.muted("Source roots:"));
+          for (const key of ["stock", "workspace", "global"] as const) {
+            if (!usedRoots.has(key)) {
+              continue;
+            }
+            const dir = sourceRoots[key];
+            if (!dir) {
+              continue;
+            }
+            defaultRuntime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
+          }
+          defaultRuntime.log("");
+        }
+
         defaultRuntime.log(
           renderTable({
             width: tableWidth,

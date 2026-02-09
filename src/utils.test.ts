@@ -10,8 +10,11 @@ import {
   normalizeE164,
   normalizePath,
   resolveConfigDir,
+  resolveHomeDir,
   resolveJidToE164,
   resolveUserPath,
+  shortenHomeInString,
+  shortenHomePath,
   sleep,
   toWhatsappJid,
   withWhatsAppPrefix,
@@ -134,6 +137,43 @@ describe("resolveConfigDir", () => {
   });
 });
 
+describe("resolveHomeDir", () => {
+  it("prefers OPENCLAW_HOME over HOME", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
+
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("shortenHomePath", () => {
+  it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
+      "$OPENCLAW_HOME/.openclaw/openclaw.json",
+    );
+
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("shortenHomeInString", () => {
+  it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    expect(
+      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
+    ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+
+    vi.unstubAllEnvs();
+  });
+});
+
 describe("resolveJidToE164", () => {
   it("resolves @lid via lidLookup when mapping file is missing", async () => {
     const lidLookup = {
@@ -163,6 +203,15 @@ describe("resolveUserPath", () => {
 
   it("resolves relative paths", () => {
     expect(resolveUserPath("tmp/dir")).toBe(path.resolve("tmp/dir"));
+  });
+
+  it("prefers OPENCLAW_HOME for tilde expansion", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+
+    vi.unstubAllEnvs();
   });
 
   it("keeps blank paths blank", () => {

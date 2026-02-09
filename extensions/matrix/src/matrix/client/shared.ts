@@ -1,6 +1,6 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { LogService } from "@vector-im/matrix-bot-sdk";
-import type { CoreConfig } from "../types.js";
+import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "./types.js";
 import { resolveMatrixAuth } from "./config.js";
 import { createMatrixClient } from "./create-client.js";
@@ -69,7 +69,9 @@ async function ensureSharedClientStarted(params: {
       try {
         const joinedRooms = await client.getJoinedRooms();
         if (client.crypto) {
-          await client.crypto.prepare(joinedRooms);
+          await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
+            joinedRooms,
+          );
           params.state.cryptoReady = true;
         }
       } catch (err) {
