@@ -73,6 +73,12 @@ function defaultIndexHTML() {
   .ok { color: #24e08a; }
   .bad { color: #ff5c5c; }
   .log { margin-top: 14px; opacity: 0.85; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); padding: 10px; border-radius: 12px; }
+  /* Mobile-Responsive Breakpoints */
+  @media (pointer: coarse) { button { min-height: 44px; min-width: 44px; padding: 12px 16px; font-size: 16px; } input, textarea, select { font-size: 16px; min-height: 44px; } }
+  @media (max-width: 767px) { html, body { -webkit-text-size-adjust: 100%; overflow-x: hidden; } .wrap { padding: 12px !important; min-height: auto !important; display: block !important; } .card { width: 100% !important; max-width: 100% !important; border-radius: 12px !important; padding: 14px !important; margin-bottom: 12px !important; } .title { flex-direction: column !important; gap: 4px !important; } .title h1 { font-size: 18px !important; } .row { flex-direction: column !important; gap: 8px !important; } .row button { width: 100%; text-align: center; padding: 14px 16px; font-size: 15px; border-radius: 10px; } .log { font-size: 11px !important; padding: 8px !important; max-height: 200px; overflow-y: auto; -webkit-overflow-scrolling: touch; } img, canvas, svg, video, iframe { max-width: 100% !important; height: auto !important; } pre, code { max-width: 100%; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; } }
+  @media (min-width: 768px) and (max-width: 1024px) { .wrap { padding: 16px !important; } .card { width: min(680px, 95%) !important; padding: 16px !important; } .row { flex-wrap: wrap !important; } .row button { flex: 1 1 calc(50% - 8px); min-width: 140px; } }
+  @supports (padding: env(safe-area-inset-bottom)) { body { padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
 </style>
 <div class="wrap">
   <div class="card">
