@@ -35,6 +35,7 @@ import {
 import {
   createDedupeCache,
   formatInboundFromLabel,
+  normalizeMention,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
@@ -86,15 +87,6 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
       },
     }
   );
-}
-
-function normalizeMention(text: string, mention: string | undefined): string {
-  if (!mention) {
-    return text.trim();
-  }
-  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@${escaped}\\b`, "gi");
-  return text.replace(re, " ").replace(/\s+/g, " ").trim();
 }
 
 function isSystemPost(post: MattermostPost): boolean {

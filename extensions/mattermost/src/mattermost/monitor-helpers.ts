@@ -91,3 +91,22 @@ export function resolveThreadSessionKeys(params: {
     : params.baseSessionKey;
   return { sessionKey, parentSessionKey: params.parentSessionKey };
 }
+
+/**
+ * Strip bot mention from message text while preserving newlines and
+ * block-level Markdown formatting (headings, lists, blockquotes).
+ */
+export function normalizeMention(text: string, mention: string | undefined): string {
+  if (!mention) {
+    return text.trim();
+  }
+  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@${escaped}\\b`, "gi");
+  // Replace the mention itself, then collapse only horizontal whitespace (spaces/tabs)
+  // to preserve newlines and block-level Markdown formatting.
+  return text
+    .replace(re, " ")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .trim();
+}
