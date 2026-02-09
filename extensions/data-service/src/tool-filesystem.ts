@@ -98,18 +98,15 @@ export function createFsReadTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_read",
     label: "Read File",
-    description: `Read a file from the project's virtual disk.
+    description: `Read a file from the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+Safe read-only operation — execute immediately without user confirmation.
+
 - path: Relative path within the project (e.g., "documents/report.md")
-- start_line: Optional line number to start reading from (1-indexed)
-- end_line: Optional line number to stop reading at (inclusive)
+- start_line: Optional start line (1-indexed)
+- end_line: Optional end line (inclusive)
 
-**Examples:**
-- Read entire file: fs_read(path: "config.json")
-- Read lines 10-20: fs_read(path: "data.txt", start_line: 10, end_line: 20)
-
-**Note:** All paths are relative to the project root. Absolute paths and path traversal (..) are not allowed.`,
+For large files, use start_line/end_line to read specific sections. Use fs_list first to explore the project structure.`,
     parameters: FsReadSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -166,17 +163,14 @@ export function createFsWriteTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_write",
     label: "Write File",
-    description: `Create or overwrite a file in the project's virtual disk.
+    description: `Create or overwrite a file in the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+PUSH action — show a preview to the user and get confirmation before executing.
+
 - path: Relative path within the project (e.g., "documents/report.md")
 - content: The content to write to the file
 
-**Examples:**
-- Create a new file: fs_write(path: "notes.txt", content: "Hello, World!")
-- Overwrite existing: fs_write(path: "config.json", content: '{"key": "value"}')
-
-**Warning:** This will overwrite existing files without confirmation. Use fs_edit for partial updates.`,
+Prefer fs_edit for small changes instead of rewriting entire files. All paths are relative to the project root; path traversal (..) is not allowed.`,
     parameters: FsWriteSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -222,19 +216,16 @@ export function createFsEditTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_edit",
     label: "Edit File",
-    description: `Edit specific content in a file by finding and replacing text.
+    description: `Edit specific content in a file by finding and replacing text (S3-backed, project-isolated).
 
-**Usage:**
+PUSH action — show a preview to the user and get confirmation before executing.
+
 - path: Relative path to the file
 - old_content: The exact text to find (must match exactly, including whitespace)
 - new_content: The text to replace it with
 - replace_all: Optional, if true replaces all occurrences (default: false)
 
-**Examples:**
-- Replace first occurrence: fs_edit(path: "config.json", old_content: '"debug": false', new_content: '"debug": true')
-- Replace all: fs_edit(path: "app.js", old_content: "console.log", new_content: "logger.info", replace_all: true)
-
-**Note:** The old_content must match exactly. Use fs_read first to see the exact content.`,
+IMPORTANT: Always use fs_read first to see the exact file content before editing.`,
     parameters: FsEditSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -310,15 +301,13 @@ export function createFsDeleteTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_delete",
     label: "Delete File",
-    description: `Delete a file from the project's virtual disk.
+    description: `Delete a file from the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+PUSH action — always confirm with the user before deleting. This cannot be undone.
+
 - path: Relative path to the file to delete
 
-**Example:**
-- fs_delete(path: "old-report.txt")
-
-**Warning:** This action cannot be undone. The file will be permanently deleted.`,
+Use fs_rmdir for directories.`,
     parameters: FsDeleteSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -370,16 +359,14 @@ export function createFsListTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_list",
     label: "List Directory",
-    description: `List files and directories in the project's virtual disk.
+    description: `List files and directories in the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+Safe read-only operation — execute immediately without user confirmation.
+
 - path: Optional relative path to list (default: project root)
 - recursive: Optional, if true lists all files recursively (default: false)
 
-**Examples:**
-- List project root: fs_list()
-- List specific directory: fs_list(path: "documents")
-- List all files recursively: fs_list(recursive: true)`,
+Use this first to explore the project structure before reading or writing files.`,
     parameters: FsListSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -431,15 +418,13 @@ export function createFsMkdirTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_mkdir",
     label: "Create Directory",
-    description: `Create a directory in the project's virtual disk.
+    description: `Create a directory in the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+PUSH action — confirm with the user before creating.
+
 - path: Relative path of the directory to create
 
-**Example:**
-- fs_mkdir(path: "documents/reports")
-
-**Note:** Parent directories are created automatically if they don't exist.`,
+Parent directories are created automatically if they don't exist.`,
     parameters: FsMkdirSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -473,17 +458,14 @@ export function createFsRmdirTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_rmdir",
     label: "Delete Directory",
-    description: `Delete a directory from the project's virtual disk.
+    description: `Delete a directory from the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+PUSH action — always confirm with the user before deleting. This cannot be undone.
+
 - path: Relative path of the directory to delete
 - recursive: Optional, if true deletes directory and all contents (default: false)
 
-**Examples:**
-- Delete empty directory: fs_rmdir(path: "old-folder")
-- Delete directory with contents: fs_rmdir(path: "temp", recursive: true)
-
-**Warning:** With recursive=true, all files and subdirectories will be permanently deleted.`,
+With recursive=true, all files and subdirectories will be permanently deleted.`,
     parameters: FsRmdirSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -525,15 +507,13 @@ export function createFsExistsTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_exists",
     label: "Check Exists",
-    description: `Check if a file or directory exists in the project's virtual disk.
+    description: `Check if a file or directory exists in the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+Safe read-only operation — execute immediately without user confirmation.
+
 - path: Relative path to check
 
-**Example:**
-- fs_exists(path: "config.json")
-
-**Returns:** Whether the path exists and if it's a file or directory.`,
+Returns whether the path exists and if it's a file or directory.`,
     parameters: FsExistsSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);
@@ -568,15 +548,13 @@ export function createFsStatTool(dsConfig: DataServiceConfig) {
   return {
     name: "fs_stat",
     label: "Get File Info",
-    description: `Get metadata for a file or directory in the project's virtual disk.
+    description: `Get metadata for a file or directory in the project's virtual disk (S3-backed, project-isolated).
 
-**Usage:**
+Safe read-only operation — execute immediately without user confirmation.
+
 - path: Relative path to get metadata for
 
-**Example:**
-- fs_stat(path: "documents/report.pdf")
-
-**Returns:** File size, last modified date, and whether it's a file or directory.`,
+Returns file size, last modified date, and whether it's a file or directory.`,
     parameters: FsStatSchema,
     execute: async (_toolCallId: string, args: unknown) => {
       const fsCtx = getFilesystemContext(dsConfig);

@@ -182,11 +182,15 @@ export async function s3WriteFile(
   const client = getS3Client(config);
   const key = buildS3Key(orgId, projectId, relativePath);
 
+  // Convert string to Buffer to get accurate byte length
+  const bodyBuffer = Buffer.from(content, "utf-8");
+
   await client.send(
     new PutObjectCommand({
       Bucket: config.bucket,
       Key: key,
-      Body: content,
+      Body: bodyBuffer,
+      ContentLength: bodyBuffer.length,
       ContentType: getContentType(relativePath),
     }),
   );
@@ -400,6 +404,7 @@ export async function s3Mkdir(
       Bucket: config.bucket,
       Key: key,
       Body: "",
+      ContentLength: 0,
       ContentType: "application/x-directory",
     }),
   );
