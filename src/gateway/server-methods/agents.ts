@@ -36,6 +36,11 @@ import {
 } from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
 
+// Cache for agents.resources to avoid repeated heavy I/O (transcript scans for 62+ agents).
+// The response is cached for 5 minutes; a background refresh keeps data fresh without blocking callers.
+const RESOURCES_CACHE_TTL_MS = 5 * 60 * 1000;
+let resourcesCache: { data: unknown; ts: number; refreshing: boolean } | null = null;
+
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -131,6 +136,105 @@ function resolveAgentIdOrError(agentIdRaw: string, cfg: ReturnType<typeof loadCo
     return null;
   }
   return agentId;
+}
+
+async function collectAgentResources() {
+  const cfg = loadConfig();
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const agentList = listAgentsForGateway(cfg);
+  const results = await Promise.all(
+    agentList.agents.map(async (agent) => {
+      const agentId = normalizeAgentId(agent.id);
+
+      // Session count + token totals from session store
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      const store = loadSessionStore(storePath);
+      let sessionCount = 0;
+      let activeSessions = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalTokens = 0;
+      const now = Date.now();
+      const activeThreshold = 60 * 60 * 1000; // 1 hour
+      for (const [key, entry] of Object.entries(store)) {
+        if (key === "global" || key === "unknown") {
+          continue;
+        }
+        const parsed = parseAgentSessionKey(key);
+        if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
+          continue;
+        }
+        sessionCount++;
+        totalInputTokens += entry?.inputTokens ?? 0;
+        totalOutputTokens += entry?.outputTokens ?? 0;
+        totalTokens += entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+        if (entry?.updatedAt && now - entry.updatedAt < activeThreshold) {
+          activeSessions++;
+        }
+      }
+
+      // Cost from transcript scanning (7 days for speed)
+      let totalCost = 0;
+      try {
+        const costSummary = await loadCostUsageSummary({ days: 7, config: cfg, agentId });
+        totalCost = costSummary.totals.totalCost;
+      } catch {
+        // cost unavailable
+      }
+
+      // Heartbeat config (runtime alive/ageMs requires active agent loop)
+      const heartbeat = resolveHeartbeatSummaryForAgent(cfg, agentId);
+
+      // Workspace size
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      let workspaceFiles = 0;
+      let workspaceTotalBytes = 0;
+      try {
+        const entries = await fs.readdir(workspaceDir);
+        for (const name of entries) {
+          try {
+            const stat = await fs.stat(path.join(workspaceDir, name));
+            if (stat.isFile()) {
+              workspaceFiles++;
+              workspaceTotalBytes += stat.size;
+            }
+          } catch {
+            // skip inaccessible files
+          }
+        }
+      } catch {
+        // workspace dir may not exist
+      }
+
+      return {
+        agentId,
+        isDefault: agentId === defaultAgentId,
+        sessions: {
+          total: sessionCount,
+          active: activeSessions,
+        },
+        tokens: {
+          input: totalInputTokens,
+          output: totalOutputTokens,
+          total: totalTokens,
+        },
+        cost: {
+          total: totalCost,
+          days: 7,
+        },
+        heartbeat: {
+          enabled: heartbeat.enabled,
+          everyMs: heartbeat.everyMs ?? null,
+          every: heartbeat.every,
+        },
+        workspace: {
+          files: workspaceFiles,
+          totalBytes: workspaceTotalBytes,
+        },
+      };
+    }),
+  );
+  return { agents: results };
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
@@ -354,102 +458,34 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
   "agents.resources": async ({ respond }) => {
-    const cfg = loadConfig();
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    const agentList = listAgentsForGateway(cfg);
-    const results = await Promise.all(
-      agentList.agents.map(async (agent) => {
-        const agentId = normalizeAgentId(agent.id);
+    const now = Date.now();
 
-        // Session count + token totals from session store
-        const storePath = resolveStorePath(cfg.session?.store, { agentId });
-        const store = loadSessionStore(storePath);
-        let sessionCount = 0;
-        let activeSessions = 0;
-        let totalInputTokens = 0;
-        let totalOutputTokens = 0;
-        let totalTokens = 0;
-        const now = Date.now();
-        const activeThreshold = 60 * 60 * 1000; // 1 hour
-        for (const [key, entry] of Object.entries(store)) {
-          if (key === "global" || key === "unknown") {
-            continue;
-          }
-          const parsed = parseAgentSessionKey(key);
-          if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-            continue;
-          }
-          sessionCount++;
-          totalInputTokens += entry?.inputTokens ?? 0;
-          totalOutputTokens += entry?.outputTokens ?? 0;
-          totalTokens +=
-            entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
-          if (entry?.updatedAt && now - entry.updatedAt < activeThreshold) {
-            activeSessions++;
-          }
-        }
+    // Return cached data if fresh enough
+    if (resourcesCache && now - resourcesCache.ts < RESOURCES_CACHE_TTL_MS) {
+      respond(true, resourcesCache.data, undefined);
+      return;
+    }
 
-        // Cost from transcript scanning (7 days for speed)
-        let totalCost = 0;
-        try {
-          const costSummary = await loadCostUsageSummary({ days: 7, config: cfg, agentId });
-          totalCost = costSummary.totals.totalCost;
-        } catch {
-          // cost unavailable
-        }
+    // If a background refresh is already running, return stale cache if available
+    if (resourcesCache?.refreshing) {
+      respond(true, resourcesCache.data, undefined);
+      return;
+    }
 
-        // Heartbeat config (runtime alive/ageMs requires active agent loop)
-        const heartbeat = resolveHeartbeatSummaryForAgent(cfg, agentId);
+    // Mark as refreshing (prevents concurrent heavy scans)
+    if (resourcesCache) {
+      resourcesCache.refreshing = true;
+    }
 
-        // Workspace size
-        const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-        let workspaceFiles = 0;
-        let workspaceTotalBytes = 0;
-        try {
-          const entries = await fs.readdir(workspaceDir);
-          for (const name of entries) {
-            try {
-              const stat = await fs.stat(path.join(workspaceDir, name));
-              if (stat.isFile()) {
-                workspaceFiles++;
-                workspaceTotalBytes += stat.size;
-              }
-            } catch {
-              // skip inaccessible files
-            }
-          }
-        } catch {
-          // workspace dir may not exist
-        }
-
-        return {
-          agentId,
-          isDefault: agentId === defaultAgentId,
-          sessions: {
-            total: sessionCount,
-            active: activeSessions,
-          },
-          tokens: {
-            input: totalInputTokens,
-            output: totalOutputTokens,
-            total: totalTokens,
-          },
-          cost: {
-            total: totalCost,
-            days: 7,
-          },
-          heartbeat: {
-            enabled: heartbeat.enabled,
-            everyMs: heartbeat.everyMs ?? null,
-            every: heartbeat.every,
-          },
-          workspace: {
-            files: workspaceFiles,
-            totalBytes: workspaceTotalBytes,
-          },
-        };
-      }),
-    );
-    respond(true, { agents: results }, undefined);
+    try {
+      const data = await collectAgentResources();
+      resourcesCache = { data, ts: Date.now(), refreshing: false };
+      respond(true, data, undefined);
+    } catch {
+      if (resourcesCache) {
+        resourcesCache.refreshing = false;
+      }
+      respond(true, resourcesCache?.data ?? { agents: [] }, undefined);
+    }
   },
 };
