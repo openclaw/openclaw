@@ -791,7 +791,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
 
       const events = response.events ?? [];
       if (events.length > 0) {
-        lastEventId = events[events.length - 1].id;
+        lastEventId = Number(events[events.length - 1].id);
         opts.statusSink?.({
           connected: true,
           lastConnectedAt: Date.now(),
