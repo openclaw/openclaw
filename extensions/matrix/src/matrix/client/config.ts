@@ -21,13 +21,14 @@ export function resolveMatrixConfigForAccount(
 ): MatrixResolvedConfig {
   const normalizedAccountId = normalizeAccountId(accountId);
   const matrixBase = cfg.channels?.matrix ?? {};
+  const accounts = cfg.channels?.matrix?.accounts;
 
   // Try to get account-specific config first (direct lookup, then case-insensitive fallback)
-  let accountConfig = matrixBase.accounts?.[normalizedAccountId];
-  if (!accountConfig && matrixBase.accounts) {
-    for (const key of Object.keys(matrixBase.accounts)) {
+  let accountConfig = accounts?.[normalizedAccountId];
+  if (!accountConfig && accounts) {
+    for (const key of Object.keys(accounts)) {
       if (normalizeAccountId(key) === normalizedAccountId) {
-        accountConfig = matrixBase.accounts[key];
+        accountConfig = accounts[key];
         break;
       }
     }
