@@ -176,7 +176,7 @@ describe("sessions", () => {
     });
   });
 
-  it("updateLastRoute clears threadId when deliveryContext explicitly omits it", async () => {
+  it("updateLastRoute clears threadId when explicit route omits threadId", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
@@ -209,7 +209,6 @@ describe("sessions", () => {
       deliveryContext: {
         channel: "telegram",
         to: "222",
-        threadId: undefined,
       },
     });
 
