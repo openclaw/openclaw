@@ -28,7 +28,7 @@ export async function applyAuthChoiceAnthropic(
       message: "Paste Anthropic setup-token",
       validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
     });
-    const token = String(tokenRaw).trim();
+    const token = String(tokenRaw ?? "").trim();
 
     const profileNameRaw = await params.prompter.text({
       message: "Token name (blank = default)",
