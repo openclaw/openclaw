@@ -7,6 +7,18 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
+async function readComposeFile(): Promise<string> {
+  const candidates = ["docker-compose.local.yaml", "docker-compose.yml", "docker-compose.yaml"];
+  for (const candidate of candidates) {
+    try {
+      return await readFile(join(repoRoot, candidate), "utf8");
+    } catch {
+      // keep looking
+    }
+  }
+  throw new Error("Missing docker-compose.yml or docker-compose.yaml in repo root");
+}
+
 async function writeDockerStub(binDir: string, logPath: string) {
   const stub = `#!/usr/bin/env bash
 set -euo pipefail
@@ -134,7 +146,7 @@ describe("docker-setup.sh", () => {
   });
 
   it("keeps docker-compose gateway command in sync", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    const compose = await readComposeFile();
     expect(compose).not.toContain("gateway-daemon");
     expect(compose).toContain('"gateway"');
   });

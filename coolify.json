@@ -1,0 +1,25 @@
+{
+  "name": "OpenClaw Gateway",
+  "description": "OpenClaw AI agent platform with ZAI provider support. Runs on your own infrastructure with WhatsApp, Telegram, Discord, and Slack integration.",
+  "version": "1.0.0",
+  "services": [
+    {
+      "name": "OpenClaw Gateway",
+      "type": "docker-compose",
+      "dockerComposeFile": "docker-compose.yaml"
+    }
+  ],
+  "tags": [
+    "ai",
+    "agent",
+    "coding",
+    "openclaw",
+    "zai",
+    "self-hosted",
+    "whatsapp",
+    "telegram",
+    "discord"
+  ],
+  "documentation": "https://docs.openclaw.ai/",
+  "website": "https://openclaw.ai"
+}
