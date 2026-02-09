@@ -478,6 +478,66 @@ describe("sessions tools", () => {
     });
   });
 
+  it("sessions_history gracefully handles out-of-range timestamps", async () => {
+    callGatewayMock.mockReset();
+    // Large finite number that produces an invalid Date (exceeds Date range)
+    const outOfRangeTimestamp = 9e15;
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+      agents: {
+        defaults: {
+          userTimezone: "UTC",
+        },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: outOfRangeTimestamp,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    // Should not throw — out-of-range timestamps are gracefully skipped
+    const result = await tool.execute("call-tz-oor", { sessionKey: "main" });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(details.messages).toHaveLength(1);
+    const msg = details.messages?.[0];
+    // Out-of-range timestamp: formatted field should be absent (graceful skip)
+    expect(msg?.timestampFormatted).toBeUndefined();
+    // Original timestamp preserved
+    expect(msg?.timestamp).toBe(outOfRangeTimestamp);
+
+    // Restore default config
+    configMocks.loadConfig.mockReturnValue({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+    });
+  });
+
   it("sessions_history resolves sessionId inputs", async () => {
     callGatewayMock.mockReset();
     const sessionId = "sess-group";

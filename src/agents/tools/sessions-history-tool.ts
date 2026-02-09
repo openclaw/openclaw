@@ -117,10 +117,15 @@ function sanitizeHistoryMessage(
     truncated ||= res.truncated;
   }
   // Format the raw timestamp (epoch ms) into the user's timezone.
+  // Guard against out-of-range timestamps (e.g. microsecond values) that produce invalid Dates.
   if (typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp) && timeZone) {
-    const formatted = formatZonedTimestamp(new Date(entry.timestamp), { timeZone });
-    if (formatted) {
-      entry.timestampFormatted = formatted;
+    try {
+      const formatted = formatZonedTimestamp(new Date(entry.timestamp), { timeZone });
+      if (formatted) {
+        entry.timestampFormatted = formatted;
+      }
+    } catch {
+      // Skip formatting for invalid date values (e.g. out-of-range microsecond timestamps).
     }
   }
   return { message: entry, truncated };
