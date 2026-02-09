@@ -37,7 +37,9 @@ enum AppLogLevel: String, CaseIterable, Identifiable {
 
     static let `default`: AppLogLevel = .info
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {
