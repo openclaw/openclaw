@@ -42,6 +42,7 @@ export type ResolvedMemorySearchConfig = {
   chunking: {
     tokens: number;
     overlap: number;
+    maxLines?: number;
   };
   sync: {
     onSessionStart: boolean;
@@ -194,6 +195,7 @@ function mergeConfig(
   const chunking = {
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
     overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+    maxLines: overrides?.chunking?.maxLines ?? defaults?.chunking?.maxLines,
   };
   const sync = {
     onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,

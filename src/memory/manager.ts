@@ -14,6 +14,7 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
+import { isVerbose, logVerbose } from "../globals.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -2318,6 +2319,32 @@ export class MemoryIndexManager implements MemorySearchManager {
     const chunks = chunkMarkdown(content, this.settings.chunking).filter(
       (chunk) => chunk.text.trim().length > 0,
     );
+
+    if (isVerbose()) {
+      const totalLines = content.split("\n").length;
+      const totalBytes = Buffer.byteLength(content, "utf-8");
+      const avgChunkSize = chunks.length > 0 ? Math.round(totalBytes / chunks.length) : 0;
+      const chunkSizes = chunks.map((c) => Buffer.byteLength(c.text, "utf-8"));
+      const minChunkSize = chunks.length > 0 ? Math.min(...chunkSizes) : 0;
+      const maxChunkSize = chunks.length > 0 ? Math.max(...chunkSizes) : 0;
+      const avgLinesPerChunk = chunks.length > 0 ? Math.round(totalLines / chunks.length) : 0;
+
+      const maxChars = Math.max(32, this.settings.chunking.tokens * 4);
+      const maxLinesConfig = this.settings.chunking.maxLines
+        ? `, maxLines=${this.settings.chunking.maxLines}`
+        : "";
+      logVerbose(`📄 ${entry.path}`);
+      logVerbose(
+        `   Chunks: ${chunks.length} from ${totalLines} lines (~${avgLinesPerChunk} lines/chunk)`,
+      );
+      logVerbose(`   Size: ${totalBytes} bytes (avg=${avgChunkSize}, min=${minChunkSize}, max=${maxChunkSize})`);
+      logVerbose(
+        `   Config: maxChars=${maxChars} (tokens=${this.settings.chunking.tokens}${maxLinesConfig})`,
+      );
+      if (avgLinesPerChunk > 20) {
+        logVerbose(`   ⚠️  Many lines per chunk - consider setting lower maxLines for granularity`);
+      }
+    }
     const embeddings = this.batch.enabled
       ? await this.embedChunksWithBatch(chunks, entry, options.source)
       : await this.embedChunksInBatches(chunks);

@@ -165,7 +165,7 @@ export async function buildFileEntry(
 
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; maxLines?: number },
 ): MemoryChunk[] {
   const lines = content.split("\n");
   if (lines.length === 0) {
@@ -173,6 +173,7 @@ export function chunkMarkdown(
   }
   const maxChars = Math.max(32, chunking.tokens * 4);
   const overlapChars = Math.max(0, chunking.overlap * 4);
+  const maxLinesPerChunk = chunking.maxLines ?? Infinity;
   const chunks: MemoryChunk[] = [];
 
   let current: Array<{ line: string; lineNo: number }> = [];
@@ -234,7 +235,10 @@ export function chunkMarkdown(
     }
     for (const segment of segments) {
       const lineSize = segment.length + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
+      if (
+        (currentChars + lineSize > maxChars || current.length >= maxLinesPerChunk) &&
+        current.length > 0
+      ) {
         flush();
         carryOverlap();
       }
