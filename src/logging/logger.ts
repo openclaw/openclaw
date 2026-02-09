@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
 import { readLoggingConfig } from "./config.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
-import { loggingState } from "./state.js";
+import { loggingState, type LogTransport } from "./state.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
 // randomized path on macOS which made the “Open log” button a no-op.
@@ -34,13 +34,10 @@ type ResolvedSettings = {
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
-export type LogTransport = (logObj: LogTransportRecord) => void;
-
-const externalTransports = new Set<LogTransport>();
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
-    if (!externalTransports.has(transport)) {
+    if (!loggingState.externalTransports.has(transport)) {
       return;
     }
     try {
@@ -108,7 +105,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       // never block on logging failures
     }
   });
-  for (const transport of externalTransports) {
+  for (const transport of loggingState.externalTransports) {
     attachExternalTransport(logger, transport);
   }
 
@@ -193,13 +190,13 @@ export function resetLogger() {
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
-  externalTransports.add(transport);
+  loggingState.externalTransports.add(transport);
   const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   if (logger) {
     attachExternalTransport(logger, transport);
   }
   return () => {
-    externalTransports.delete(transport);
+    loggingState.externalTransports.delete(transport);
   };
 }
 
