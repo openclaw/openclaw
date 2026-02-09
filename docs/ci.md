@@ -1,6 +1,6 @@
 ---
 title: CI Pipeline
-description: How the OpenClaw CI pipeline works and why jobs are ordered the way they are. Latest changes - Feb 09, 2026
+description: How the OpenClaw CI pipeline works and why jobs are ordered the way they are.
 ---
 
 # CI Pipeline
@@ -135,7 +135,7 @@ handles the shared setup boilerplate:
 - `pnpm install` with retry
 
 The `macos` job also caches SwiftPM packages (`~/Library/Caches/org.swift.swiftpm`)
-and Xcode DerivedData to speed up Swift builds.
+to speed up dependency resolution.
 
 This eliminates ~40 lines of duplicated YAML per job.
 
