@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import { createVertexEmbeddingProvider, type VertexEmbeddingClient } from "./embeddings-vertex.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
@@ -19,6 +20,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+export type { VertexEmbeddingClient } from "./embeddings-vertex.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
 export type EmbeddingProvider = {
@@ -30,25 +32,26 @@ export type EmbeddingProvider = {
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
-  requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  requestedProvider: "openai" | "local" | "gemini" | "voyage" | "google-vertex" | "auto";
+  fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "google-vertex";
   fallbackReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  vertex?: VertexEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
-  provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "google-vertex" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "google-vertex" | "none";
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -132,7 +135,7 @@ export async function createEmbeddingProvider(
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: "openai" | "local" | "gemini" | "voyage") => {
+  const createProvider = async (id: "openai" | "local" | "gemini" | "voyage" | "google-vertex") => {
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
@@ -140,6 +143,10 @@ export async function createEmbeddingProvider(
     if (id === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
+    }
+    if (id === "google-vertex") {
+      const { provider, client } = await createVertexEmbeddingProvider(options);
+      return { provider, vertex: client };
     }
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
@@ -149,8 +156,10 @@ export async function createEmbeddingProvider(
     return { provider, openAi: client };
   };
 
-  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini" | "voyage") =>
-    provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
+  const formatPrimaryError = (
+    err: unknown,
+    provider: "openai" | "local" | "gemini" | "voyage" | "google-vertex",
+  ) => (provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err));
 
   if (requestedProvider === "auto") {
     const missingKeyErrors: string[] = [];
@@ -165,7 +174,7 @@ export async function createEmbeddingProvider(
       }
     }
 
-    for (const provider of ["openai", "gemini", "voyage"] as const) {
+    for (const provider of ["openai", "gemini", "voyage", "google-vertex"] as const) {
       try {
         const result = await createProvider(provider);
         return { ...result, requestedProvider };
