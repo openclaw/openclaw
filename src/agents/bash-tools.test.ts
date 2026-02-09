@@ -289,16 +289,17 @@ describe("exec notifyOnExit", () => {
 
     const prefix = sessionId.slice(0, 8);
     let finished = getFinishedSession(sessionId);
-    let hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+    let matchingEvent = peekSystemEvents("agent:main:main").find((event) => event.includes(prefix));
     const deadline = Date.now() + (isWin ? 12_000 : 5_000);
-    while ((!finished || !hasEvent) && Date.now() < deadline) {
+    while ((!finished || !matchingEvent) && Date.now() < deadline) {
       await sleep(20);
       finished = getFinishedSession(sessionId);
-      hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+      matchingEvent = peekSystemEvents("agent:main:main").find((event) => event.includes(prefix));
     }
 
     expect(finished).toBeTruthy();
-    expect(hasEvent).toBe(true);
+    expect(matchingEvent).toBeTruthy();
+    expect(matchingEvent).toContain("Exec finished");
   });
 });
 

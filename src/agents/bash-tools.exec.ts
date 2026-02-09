@@ -388,11 +388,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = normalizeNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  const id = session.id.slice(0, 8);
+  const statusLabel = status === "failed" ? ", failed" : "";
+  const text = output
+    ? `Exec finished (id=${id}, ${exitLabel}${statusLabel})\n${output}`
+    : `Exec finished (id=${id}, ${exitLabel}${statusLabel})`;
+  emitExecSystemEvent(text, { sessionKey });
 }
 
 function createApprovalSlug(id: string) {
