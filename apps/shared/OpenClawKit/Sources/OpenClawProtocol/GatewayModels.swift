@@ -1589,6 +1589,140 @@ public struct AgentSummary: Codable, Sendable {
     }
 }
 
+public struct AgentsCreateParams: Codable, Sendable {
+    public let name: String
+    public let workspace: String
+    public let emoji: String?
+    public let avatar: String?
+
+    public init(
+        name: String,
+        workspace: String,
+        emoji: String?,
+        avatar: String?
+    ) {
+        self.name = name
+        self.workspace = workspace
+        self.emoji = emoji
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case workspace
+        case emoji
+        case avatar
+    }
+}
+
+public struct AgentsCreateResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let name: String
+    public let workspace: String
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        name: String,
+        workspace: String
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case name
+        case workspace
+    }
+}
+
+public struct AgentsUpdateParams: Codable, Sendable {
+    public let agentid: String
+    public let name: String?
+    public let workspace: String?
+    public let model: String?
+    public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String?,
+        workspace: String?,
+        model: String?,
+        avatar: String?
+    ) {
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+        self.model = model
+        self.avatar = avatar
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case name
+        case workspace
+        case model
+        case avatar
+    }
+}
+
+public struct AgentsUpdateResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+
+    public init(
+        ok: Bool,
+        agentid: String
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+    }
+}
+
+public struct AgentsDeleteParams: Codable, Sendable {
+    public let agentid: String
+    public let deletefiles: Bool?
+
+    public init(
+        agentid: String,
+        deletefiles: Bool?
+    ) {
+        self.agentid = agentid
+        self.deletefiles = deletefiles
+    }
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case deletefiles = "deleteFiles"
+    }
+}
+
+public struct AgentsDeleteResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let removedbindings: Int
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        removedbindings: Int
+    ) {
+        self.ok = ok
+        self.agentid = agentid
+        self.removedbindings = removedbindings
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case removedbindings = "removedBindings"
+    }
+}
+
 public struct AgentsFileEntry: Codable, Sendable {
     public let name: String
     public let path: String

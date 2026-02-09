@@ -453,7 +453,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         cfg,
         channel: "matrix",
         peer: {
-          kind: isDirectMessage ? "dm" : "channel",
+          kind: isDirectMessage ? "direct" : "channel",
           id: isDirectMessage ? senderId : roomId,
         },
       });

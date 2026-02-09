@@ -652,7 +652,7 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
       peer: {
-        kind: isGroup ? "group" : "dm",
+        kind: isGroup ? "group" : "direct",
         id: isGroup ? ctx.chatId : ctx.senderOpenId,
       },
     });

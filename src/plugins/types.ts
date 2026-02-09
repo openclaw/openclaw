@@ -5,7 +5,7 @@ import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-prof
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -140,6 +140,8 @@ export type PluginCommandContext = {
   senderId?: string;
   /** The channel/surface (e.g., "telegram", "discord") */
   channel: string;
+  /** Provider channel id (e.g., "telegram") */
+  channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
   /** Raw command arguments after the command name */
@@ -148,6 +150,14 @@ export type PluginCommandContext = {
   commandBody: string;
   /** Current OpenClaw configuration */
   config: OpenClawConfig;
+  /** Raw "From" value (channel-scoped id) */
+  from?: string;
+  /** Raw "To" value (channel-scoped id) */
+  to?: string;
+  /** Account id for multi-account channels */
+  accountId?: string;
+  /** Thread/topic id if available */
+  messageThreadId?: number;
 };
 
 /**

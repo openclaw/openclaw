@@ -15,7 +15,7 @@ Zalo ships as a plugin and is not bundled with the core install.
 
 - Install via CLI: `openclaw plugins install @openclaw/zalo`
 - Or select **Zalo** during onboarding and confirm the install prompt
-- Details: [Plugins](/plugin)
+- Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
@@ -104,7 +104,7 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 - Approve via:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Pairing is the default token exchange. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepts numeric user IDs (no username lookup available).
 
 ## Long-polling vs webhook

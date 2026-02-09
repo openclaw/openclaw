@@ -13,6 +13,8 @@ title: "Heartbeat"
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+
 ## Quick start (beginner)
 
 1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
@@ -198,7 +200,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session`: optional session key for heartbeat runs.
   - `main` (default): agent main session.
   - Explicit session key (copy from `openclaw sessions --json` or the [sessions CLI](/cli/sessions)).
-  - Session key formats: see [Sessions](/concepts/session) and [Groups](/concepts/groups).
+  - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last` (default): deliver to the last used external channel.
   - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
