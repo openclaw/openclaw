@@ -50,7 +50,7 @@ export type MonitorMattermostOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
 };
 
-type FetchLike = typeof fetch;
+type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostEventPayload = {
