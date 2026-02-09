@@ -377,6 +377,22 @@ describe("extractUserMessages", () => {
 // extractEntities() — tests validateExtractionResult() indirectly
 // ============================================================================
 
+/**
+ * Create a ReadableStream that emits SSE-formatted chunks from a content string.
+ * Used to mock streaming LLM responses.
+ */
+function mockSSEStream(content: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  // Send the content in one SSE data event, then [DONE]
+  const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(sseData));
+      controller.close();
+    },
+  });
+}
+
 describe("extractEntities", () => {
   // We need to mock `fetch` since callOpenRouter uses global fetch
   const originalFetch = globalThis.fetch;
@@ -408,6 +424,9 @@ describe("extractEntities", () => {
       ok: status >= 200 && status < 300,
       status,
       text: () => Promise.resolve(content),
+      // Streaming response format (used by extractEntities via callOpenRouterStream)
+      body: status >= 200 && status < 300 ? mockSSEStream(content) : null,
+      // Non-streaming format (used by other LLM calls via callOpenRouter)
       json: () =>
         Promise.resolve({
           choices: [{ message: { content } }],
@@ -792,6 +811,7 @@ describe("runBackgroundExtraction", () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      body: mockSSEStream(content),
       json: () =>
         Promise.resolve({
           choices: [{ message: { content } }],
@@ -1928,10 +1948,10 @@ describe("runSleepCycle", () => {
           texts: ["text", "text", "text"],
           importances: [0.5, 0.6, 0.7],
           similarities: new Map([
-            ["a:b", 0.8],
-            ["a:c", 0.78],
+            ["a:b", 0.85],
+            ["a:c", 0.81],
             ["b:c", 0.82],
-          ]), // All in 0.75-0.95 range
+          ]), // All above SEMANTIC_DEDUP_VECTOR_THRESHOLD (0.8)
         },
       ]);
 

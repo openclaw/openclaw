@@ -518,6 +518,7 @@ export class Neo4jMemoryClient {
     limit: number,
     firingThreshold: number = 0.3,
     agentId?: string,
+    maxHops: number = 1,
   ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
     const escaped = escapeLucene(query);
@@ -529,8 +530,10 @@ export class Neo4jMemoryClient {
       return await this.retryOnTransient(async () => {
         const session = this.driver!.session();
         try {
-          // Single query: entity fulltext lookup → direct mentions + 1-hop spreading activation
+          // Single query: entity fulltext lookup → direct mentions + N-hop spreading activation
           const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+          // Variable-length relationship pattern: 1..maxHops hops through entity relationships
+          const hopRange = `1..${Math.max(1, Math.min(3, maxHops))}`;
           const result = await session.run(
             `// Find matching entities via fulltext index
              CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
@@ -560,12 +563,12 @@ export class Neo4jMemoryClient {
              ORDER BY score DESC
              LIMIT 5
 
-             // 1-hop: Entity → relationship → Entity ← MENTIONS ← Memory
-             OPTIONAL MATCH (entity)-[r1:${RELATIONSHIP_TYPE_PATTERN}]-(e2:Entity)
-             WHERE coalesce(r1.confidence, 0.7) >= $firingThreshold
+             // N-hop: Entity -[rels*1..N]-> Entity ← MENTIONS ← Memory
+             OPTIONAL MATCH (entity)-[rels:${RELATIONSHIP_TYPE_PATTERN}*${hopRange}]-(e2:Entity)
+             WHERE ALL(r IN rels WHERE coalesce(r.confidence, 0.7) >= $firingThreshold)
              OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
              WHERE m IS NOT NULL ${agentFilter}
-             WITH m, coalesce(r1.confidence, 0.7) * coalesce(rm.confidence, 1.0) AS hopScore
+             WITH m, reduce(s = 1.0, r IN rels | s * coalesce(r.confidence, 0.7)) * coalesce(rm.confidence, 1.0) AS hopScore
              WHERE m IS NOT NULL
 
              RETURN m.id AS id, m.text AS text, m.category AS category,
@@ -1373,6 +1376,8 @@ export class Neo4jMemoryClient {
       retentionThreshold?: number; // Below this score, memory is pruned (default: 0.1)
       baseHalfLifeDays?: number; // Base half-life for decay (default: 30)
       importanceMultiplier?: number; // How much importance extends half-life (default: 2)
+      /** Per-category half-life overrides. Categories not listed use baseHalfLifeDays. */
+      decayCurves?: Record<string, { halfLifeDays: number }>;
       agentId?: string;
       limit?: number;
     } = {},
@@ -1383,6 +1388,7 @@ export class Neo4jMemoryClient {
       retentionThreshold = 0.1,
       baseHalfLifeDays = 30,
       importanceMultiplier = 2,
+      decayCurves,
       agentId,
       limit = 500,
     } = options;
@@ -1391,6 +1397,19 @@ export class Neo4jMemoryClient {
     const session = this.driver!.session();
     try {
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+
+      // Build per-category half-life CASE expression if curves are configured
+      let halfLifeExpr = "$baseHalfLife";
+      if (decayCurves && Object.keys(decayCurves).length > 0) {
+        const cases = Object.entries(decayCurves)
+          .map(
+            ([cat, { halfLifeDays }]) =>
+              `WHEN m.category = '${cat.replace(/'/g, "\\'")}' THEN ${halfLifeDays}`,
+          )
+          .join(" ");
+        halfLifeExpr = `CASE ${cases} ELSE $baseHalfLife END`;
+      }
+
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.createdAt IS NOT NULL
@@ -1400,7 +1419,7 @@ export class Neo4jMemoryClient {
               duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
               m.importance AS importance
          WITH m, ageDays, importance,
-              $baseHalfLife * (1.0 + importance * $importanceMult) AS halfLife
+              ${halfLifeExpr} * (1.0 + importance * $importanceMult) AS halfLife
          WITH m, ageDays, importance, halfLife,
               importance * exp(-1.0 * ageDays / halfLife) AS decayScore
          WHERE decayScore < $threshold

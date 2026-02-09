@@ -75,6 +75,14 @@
       "label": "Extraction Base URL",
       "placeholder": "https://openrouter.ai/api/v1",
       "help": "Base URL for extraction API (e.g., https://openrouter.ai/api/v1 or http://localhost:11434/v1 for Ollama)"
+    },
+    "graphSearchDepth": {
+      "label": "Graph Search Depth",
+      "help": "Maximum relationship hops for graph search spreading activation (1-3, default: 1)"
+    },
+    "decayCurves": {
+      "label": "Decay Curves",
+      "help": "Per-category decay curve overrides. Example: {\"fact\": {\"halfLifeDays\": 60}, \"other\": {\"halfLifeDays\": 14}}"
     }
   },
   "configSchema": {
@@ -161,6 +169,24 @@
           "baseUrl": {
             "type": "string"
           }
+        }
+      },
+      "graphSearchDepth": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 3
+      },
+      "decayCurves": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "halfLifeDays": {
+              "type": "number",
+              "minimum": 1
+            }
+          },
+          "required": ["halfLifeDays"]
         }
       }
     },

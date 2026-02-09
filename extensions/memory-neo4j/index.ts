@@ -126,6 +126,7 @@ const memoryNeo4jPlugin = {
               limit,
               agentId,
               extractionConfig.enabled,
+              { graphSearchDepth: cfg.graphSearchDepth },
             );
 
             if (results.length === 0) {
@@ -434,6 +435,7 @@ const memoryNeo4jPlugin = {
                 parseInt(opts.limit, 10),
                 "default",
                 extractionConfig.enabled,
+                { graphSearchDepth: cfg.graphSearchDepth },
               );
               const output = results.map((r) => ({
                 id: r.id,
@@ -594,6 +596,8 @@ const memoryNeo4jPlugin = {
                   promotionMinAgeDays: promotionMinAge,
                   decayRetentionThreshold: decayThreshold,
                   decayBaseHalfLifeDays: decayHalfLife,
+                  decayCurves:
+                    Object.keys(cfg.decayCurves).length > 0 ? cfg.decayCurves : undefined,
                   extractionBatchSize: batchSize,
                   extractionDelayMs: delay,
                   onPhaseStart: (phase) => {
@@ -964,6 +968,7 @@ const memoryNeo4jPlugin = {
             3,
             agentId,
             extractionConfig.enabled,
+            { graphSearchDepth: cfg.graphSearchDepth },
           );
 
           // Feature 1: Filter out low-relevance results below min RRF score
@@ -1213,10 +1218,12 @@ async function captureMessage(
   }
 
   // Semantic dedup: check moderate-similarity memories (0.75-0.95)
+  // Pass the vector similarity score as a pre-screen to skip LLM calls
+  // for pairs below SEMANTIC_DEDUP_VECTOR_THRESHOLD.
   const candidates = await db.findSimilar(vector, 0.75, 3);
   if (candidates.length > 0) {
     for (const candidate of candidates) {
-      if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
+      if (await isSemanticDuplicate(text, candidate.text, extractionConfig, candidate.score)) {
         logger.debug?.(
           `memory-neo4j: semantic dedup — skipped "${text.slice(0, 60)}..." (duplicate of "${candidate.text.slice(0, 60)}...")`,
         );
