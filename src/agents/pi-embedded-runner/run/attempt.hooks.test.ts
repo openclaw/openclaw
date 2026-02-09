@@ -257,6 +257,8 @@ vi.mock("../../pi-embedded-subscribe.js", () => ({
       getMessagingToolSentTargets: vi.fn(() => []),
       didSendViaMessagingTool: vi.fn(() => false),
       getLastToolError: vi.fn(() => undefined),
+      getUsageTotals: vi.fn(() => undefined),
+      getCompactionCount: vi.fn(() => 0),
       isCompacting: vi.fn(() => false),
     };
   }),

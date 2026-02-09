@@ -43,7 +43,11 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
-  const effectiveToolCallId = args.toolCallId ?? args.ctx?.toolCallId;
+  const candidateToolCallId = args.toolCallId ?? args.ctx?.toolCallId;
+  const effectiveToolCallId =
+    typeof candidateToolCallId === "string" && candidateToolCallId.trim()
+      ? candidateToolCallId
+      : `hook-${randomUUID()}`;
   const hookSessionKey = resolveHookSessionKey(
     args.ctx?.sessionKey,
     args.ctx?.agentId,

@@ -210,29 +210,38 @@ export function toClientToolDefinitions(
         }
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
-        // Notify handler that a client tool was called
-        if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord, hookToolCallId);
-        }
-        // Return a pending result - the client will execute this tool
-        const result = jsonResult({
-          status: "pending",
-          tool: func.name,
-          toolCallId: hookToolCallId,
-          message: "Tool execution delegated to client",
-        });
-        await runAfterToolCallHook({
-          toolName: func.name,
-          params: adjustedParams,
-          result,
-          durationMs: Date.now() - startedAt,
-          toolCallId: hookToolCallId,
-          ctx: {
-            ...hookContext,
+        let result: AgentToolResult<unknown> | undefined;
+        let error: string | undefined;
+        try {
+          // Notify handler that a client tool was called
+          if (onClientToolCall) {
+            onClientToolCall(func.name, paramsRecord, hookToolCallId);
+          }
+          // Return a pending result - the client will execute this tool
+          result = jsonResult({
+            status: "pending",
+            tool: func.name,
             toolCallId: hookToolCallId,
-          },
-        });
-        return result;
+            message: "Tool execution delegated to client",
+          });
+          return result;
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          throw err;
+        } finally {
+          await runAfterToolCallHook({
+            toolName: func.name,
+            params: adjustedParams,
+            result,
+            error,
+            durationMs: Date.now() - startedAt,
+            toolCallId: hookToolCallId,
+            ctx: {
+              ...hookContext,
+              toolCallId: hookToolCallId,
+            },
+          });
+        }
       },
     } satisfies ToolDefinition;
   });
