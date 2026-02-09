@@ -311,6 +311,7 @@ export function buildWorkspaceSkillStatus(
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
+      cwd: process.cwd(),
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {

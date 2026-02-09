@@ -160,6 +160,7 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            cwd: process.cwd(),
           })
         : current.skillsSnapshot;
     nextEntry = {
@@ -184,6 +185,7 @@ export async function ensureSkillSnapshot(params: {
         skillFilter,
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
+        cwd: process.cwd(),
       })
     : (nextEntry?.skillsSnapshot ??
       (isFirstTurnInSession
@@ -193,6 +195,7 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            cwd: process.cwd(),
           })));
   if (
     skillsSnapshot &&

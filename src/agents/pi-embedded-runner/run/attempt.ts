@@ -168,7 +168,7 @@ export async function runEmbeddedAttempt(
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
+      ? loadWorkspaceSkillEntries(effectiveWorkspace, { cwd: process.cwd() })
       : [];
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
