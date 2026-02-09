@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { mattermostPlugin } from "./channel.js";
+import { normalizeMention } from "./mattermost/monitor.js";
 
 describe("mattermostPlugin", () => {
   describe("messaging", () => {
@@ -34,6 +35,38 @@ describe("mattermostPlugin", () => {
 
       expect(normalize("@Alice")).toBe("alice");
       expect(normalize("user:USER123")).toBe("user123");
+    });
+  });
+
+  describe("normalizeMention", () => {
+    it("preserves newlines in multi-line messages with mention", () => {
+      const input = "@bot line1\nline2\nline3";
+      const result = normalizeMention(input, "bot");
+      expect(result).toBe("line1\nline2\nline3");
+    });
+
+    it("preserves newlines in messages without mention", () => {
+      const input = "line1\nline2\nline3";
+      const result = normalizeMention(input, undefined);
+      expect(result).toBe("line1\nline2\nline3");
+    });
+
+    it("collapses horizontal spaces around removed mention", () => {
+      const input = "hello  @bot  world";
+      const result = normalizeMention(input, "bot");
+      expect(result).toBe("hello world");
+    });
+
+    it("removes mention at start of line", () => {
+      const input = "@bot do something";
+      const result = normalizeMention(input, "bot");
+      expect(result).toBe("do something");
+    });
+
+    it("preserves Markdown block structure with mention", () => {
+      const input = "@bot # Heading\n> quote\n- item";
+      const result = normalizeMention(input, "bot");
+      expect(result).toBe("# Heading\n> quote\n- item");
     });
   });
 
