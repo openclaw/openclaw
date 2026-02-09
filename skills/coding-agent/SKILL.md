@@ -157,20 +157,13 @@ gh pr comment <PR#> --body "<review content>"
 
 ## Claude Code
 
-**Important:** Use `-p` flag for non-interactive mode. Without `-p`, Claude Code enters interactive mode and won't exit after completion.
-
 ```bash
-# One-shot task (exits after completion)
-bash pty:true workdir:~/project command:"claude -p 'Your task' --dangerously-skip-permissions"
+# With PTY for proper terminal output
+bash pty:true workdir:~/project command:"claude 'Your task'"
 
-# Background task (also use -p to auto-exit)
-bash pty:true workdir:~/project background:true command:"claude -p 'Your task' --dangerously-skip-permissions"
+# Background
+bash pty:true workdir:~/project background:true command:"claude 'Your task'"
 ```
-
-| Flag                             | Effect                                         |
-| -------------------------------- | ---------------------------------------------- |
-| `-p "prompt"`                    | Non-interactive mode, exits after completion   |
-| `--dangerously-skip-permissions` | Auto-approve file operations (alias: `--yolo`) |
 
 ---
 
@@ -259,19 +252,26 @@ This prevents the user from seeing only "Agent failed before reply" and having n
 
 ---
 
-## Checking Completion Status
+## Auto-Notify on Completion
 
-For long-running background tasks, poll the process log to check completion status:
+For long-running background tasks, append a wake trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
 
-```bash
-# Check if session is still running
-process action:poll sessionId:XXX
+```
+... your task here.
 
-# Get latest output
-process action:log sessionId:XXX
+When completely finished, run this command to notify me:
+openclaw system event --text "Done: [brief summary of what was built]" --mode now
 ```
 
-**Note:** Auto-notification from background sessions is not currently supported. The parent session should poll the process log to check completion status.
+**Example:**
+
+```bash
+bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
+
+When completely finished, run: openclaw system event --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+```
+
+This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
 
 ---
 
