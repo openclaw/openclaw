@@ -9,6 +9,14 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createJiraCreateIssueTool } from "./tools/jira-create-issue-tool.js";
+import {
+  createJiraListApplicationsTool,
+  createJiraListAssigneesTool,
+  createJiraListBoardsTool,
+  createJiraListProjectsTool,
+  createJiraListSprintsTool,
+} from "./tools/jira-list-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -146,6 +154,12 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    createJiraCreateIssueTool(),
+    createJiraListProjectsTool(),
+    createJiraListBoardsTool(),
+    createJiraListSprintsTool(),
+    createJiraListApplicationsTool(),
+    createJiraListAssigneesTool(),
   ];
 
   const pluginTools = resolvePluginTools({
