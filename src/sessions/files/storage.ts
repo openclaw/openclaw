@@ -81,6 +81,29 @@ export async function listFiles(params: {
   return index.files;
 }
 
+export async function getParsedCsv(params: {
+  sessionId: string;
+  agentId?: string;
+  fileId: string;
+  filesDir?: string;
+}): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
+  const { sessionId, agentId, fileId, filesDir } = params;
+  const baseDir = filesDir ?? resolveSessionFilesDir(sessionId, agentId);
+  const indexPath = path.join(baseDir, "index.json");
+  const index = await loadIndex(indexPath);
+  const file = index.files.find((f) => f.id === fileId);
+  if (!file) {
+    throw new Error(`File ${fileId} not found`);
+  }
+  if (file.type !== "csv") {
+    throw new Error(`File ${fileId} is not a CSV file`);
+  }
+  const fileBase = `${fileId}-${file.filename}`;
+  const parsedPath = path.join(baseDir, `${fileBase}.parsed.json`);
+  const content = await fs.readFile(parsedPath, "utf-8");
+  return JSON.parse(content) as { columns: string[]; rows: Record<string, unknown>[] };
+}
+
 export async function deleteFile(params: {
   sessionId: string;
   agentId?: string;

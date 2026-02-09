@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as storage from "../../sessions/files/storage.js";
-import { createSessionFilesListTool, createSessionFilesGetTool } from "./session-files-tool.js";
+import {
+  createSessionFilesListTool,
+  createSessionFilesGetTool,
+  createSessionFilesQueryCsvTool,
+} from "./session-files-tool.js";
 
 vi.mock("../../sessions/files/storage.js");
 
@@ -74,5 +78,41 @@ describe("session_files_get tool", () => {
     const json = JSON.parse(content.text);
     expect(json.content).toBe("test content");
     expect(json.metadata.filename).toBe("test.txt");
+  });
+});
+
+describe("session_files_query_csv tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("queries CSV file", async () => {
+    const mockParsed = {
+      columns: ["name", "sales"],
+      rows: [
+        { name: "Product A", sales: 1000 },
+        { name: "Product B", sales: 2000 },
+      ],
+    };
+    vi.spyOn(storage, "getParsedCsv").mockResolvedValue(mockParsed);
+
+    const tool = createSessionFilesQueryCsvTool({
+      config: {},
+      agentSessionKey: "agent:main:main",
+    });
+    expect(tool).toBeTruthy();
+
+    const result = await tool!.execute("call-1", {
+      sessionId: "test-session",
+      fileId: "file-1",
+      filterColumn: "sales",
+      filterOperator: "gt",
+      filterValue: 1000,
+    });
+    const content = result.content[0];
+    expect(content.type).toBe("text");
+    const json = JSON.parse(content.text);
+    expect(json.rows).toHaveLength(1);
+    expect(json.rows[0].sales).toBe(2000);
   });
 });
