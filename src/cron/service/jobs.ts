@@ -180,6 +180,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
+    catchUp: input.catchUp,
     state: {
       ...input.state,
     },

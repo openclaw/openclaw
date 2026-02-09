@@ -63,6 +63,12 @@ export type CronJobState = {
   consecutiveErrors?: number;
 };
 
+export type CronCatchUp = {
+  enabled?: boolean;
+  maxDelayMs?: number;
+  strategy?: "once" | "all";
+};
+
 export type CronJob = {
   id: string;
   agentId?: string;
@@ -77,6 +83,7 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  catchUp?: CronCatchUp;
   state: CronJobState;
 };
 

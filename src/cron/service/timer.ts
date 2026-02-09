@@ -299,6 +299,30 @@ function findDueJobs(state: CronServiceState): CronJob[] {
   });
 }
 
+/**
+ * Compute all missed occurrences between a job's nextRunAtMs and now.
+ * Returns an array of timestamps for each missed tick.
+ */
+function computeMissedOccurrences(job: CronJob, nowMs: number): number[] {
+  const occurrences: number[] = [];
+  const startAt = job.state.nextRunAtMs;
+  if (typeof startAt !== "number") {
+    return occurrences;
+  }
+  // Cap at 100 occurrences to avoid runaway loops
+  const MAX_OCCURRENCES = 100;
+  let cursor = startAt;
+  while (cursor <= nowMs && occurrences.length < MAX_OCCURRENCES) {
+    occurrences.push(cursor);
+    const next = computeJobNextRunAtMs(job, cursor + 1);
+    if (next === undefined || next <= cursor) {
+      break;
+    }
+    cursor = next;
+  }
+  return occurrences;
+}
+
 export async function runMissedJobs(state: CronServiceState) {
   if (!state.store) {
     return;
@@ -321,12 +345,55 @@ export async function runMissedJobs(state: CronServiceState) {
     return typeof next === "number" && now >= next;
   });
 
-  if (missed.length > 0) {
-    state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
-      "cron: running missed jobs after restart",
-    );
-    for (const job of missed) {
+  if (missed.length === 0) {
+    return;
+  }
+
+  for (const job of missed) {
+    const catchUp = job.catchUp;
+    const delay = now - (job.state.nextRunAtMs ?? now);
+
+    if (!catchUp?.enabled) {
+      state.deps.log.info(
+        { jobId: job.id, jobName: job.name, missedByMs: delay },
+        "cron: missed job detected (catch-up not enabled), running once",
+      );
+      await executeJob(state, job, now, { forced: false });
+      continue;
+    }
+
+    const maxDelay = catchUp.maxDelayMs ?? Infinity;
+    if (delay > maxDelay) {
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name, missedByMs: delay, maxDelayMs: maxDelay },
+        "cron: missed job exceeded maxDelayMs, skipping catch-up",
+      );
+      continue;
+    }
+
+    const strategy = catchUp.strategy ?? "once";
+
+    if (strategy === "all" && job.schedule.kind !== "at") {
+      // Compute all missed occurrences and fire each
+      const missedOccurrences = computeMissedOccurrences(job, now);
+      state.deps.log.info(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          missedByMs: delay,
+          occurrences: missedOccurrences.length,
+          strategy,
+        },
+        "cron: catching up missed job (all occurrences)",
+      );
+      for (const _occurrence of missedOccurrences) {
+        await executeJob(state, job, now, { forced: false });
+      }
+    } else {
+      state.deps.log.info(
+        { jobId: job.id, jobName: job.name, missedByMs: delay, strategy },
+        "cron: catching up missed job (once)",
+      );
       await executeJob(state, job, now, { forced: false });
     }
   }
