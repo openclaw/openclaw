@@ -420,6 +420,12 @@ export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
 export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
   const resolved = JSON.parse(JSON.stringify(config)) as VoiceCallConfig;
 
+  resolved.webhookSecurity = resolved.webhookSecurity ?? {
+    allowedHosts: [],
+    trustForwardingHeaders: false,
+    trustedProxyIPs: [],
+  };
+
   // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
