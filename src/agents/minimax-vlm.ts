@@ -1,3 +1,5 @@
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
@@ -44,7 +46,7 @@ export async function minimaxUnderstandImage(params: {
   apiHost?: string;
   modelBaseUrl?: string;
 }): Promise<string> {
-  const apiKey = params.apiKey.trim();
+  const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
     throw new Error("MiniMax VLM: apiKey required");
   }

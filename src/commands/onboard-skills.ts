@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
@@ -198,7 +199,7 @@ export async function setupSkills(
         validate: (value) => (value?.trim() ? undefined : "Required"),
       }),
     );
-    next = upsertSkillEntry(next, skill.skillKey, { apiKey: apiKey.trim() });
+    next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
   }
 
   return next;
