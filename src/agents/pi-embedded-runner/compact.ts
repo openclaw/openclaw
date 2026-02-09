@@ -13,6 +13,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
@@ -573,10 +574,12 @@ export async function compactEmbeddedPiSessionDirect(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
-        // Capture full message history BEFORE limiting — plugins need the complete conversation
-        const preCompactionMessages = [...session.messages];
+        // Keep compaction hooks aligned with the validated transcript that actually enters
+        // truncation/repair and compaction.
+        session.agent.replaceMessages(validated);
+        const originalMessages = session.messages.slice();
         const truncated = limitHistoryTurns(
-          validated,
+          session.messages,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         // Re-run tool_use/tool_result pairing repair after truncation, since
@@ -588,32 +591,63 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
-        // Run before_compaction hooks (fire-and-forget).
-        // The session JSONL already contains all messages on disk, so plugins
-        // can read sessionFile asynchronously and process in parallel with
-        // the compaction LLM call — no need to block or wait for after_compaction.
+        const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
+        const hookSessionKey = params.sessionKey?.trim() || `compact:${params.sessionId}`;
         const hookRunner = getGlobalHookRunner();
-        const hookCtx = {
-          agentId: params.sessionKey?.split(":")[0] ?? "main",
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-        };
+        const messageCountOriginal = originalMessages.length;
+        const messageCountBefore = session.messages.length;
+        let tokenCountOriginal: number | undefined;
+        let tokenCountBefore: number | undefined;
+        try {
+          tokenCountOriginal = 0;
+          for (const message of originalMessages) {
+            tokenCountOriginal += estimateTokens(message);
+          }
+        } catch {
+          tokenCountOriginal = undefined;
+        }
+        try {
+          tokenCountBefore = 0;
+          for (const message of session.messages) {
+            tokenCountBefore += estimateTokens(message);
+          }
+        } catch {
+          tokenCountBefore = undefined;
+        }
+        // TODO(#7175): Consider exposing full message snapshots or pre-compaction injection
+        // hooks; current events only report counts/metadata.
+        try {
+          const hookEvent = createInternalHookEvent("session", "compact:before", hookSessionKey, {
+            sessionId: params.sessionId,
+            missingSessionKey,
+            messageCount: messageCountBefore,
+            tokenCount: tokenCountBefore,
+            messageCountOriginal,
+            tokenCountOriginal,
+          });
+          await triggerInternalHook(hookEvent);
+        } catch (err) {
+          log.warn(`session:compact:before hook failed: ${String(err)}`);
+        }
         if (hookRunner?.hasHooks("before_compaction")) {
-          hookRunner
-            .runBeforeCompaction(
+          try {
+            await hookRunner.runBeforeCompaction(
               {
-                messageCount: preCompactionMessages.length,
-                compactingCount: limited.length,
-                messages: preCompactionMessages,
-                sessionFile: params.sessionFile,
+                messageCount: messageCountBefore,
+                tokenCount: tokenCountBefore,
+                messageCountOriginal,
+                tokenCountOriginal,
               },
-              hookCtx,
-            )
-            .catch((hookErr: unknown) => {
-              log.warn(`before_compaction hook failed: ${String(hookErr)}`);
-            });
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider,
+              },
+            );
+          } catch (err) {
+              log.warn(`before_compaction hook failed: ${String(err)}`);
+            }
         }
 
         const diagEnabled = log.isEnabled("debug");
@@ -648,25 +682,8 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
-        // Run after_compaction hooks (fire-and-forget).
-        // Also includes sessionFile for plugins that only need to act after
-        // compaction completes (e.g. analytics, cleanup).
-        if (hookRunner?.hasHooks("after_compaction")) {
-          hookRunner
-            .runAfterCompaction(
-              {
-                messageCount: session.messages.length,
-                tokenCount: tokensAfter,
-                compactedCount: limited.length - session.messages.length,
-                sessionFile: params.sessionFile,
-              },
-              hookCtx,
-            )
-            .catch((hookErr) => {
-              log.warn(`after_compaction hook failed: ${hookErr}`);
-            });
-        }
-
+        const messageCountAfter = session.messages.length;
+        const compactedCount = Math.max(0, messageCountBefore - messageCountAfter);
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
@@ -681,6 +698,43 @@ export async function compactEmbeddedPiSessionDirect(
               `delta.toolResultChars=${postMetrics.toolResultChars - preMetrics.toolResultChars} ` +
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
+        }
+        // TODO(#9611): Consider exposing compaction summaries or post-compaction injection;
+        // current events only report summary metadata.
+        try {
+          const hookEvent = createInternalHookEvent("session", "compact:after", hookSessionKey, {
+            sessionId: params.sessionId,
+            missingSessionKey,
+            messageCount: messageCountAfter,
+            tokenCount: tokensAfter,
+            compactedCount,
+            summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
+            tokensBefore: result.tokensBefore,
+            tokensAfter,
+            firstKeptEntryId: result.firstKeptEntryId,
+          });
+          await triggerInternalHook(hookEvent);
+        } catch (err) {
+          log.warn(`session:compact:after hook failed: ${String(err)}`);
+        }
+        if (hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: messageCountAfter,
+                tokenCount: tokensAfter,
+                compactedCount,
+              },
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider,
+              },
+            );
+          } catch (err) {
+            log.warn(`after_compaction hook failed: ${String(err)}`);
+          }
         }
         return {
           ok: true,
