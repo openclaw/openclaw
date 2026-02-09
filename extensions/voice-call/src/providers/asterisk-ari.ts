@@ -61,6 +61,7 @@ type CallState = {
   pendingMulaw?: Buffer;
   pendingSpeakText?: string;
   rtpPeer?: { address: string; port: number };
+  answeredEmitted?: boolean;
   rtpSeen?: boolean;
   rtpState?: { seq: number; ts: number; ssrc: number };
 };
@@ -298,6 +299,21 @@ export class AsteriskAriProvider implements VoiceCallProvider {
           });
         }
       }
+
+      if (evt.channel?.state?.toLowerCase() === "up") {
+        this.maybeEmitAnswered(state);
+      }
+    } else if (evt.type === "ChannelStateChange") {
+      const chId = evt.channel?.id;
+      const chState = evt.channel?.state?.toLowerCase();
+      if (!chId || chState !== "up") return;
+
+      for (const state of this.calls.values()) {
+        if (state.sipChannelId === chId) {
+          this.maybeEmitAnswered(state);
+          break;
+        }
+      }
     } else if (evt.type === "ChannelDtmfReceived") {
       const chId = evt.channel?.id;
       const digit = evt.digit;
@@ -336,7 +352,11 @@ export class AsteriskAriProvider implements VoiceCallProvider {
     await this.seedRtpPeer(state);
     this.wireRtp(state);
     await this.setupStt(state);
+  }
 
+  private maybeEmitAnswered(state: CallState): void {
+    if (state.answeredEmitted) return;
+    state.answeredEmitted = true;
     this.manager.processEvent(
       makeEvent({
         type: "call.answered",
@@ -344,7 +364,6 @@ export class AsteriskAriProvider implements VoiceCallProvider {
         providerCallId: state.providerCallId,
       }),
     );
-
     this.manager.processEvent(
       makeEvent({
         type: "call.active",
@@ -931,6 +950,11 @@ export class AsteriskAriProvider implements VoiceCallProvider {
         providerCallId: state.providerCallId,
         reason: "error",
       });
+      return;
+    }
+
+    if (evt.channel?.state?.toLowerCase() === "up") {
+      this.maybeEmitAnswered(state);
     }
   }
 
