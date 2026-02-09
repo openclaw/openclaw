@@ -290,8 +290,8 @@ export async function runWithModelFallback<T>(params: {
         code: described.code,
       });
 
-      // Mark auth profile failure for rate limits to trigger cooldown
-      if (described.reason === "rate_limit" && authStore) {
+      // Mark auth profile failure for rate limits and billing errors to trigger cooldown
+      if ((described.reason === "rate_limit" || described.reason === "billing") && authStore) {
         const profileIds = resolveAuthProfileOrder({
           cfg: params.cfg,
           store: authStore,
@@ -302,7 +302,7 @@ export async function runWithModelFallback<T>(params: {
           await markAuthProfileFailure({
             store: authStore,
             profileId: profileIds[0],
-            reason: "rate_limit",
+            reason: described.reason,
             cfg: params.cfg,
             agentDir: params.agentDir,
           });
