@@ -19,32 +19,23 @@ scripts/shell-helpers/
 5. **Installation Script** - One-line install
 6. **Full Documentation** - README with examples
 
-## 🚀 Next Steps:
+## 🚀 Current Status
 
-### Option A: Create a Pull Request (Recommended)
+**Branch pushed to fork!**
+
+- Remote: `fork` → `git@github.com:Olshansk/openclaw.git`
+- Branch: `feat/shell-helpers`
+- PR URL: https://github.com/Olshansk/openclaw/pull/new/feat/shell-helpers
+
+### Create PR Now
 
 ```bash
-# 1. Create a new branch
-git checkout -b feat/shell-helpers
+# Option 1: Use gh CLI
+gh pr create --title "feat: add shell helpers for OpenClaw development" \
+  --body-file scripts/shell-helpers/NEXT_STEPS.md
 
-# 2. Add the files
-git add scripts/shell-helpers/
-
-# 3. Commit
-git commit -m "feat: add shell helpers for easier Docker management
-
-- User-friendly commands (openclaw-start, openclaw-stop, etc.)
-- Colorful CLI with helpful guidance
-- Auto-configuration for tokens and devices
-- Installation script for easy setup
-- Comprehensive documentation
-
-Closes #[issue-number-if-exists]"
-
-# 4. Push to your fork (or create one first)
-git push origin feat/shell-helpers
-
-# 5. Open a PR on GitHub
+# Option 2: Use the GitHub web UI
+open https://github.com/Olshansk/openclaw/pull/new/feat/shell-helpers
 ```
 
 ### Option B: Test First, PR Later
