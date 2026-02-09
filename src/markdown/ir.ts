@@ -22,6 +22,7 @@ type MarkdownToken = {
   children?: MarkdownToken[];
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
+  tag?: string;
 };
 
 export type MarkdownStyle = "bold" | "italic" | "strikethrough" | "code" | "code_block" | "spoiler";
@@ -73,7 +74,7 @@ type TableState = {
 
 type RenderState = RenderTarget & {
   env: RenderEnv;
-  headingStyle: "none" | "bold";
+  headingStyle: "none" | "bold" | "hash";
   blockquotePrefix: string;
   enableSpoilers: boolean;
   tableMode: MarkdownTableMode;
@@ -84,7 +85,7 @@ type RenderState = RenderTarget & {
 export type MarkdownParseOptions = {
   linkify?: boolean;
   enableSpoilers?: boolean;
-  headingStyle?: "none" | "bold";
+  headingStyle?: "none" | "bold" | "hash";
   blockquotePrefix?: string;
   autolink?: boolean;
   /** How to render tables (off|bullets|code). Default: off. */
@@ -566,6 +567,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "heading_open":
         if (state.headingStyle === "bold") {
           openStyle(state, "bold");
+        } else if (state.headingStyle === "hash") {
+          const level = token.tag ? Number(token.tag.replace("h", "")) : 1;
+          const prefix = "#".repeat(Number.isFinite(level) ? level : 1) + " ";
+          appendText(state, prefix);
         }
         break;
       case "heading_close":

@@ -785,7 +785,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode, {
+            headingStyle: "hash",
+            blockquotePrefix: "> ",
+          });
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,

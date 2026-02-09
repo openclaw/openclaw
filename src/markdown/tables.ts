@@ -10,15 +10,24 @@ const MARKDOWN_STYLE_MARKERS = {
   code_block: { open: "```\n", close: "```" },
 } as const;
 
-export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
+export type ConvertMarkdownTablesOptions = {
+  headingStyle?: "none" | "bold" | "hash";
+  blockquotePrefix?: string;
+};
+
+export function convertMarkdownTables(
+  markdown: string,
+  mode: MarkdownTableMode,
+  options?: ConvertMarkdownTablesOptions,
+): string {
   if (!markdown || mode === "off") {
     return markdown;
   }
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,
     autolink: false,
-    headingStyle: "none",
-    blockquotePrefix: "",
+    headingStyle: options?.headingStyle ?? "none",
+    blockquotePrefix: options?.blockquotePrefix ?? "",
     tableMode: mode,
   });
   if (!hasTables) {

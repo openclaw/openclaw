@@ -201,7 +201,10 @@ export async function sendMessageMattermost(
       channel: "mattermost",
       accountId: account.accountId,
     });
-    message = core.channel.text.convertMarkdownTables(message, tableMode);
+    message = core.channel.text.convertMarkdownTables(message, tableMode, {
+      headingStyle: "hash",
+      blockquotePrefix: "> ",
+    });
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {
