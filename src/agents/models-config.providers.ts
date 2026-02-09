@@ -135,9 +135,11 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
     return [];
   }
   const { apiBase } = resolveOllamaBaseUrls();
+  // Remote/cloud endpoints often need longer; local is fast
+  const timeoutMs = process.env.OLLAMA_HOST?.trim() ? 15000 : 5000;
   try {
     const response = await fetch(`${apiBase}/api/tags`, {
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       console.warn(`Failed to discover Ollama models: ${response.status}`);
@@ -168,11 +170,12 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
       };
     });
   } catch (error) {
+    const rawCause = error instanceof Error ? error.cause : undefined;
     const cause =
-      error instanceof Error && error.cause instanceof Error
-        ? ` (${error.cause.message})`
-        : error instanceof Error && error.cause
-          ? ` (${String(error.cause)})`
+      rawCause instanceof Error
+        ? ` (${rawCause.message})`
+        : typeof rawCause === "string"
+          ? ` (${rawCause})`
           : "";
     console.warn(
       `Failed to discover Ollama models: ${String(error)}${cause}. Is Ollama reachable at ${apiBase}? (Set OLLAMA_HOST for a remote/cloud instance.)`,

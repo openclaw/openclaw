@@ -90,7 +90,7 @@ export OLLAMA_API_KEY="ollama-local"
 
 ### Ollama Cloud or remote (OLLAMA_HOST)
 
-To use **Ollama Cloud** or any remote Ollama API, set `OLLAMA_HOST` to the base URL. Discovery and all requests then use that endpoint instead of localhost:
+To use **Ollama Cloud** or any remote Ollama API, set `OLLAMA_HOST` to the base URL. Discovery and all requests then use that endpoint instead of localhost. When `OLLAMA_HOST` is set, discovery uses a longer timeout (15s vs 5s for local) to allow for network latency.
 
 ```bash
 export OLLAMA_API_KEY="your-cloud-api-key"
