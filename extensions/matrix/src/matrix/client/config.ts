@@ -22,8 +22,16 @@ export function resolveMatrixConfigForAccount(
   const normalizedAccountId = normalizeAccountId(accountId);
   const matrixBase = cfg.channels?.matrix ?? {};
 
-  // Try to get account-specific config first
-  const accountConfig = matrixBase.accounts?.[normalizedAccountId];
+  // Try to get account-specific config first (direct lookup, then case-insensitive fallback)
+  let accountConfig = matrixBase.accounts?.[normalizedAccountId];
+  if (!accountConfig && matrixBase.accounts) {
+    for (const key of Object.keys(matrixBase.accounts)) {
+      if (normalizeAccountId(key) === normalizedAccountId) {
+        accountConfig = matrixBase.accounts[key];
+        break;
+      }
+    }
+  }
 
   // Merge: account-specific values override top-level values
   // For DEFAULT_ACCOUNT_ID with no accounts, use top-level directly

@@ -18,7 +18,10 @@ function listConfiguredAccountIds(cfg: CoreConfig): string[] {
   if (!accounts || typeof accounts !== "object") {
     return [];
   }
-  return Object.keys(accounts).filter(Boolean);
+  // Normalize keys so listing and resolution use the same semantics
+  return Object.keys(accounts)
+    .filter(Boolean)
+    .map((id) => normalizeAccountId(id));
 }
 
 export function listMatrixAccountIds(cfg: CoreConfig): string[] {
@@ -43,7 +46,18 @@ function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig 
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
-  return accounts[accountId] as MatrixConfig | undefined;
+  // Direct lookup first (fast path for already-normalized keys)
+  if (accounts[accountId]) {
+    return accounts[accountId] as MatrixConfig;
+  }
+  // Fall back to case-insensitive match (user may have mixed-case keys in config)
+  const normalized = normalizeAccountId(accountId);
+  for (const key of Object.keys(accounts)) {
+    if (normalizeAccountId(key) === normalized) {
+      return accounts[key] as MatrixConfig;
+    }
+  }
+  return undefined;
 }
 
 export function resolveMatrixAccount(params: {
