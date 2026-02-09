@@ -4,6 +4,38 @@ import type { SessionEntry } from "../config/sessions.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 describe("gateway sessions patch", () => {
+  test("persists thinkingLevel=off (does not clear)", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { thinkingLevel: "off" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.thinkingLevel).toBe("off");
+  });
+
+  test("clears thinkingLevel when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": { thinkingLevel: "low" } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { thinkingLevel: null },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.thinkingLevel).toBeUndefined();
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
