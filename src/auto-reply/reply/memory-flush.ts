@@ -85,6 +85,14 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  // Guard: never trigger memory flush when context usage is below 5% of the
+  // window.  After a compaction the session may have very few tokens; without
+  // this floor the flush can re-trigger immediately if the compaction-count
+  // guard fails due to a persistence timing issue (see #12170).
+  const minFlushTokens = Math.max(1, Math.floor(contextWindow * 0.05));
+  if (totalTokens < minFlushTokens) {
+    return false;
+  }
   const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
   const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
