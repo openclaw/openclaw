@@ -242,6 +242,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
+      this.logScopeDenied(opts?.sessionKey);
       return [];
     }
     const trimmed = query.trim();
@@ -693,6 +694,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return fallback === "allow";
   }
 
+  private logScopeDenied(sessionKey?: string): void {
+    const channel = this.deriveChannelFromKey(sessionKey) ?? "unknown";
+    const chatType = this.deriveChatTypeFromKey(sessionKey) ?? "unknown";
+    const key = sessionKey?.trim() || "<none>";
+    log.warn(
+      `qmd search denied by scope (channel=${channel}, chatType=${chatType}, session=${key})`,
+    );
+  }
+
   private deriveChannelFromKey(key?: string) {
     if (!key) {
       return undefined;
@@ -704,7 +714,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const parts = normalized.split(":").filter(Boolean);
     if (
       parts.length >= 2 &&
-      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "dm")
+      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
     ) {
       return parts[0]?.toLowerCase();
     }
