@@ -1,4 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
@@ -19,12 +20,11 @@ export function ensureNodeRuntime() {
 
 export function resolveMediaMaxBytes(accountId?: string): number | undefined {
   const cfg = getCore().config.loadConfig() as CoreConfig;
-  // Check account-specific config first
-  if (accountId) {
-    const accountConfig = cfg.channels?.matrix?.accounts?.[accountId];
-    if (typeof accountConfig?.mediaMaxMb === "number") {
-      return accountConfig.mediaMaxMb * 1024 * 1024;
-    }
+  // Check account-specific config first (normalize to ensure consistent keying)
+  const normalized = normalizeAccountId(accountId);
+  const accountConfig = cfg.channels?.matrix?.accounts?.[normalized];
+  if (typeof accountConfig?.mediaMaxMb === "number") {
+    return accountConfig.mediaMaxMb * 1024 * 1024;
   }
   // Fall back to top-level config
   if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
