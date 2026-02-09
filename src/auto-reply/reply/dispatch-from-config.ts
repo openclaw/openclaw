@@ -19,36 +19,117 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 /**
- * Known OpenClaw routing prefixes that should be stripped before passing
- * identifiers to hook consumers (e.g. DB ingestion plugins).
- *
- * Order matters: longer/more-specific prefixes must come first so that
- * "discord:channel:123" strips to "123" rather than "channel:123".
+ * Known platform sources in OpenClaw routing addresses.
  */
-const ROUTING_PREFIXES = [
-  "discord:channel:",
-  "discord:user:",
-  "discord:",
-  "channel:",
-  "user:",
-] as const;
+const KNOWN_SOURCES: ReadonlySet<string> = new Set([
+  "discord",
+  "telegram",
+  "whatsapp",
+  "slack",
+  "signal",
+  "imessage",
+  "tlon",
+  "matrix",
+  "web",
+]);
 
-/** Strip OpenClaw routing prefixes, returning a canonical platform id. */
-export function stripRoutingPrefix(value: string): string {
-  for (const prefix of ROUTING_PREFIXES) {
-    if (value.startsWith(prefix)) {
-      return value.slice(prefix.length);
-    }
+/**
+ * Known method/type segments in routing addresses.
+ */
+const KNOWN_METHODS: ReadonlySet<string> = new Set(["channel", "user", "group", "room"]);
+
+type ParsedAddress = {
+  source?: string;
+  method?: string;
+  id: string;
+};
+
+/**
+ * Parse a raw OpenClaw routing address into its constituent parts.
+ *
+ * Recognized patterns (tested in order):
+ *   `<source>:<method>:<id>`  — e.g. `"discord:channel:123"`
+ *   `<source>:<id>`           — e.g. `"telegram:999"`
+ *   `<method>:<id>`           — e.g. `"channel:123"`, `"user:456"`
+ *   `<id>`                    — e.g. `"123@g.us"`, bare snowflake
+ */
+export function parseRoutingAddress(raw: string): ParsedAddress {
+  const firstColon = raw.indexOf(":");
+  if (firstColon === -1) {
+    return { id: raw };
   }
-  return value;
+
+  const head = raw.slice(0, firstColon).toLowerCase();
+  const tail = raw.slice(firstColon + 1);
+
+  if (KNOWN_SOURCES.has(head)) {
+    const secondColon = tail.indexOf(":");
+    if (secondColon !== -1) {
+      const head2 = tail.slice(0, secondColon).toLowerCase();
+      const tail2 = tail.slice(secondColon + 1);
+      if (KNOWN_METHODS.has(head2) && tail2) {
+        return { source: head, method: head2, id: tail2 };
+      }
+    }
+    if (tail) {
+      return { source: head, id: tail };
+    }
+    return { id: raw };
+  }
+
+  if (KNOWN_METHODS.has(head) && tail) {
+    return { method: head, id: tail };
+  }
+
+  return { id: raw };
 }
 
-function normalizeHookConversationId(raw: unknown): string | undefined {
+/** Map ChatType to canonical method segment. */
+function chatTypeToMethod(chatType: string | undefined): string {
+  switch (chatType) {
+    case "channel":
+      return "channel";
+    case "group":
+      return "group";
+    case "direct":
+    default:
+      return "user";
+  }
+}
+
+/**
+ * Convert a raw routing address to canonical `<source>:<method>:<id>` format.
+ *
+ * The canonical format ensures consistent identifiers for hook consumers
+ * regardless of which platform or routing path produced the address:
+ *   - `discord:channel:1467101506506592472`
+ *   - `telegram:user:999`
+ *   - `whatsapp:group:123@g.us`
+ *
+ * Falls back to context (platform source, chat type) for any missing parts.
+ */
+export function toCanonicalAddress(
+  raw: unknown,
+  context: { source?: string; chatType?: string },
+): string | undefined {
   if (raw == null) {
     return undefined;
   }
-  const stripped = stripRoutingPrefix(String(raw).trim());
-  return stripped || undefined;
+  const trimmed = String(raw).trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = parseRoutingAddress(trimmed);
+  const source = (parsed.source ?? context.source ?? "unknown").toLowerCase();
+  const method = (parsed.method ?? chatTypeToMethod(context.chatType)).toLowerCase();
+  const id = parsed.id;
+
+  if (!id) {
+    return undefined;
+  }
+
+  return `${source}:${method}:${id}`;
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -197,24 +278,26 @@ export async function dispatchReplyFromConfig(params: {
             ? ctx.Body
             : "";
     const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
-    const conversationId = normalizeHookConversationId(
+    const canonicalCtx = { source: channelId, chatType: ctx.ChatType };
+    const conversationId = toCanonicalAddress(
       ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined,
+      canonicalCtx,
     );
 
     void hookRunner
       .runMessageReceived(
         {
-          from: ctx.From ? stripRoutingPrefix(ctx.From) : "",
+          from: ctx.From ? (toCanonicalAddress(ctx.From, canonicalCtx) ?? "") : "",
           content,
           timestamp,
           metadata: {
-            to: ctx.To ? stripRoutingPrefix(ctx.To) : ctx.To,
+            to: ctx.To ? toCanonicalAddress(ctx.To, canonicalCtx) : ctx.To,
             provider: ctx.Provider,
             surface: ctx.Surface,
             threadId: ctx.MessageThreadId,
             originatingChannel: ctx.OriginatingChannel,
             originatingTo: ctx.OriginatingTo
-              ? stripRoutingPrefix(ctx.OriginatingTo)
+              ? toCanonicalAddress(ctx.OriginatingTo, canonicalCtx)
               : ctx.OriginatingTo,
             messageId: messageIdForHook,
             senderId: ctx.SenderId,
