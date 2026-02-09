@@ -4,6 +4,7 @@ import {
   collectWhatsAppStatusIssues,
   createActionGate,
   DEFAULT_ACCOUNT_ID,
+  escapeRegExp,
   formatPairingApproveHint,
   getChatChannelMeta,
   isWhatsAppGroupJid,
@@ -32,8 +33,6 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("whatsapp");
-
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
