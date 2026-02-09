@@ -20,9 +20,11 @@ const ensureAuthProfileStore = vi.hoisted(() =>
   })),
 );
 const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
+const upsertAuthProfile = vi.hoisted(() => vi.fn());
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
+  upsertAuthProfile,
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
@@ -67,6 +69,53 @@ describe("promptDefaultModel", () => {
     expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
       true,
     );
+  });
+
+  it("supports configuring vLLM during onboarding", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => {
+      const vllm = params.options.find((opt: { value: string }) => opt.value === "__vllm__");
+      return (vllm?.value ?? "") as never;
+    });
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("http://127.0.0.1:8000/v1")
+      .mockResolvedValueOnce("sk-vllm-test")
+      .mockResolvedValueOnce("meta-llama/Meta-Llama-3-8B-Instruct");
+    const prompter = makePrompter({ select, text: text as never });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      includeVllm: true,
+      ignoreAllowlist: true,
+    });
+
+    expect(upsertAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "vllm:default",
+        credential: expect.objectContaining({ provider: "vllm" }),
+      }),
+    );
+    expect(result.model).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
+    expect(result.config?.models?.providers?.vllm).toMatchObject({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      api: "openai-completions",
+      apiKey: "VLLM_API_KEY",
+      models: [
+        { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
+      ],
+    });
   });
 });
 
