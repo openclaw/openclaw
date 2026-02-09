@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$LogFile = "$env:TEMP\moltbot-update-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+$LogFile = "$env:TEMP\openclaw-update-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 
 function Log {
     param([string]$msg)
@@ -9,7 +9,7 @@ function Log {
     Add-Content -Path $LogFile -Value $line
 }
 
-Log "[Moltbot] Stable Updater starting"
+Log "[OpenClaw] Stable Updater starting"
 Log "Log file: $LogFile"
 
 # Refresh PATH for scheduled task context (npm/node may not be in default PATH)
@@ -31,7 +31,7 @@ try {
             $env:Path = "$npmDir;$env:Path"
         }
     }
-    $updateOut = node moltbot.mjs update --channel stable --yes --no-restart 2>&1 | Out-String
+    $updateOut = node openclaw.mjs update --channel stable --yes --no-restart 2>&1 | Out-String
     Add-Content -Path $LogFile -Value $updateOut
     Write-Host $updateOut
     if ($LASTEXITCODE -eq 0) {
@@ -46,7 +46,7 @@ try {
 # === Phase 2: Doctor ===
 Log "--- Phase 2: Doctor ---"
 try {
-    $doctorOut = node moltbot.mjs doctor 2>&1 | Out-String
+    $doctorOut = node openclaw.mjs doctor 2>&1 | Out-String
     Add-Content -Path $LogFile -Value $doctorOut
 
     if ($doctorOut -match "(ERROR|FAIL|CRITICAL)") {
@@ -61,7 +61,7 @@ try {
 # === Phase 3: Gateway Security Check ===
 Log "--- Phase 3: Gateway Security ---"
 try {
-    $configPath = Join-Path $env:USERPROFILE ".moltbot\moltbot.json"
+    $configPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
     $configRaw = Get-Content $configPath -Raw | ConvertFrom-Json
     $gw = $configRaw.gateway
     $issues = @()
@@ -118,12 +118,12 @@ try {
 # === Phase 4: Restart Gateway (if update succeeded) ===
 Log "--- Phase 4: Restart ---"
 try {
-    $svc = Get-ScheduledTask -TaskName "Moltbot Gateway" -ErrorAction SilentlyContinue
+    $svc = Get-ScheduledTask -TaskName "OpenClaw Gateway" -ErrorAction SilentlyContinue
     if ($svc -and $svc.State -eq "Running") {
         Log "  Gateway task is running [OK]"
     } elseif ($svc) {
         Log "  Gateway task state: $($svc.State) -- attempting start"
-        Start-ScheduledTask -TaskName "Moltbot Gateway"
+        Start-ScheduledTask -TaskName "OpenClaw Gateway"
         Log "  Gateway task started"
     } else {
         Log "  [WARN] Gateway scheduled task not found"
@@ -134,4 +134,4 @@ try {
 
 # === Summary ===
 Log "--- Done ---"
-Log "[Moltbot] Update routine complete. Log: $LogFile"
+Log "[OpenClaw] Update routine complete. Log: $LogFile"

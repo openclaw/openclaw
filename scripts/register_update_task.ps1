@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$TaskName = "MoltbotStableUpdate"
+$TaskName = "OpenClawStableUpdate"
 $ScriptPath = "C:\MAIBOT\scripts\update_stable.ps1"
 
 Write-Host "Registering scheduled task '$TaskName'..."
@@ -12,7 +12,7 @@ try {
     # Unregister if exists (to update)
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 
-    Register-ScheduledTask -TaskName $TaskName -Trigger $Trigger -Action $Action -Description "Updates Moltbot to latest stable version weekly"
+    Register-ScheduledTask -TaskName $TaskName -Trigger $Trigger -Action $Action -Description "Updates OpenClaw to latest stable version weekly"
     
     Write-Host "✅ Task registered successfully." -ForegroundColor Green
 }

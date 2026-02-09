@@ -1,5 +1,5 @@
 // Claude Code → MAIBOT Discord DM notification
-// Receives hook JSON from stdin, sends Discord DM via moltbot CLI
+// Receives hook JSON from stdin, sends Discord DM via openclaw CLI
 
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
@@ -21,7 +21,9 @@ process.stdin.on("end", () => {
   const event = input.hook_event_name || "unknown";
 
   // Prevent infinite loop on Stop event
-  if (event === "Stop" && input.stop_hook_active) process.exit(0);
+  if (event === "Stop" && input.stop_hook_active) {
+    process.exit(0);
+  }
 
   const messages = {
     Stop: "Claude Code 응답 완료",
@@ -31,11 +33,13 @@ process.stdin.on("end", () => {
   };
 
   const msg = messages[event];
-  if (!msg) process.exit(0);
+  if (!msg) {
+    process.exit(0);
+  }
 
   execFile(
     "node",
-    ["moltbot.mjs", "message", "send", "--channel", CHANNEL, "--target", TARGET, "--message", msg],
+    ["openclaw.mjs", "message", "send", "--channel", CHANNEL, "--target", TARGET, "--message", msg],
     { cwd: MAIBOT_DIR },
     () => process.exit(0),
   );
