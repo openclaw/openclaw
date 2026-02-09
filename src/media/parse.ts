@@ -14,7 +14,29 @@ function cleanCandidate(raw: string) {
   return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
 }
 
-function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const HAS_FILE_EXT = /\.\w{1,10}$/;
+
+// Recognize local file path patterns. Security validation is deferred to the
+// load layer (loadWebMedia / resolveSandboxedMediaSource) which has the context
+// needed to enforce sandbox roots and allowed directories.
+function isLikelyLocalPath(candidate: string): boolean {
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+function isValidMedia(
+  candidate: string,
+  opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
+) {
   if (!candidate) {
     return false;
   }
@@ -28,8 +50,17 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return true;
   }
 
-  // Local paths: only allow safe relative paths starting with ./ that do not traverse upwards.
-  return candidate.startsWith("./") && !candidate.includes("..");
+  if (isLikelyLocalPath(candidate)) {
+    return true;
+  }
+
+  // Accept bare filenames (e.g. "image.png") only when the caller opts in.
+  // This avoids treating space-split path fragments as separate media items.
+  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
+    return true;
+  }
+
+  return false;
 }
 
 function unwrapQuoted(value: string): string | undefined {
@@ -128,11 +159,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        trimmedPayload.startsWith("/") ||
-        trimmedPayload.startsWith("./") ||
-        trimmedPayload.startsWith("../") ||
-        trimmedPayload.startsWith("~") ||
-        trimmedPayload.startsWith("file://");
+        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&
@@ -152,7 +179,7 @@ export function splitMediaFromOutput(raw: string): {
 
       if (!hasValidMedia) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
-        if (isValidMedia(fallback, { allowSpaces: true })) {
+        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;
           foundMediaToken = true;
