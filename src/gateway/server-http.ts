@@ -158,10 +158,12 @@ export function createHooksRequestHandler(
     }
 
     const token = extractHookToken(req);
+    const tokenBuf = Buffer.from(token ?? "");
+    const expectedBuf = Buffer.from(hooksConfig.token);
     if (
       !token ||
-      token.length !== hooksConfig.token.length ||
-      !timingSafeEqual(Buffer.from(token), Buffer.from(hooksConfig.token))
+      tokenBuf.length !== expectedBuf.length ||
+      !timingSafeEqual(tokenBuf, expectedBuf)
     ) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
