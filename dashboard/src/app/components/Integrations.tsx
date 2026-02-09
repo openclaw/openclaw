@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { X, MessageSquare, Wrench, Bell, Check, Eye, EyeOff, ChevronRight, Globe, Smartphone, Calendar, Search, Monitor, MapPin, Camera } from "lucide-react";
+import { X, MessageSquare, Wrench, Bell, Check, Eye, EyeOff, ChevronRight, Globe, Smartphone, Calendar, Search, Monitor, MapPin, Camera, Plus, Trash2, Clock, Play, Pause } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface IntegrationsProps {
@@ -123,6 +123,304 @@ const TOOLS = [
     category: "messaging"
   },
 ];
+
+// Reminders Tab Component
+interface Reminder {
+  id: string;
+  name: string;
+  message: string;
+  schedule: string;
+  scheduleType: "once" | "daily" | "weekly" | "custom";
+  enabled: boolean;
+  createdAt: number;
+}
+
+const RemindersTab: React.FC<{ isDark: boolean }> = ({ isDark }) => {
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newReminder, setNewReminder] = useState({
+    name: "",
+    message: "",
+    scheduleType: "once" as "once" | "daily" | "weekly" | "custom",
+    time: "",
+    date: "",
+  });
+
+  // Load reminders from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("easyhub_reminders");
+    if (saved) {
+      setReminders(JSON.parse(saved));
+    }
+  }, []);
+
+  // Save reminders to localStorage
+  const saveReminders = (updated: Reminder[]) => {
+    setReminders(updated);
+    localStorage.setItem("easyhub_reminders", JSON.stringify(updated));
+  };
+
+  const addReminder = () => {
+    if (!newReminder.message.trim()) return;
+    
+    const reminder: Reminder = {
+      id: Date.now().toString(),
+      name: newReminder.name || newReminder.message.slice(0, 30),
+      message: newReminder.message,
+      schedule: newReminder.scheduleType === "once" 
+        ? `${newReminder.date} ${newReminder.time}`
+        : newReminder.scheduleType === "daily"
+          ? `Daily at ${newReminder.time}`
+          : newReminder.scheduleType === "weekly"
+            ? `Weekly at ${newReminder.time}`
+            : newReminder.time,
+      scheduleType: newReminder.scheduleType,
+      enabled: true,
+      createdAt: Date.now(),
+    };
+    
+    saveReminders([...reminders, reminder]);
+    setNewReminder({ name: "", message: "", scheduleType: "once", time: "", date: "" });
+    setShowAddForm(false);
+  };
+
+  const toggleReminder = (id: string) => {
+    const updated = reminders.map(r => 
+      r.id === id ? { ...r, enabled: !r.enabled } : r
+    );
+    saveReminders(updated);
+  };
+
+  const deleteReminder = (id: string) => {
+    saveReminders(reminders.filter(r => r.id !== id));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between mb-4">
+        <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-600"}`}>
+          Schedule reminders and recurring tasks.
+        </p>
+        <button
+          onClick={() => setShowAddForm(true)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-[#2dd4bf] text-black hover:bg-[#5eead4] transition-colors"
+        >
+          <Plus size={16} />
+          Add Reminder
+        </button>
+      </div>
+
+      {/* Add Reminder Form */}
+      <AnimatePresence>
+        {showAddForm && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className={`p-4 rounded-xl border mb-4 ${
+              isDark ? "border-[#2dd4bf]/30 bg-[#2dd4bf]/5" : "border-[#2dd4bf]/50 bg-[#2dd4bf]/5"
+            }`}
+          >
+            <div className="space-y-3">
+              <div>
+                <label className={`block text-sm font-medium mb-1.5 ${
+                  isDark ? "text-gray-300" : "text-gray-700"
+                }`}>
+                  Reminder Message *
+                </label>
+                <textarea
+                  value={newReminder.message}
+                  onChange={(e) => setNewReminder(prev => ({ ...prev, message: e.target.value }))}
+                  placeholder="What do you want to be reminded about?"
+                  rows={2}
+                  className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                    isDark
+                      ? "bg-black/30 border-white/10 text-white placeholder-gray-500"
+                      : "bg-white border-gray-200 text-gray-900 placeholder-gray-400"
+                  } outline-none focus:border-[#2dd4bf]/50`}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={`block text-sm font-medium mb-1.5 ${
+                    isDark ? "text-gray-300" : "text-gray-700"
+                  }`}>
+                    Schedule Type
+                  </label>
+                  <select
+                    value={newReminder.scheduleType}
+                    onChange={(e) => setNewReminder(prev => ({ 
+                      ...prev, 
+                      scheduleType: e.target.value as any 
+                    }))}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                      isDark
+                        ? "bg-black/30 border-white/10 text-white"
+                        : "bg-white border-gray-200 text-gray-900"
+                    } outline-none focus:border-[#2dd4bf]/50`}
+                  >
+                    <option value="once">One-time</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className={`block text-sm font-medium mb-1.5 ${
+                    isDark ? "text-gray-300" : "text-gray-700"
+                  }`}>
+                    Time
+                  </label>
+                  <input
+                    type="time"
+                    value={newReminder.time}
+                    onChange={(e) => setNewReminder(prev => ({ ...prev, time: e.target.value }))}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                      isDark
+                        ? "bg-black/30 border-white/10 text-white"
+                        : "bg-white border-gray-200 text-gray-900"
+                    } outline-none focus:border-[#2dd4bf]/50`}
+                  />
+                </div>
+              </div>
+
+              {newReminder.scheduleType === "once" && (
+                <div>
+                  <label className={`block text-sm font-medium mb-1.5 ${
+                    isDark ? "text-gray-300" : "text-gray-700"
+                  }`}>
+                    Date
+                  </label>
+                  <input
+                    type="date"
+                    value={newReminder.date}
+                    onChange={(e) => setNewReminder(prev => ({ ...prev, date: e.target.value }))}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                      isDark
+                        ? "bg-black/30 border-white/10 text-white"
+                        : "bg-white border-gray-200 text-gray-900"
+                    } outline-none focus:border-[#2dd4bf]/50`}
+                  />
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+                    isDark ? "text-gray-400 hover:bg-white/5" : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={addReminder}
+                  disabled={!newReminder.message.trim() || !newReminder.time}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium bg-[#2dd4bf] text-black hover:bg-[#5eead4] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Add Reminder
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Reminders List */}
+      {reminders.length === 0 && !showAddForm ? (
+        <div className={`p-8 rounded-xl border text-center ${
+          isDark ? "border-white/10 bg-white/5" : "border-gray-200 bg-gray-50"
+        }`}>
+          <Clock size={40} className={`mx-auto mb-3 ${
+            isDark ? "text-gray-500" : "text-gray-400"
+          }`} />
+          <h3 className={`font-medium mb-2 ${isDark ? "text-white" : "text-gray-900"}`}>
+            No Reminders Yet
+          </h3>
+          <p className={`text-sm ${isDark ? "text-gray-500" : "text-gray-500"}`}>
+            Click "Add Reminder" to create your first scheduled task.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {reminders.map((reminder) => (
+            <div
+              key={reminder.id}
+              className={`flex items-center justify-between p-4 rounded-xl border transition-all ${
+                reminder.enabled
+                  ? isDark
+                    ? "border-[#2dd4bf]/30 bg-[#2dd4bf]/5"
+                    : "border-[#2dd4bf]/50 bg-[#2dd4bf]/5"
+                  : isDark
+                    ? "border-white/10 opacity-60"
+                    : "border-gray-200 opacity-60"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${
+                  reminder.enabled
+                    ? "bg-[#2dd4bf]/20 text-[#2dd4bf]"
+                    : isDark
+                      ? "bg-white/5 text-gray-500"
+                      : "bg-gray-100 text-gray-400"
+                }`}>
+                  <Bell size={18} />
+                </div>
+                <div>
+                  <div className={`font-medium text-sm ${
+                    isDark ? "text-white" : "text-gray-900"
+                  }`}>
+                    {reminder.name}
+                  </div>
+                  <div className={`text-xs ${
+                    isDark ? "text-gray-500" : "text-gray-500"
+                  }`}>
+                    {reminder.schedule}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => toggleReminder(reminder.id)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    isDark ? "hover:bg-white/5" : "hover:bg-gray-100"
+                  }`}
+                  title={reminder.enabled ? "Pause" : "Resume"}
+                >
+                  {reminder.enabled ? (
+                    <Pause size={16} className={isDark ? "text-gray-400" : "text-gray-500"} />
+                  ) : (
+                    <Play size={16} className={isDark ? "text-gray-400" : "text-gray-500"} />
+                  )}
+                </button>
+                <button
+                  onClick={() => deleteReminder(reminder.id)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    isDark ? "hover:bg-red-500/20 text-gray-400 hover:text-red-400" : "hover:bg-red-50 text-gray-500 hover:text-red-500"
+                  }`}
+                  title="Delete"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Tip */}
+      <div className={`p-3 rounded-lg mt-4 ${
+        isDark ? "bg-white/5" : "bg-gray-50"
+      }`}>
+        <p className={`text-xs ${isDark ? "text-gray-500" : "text-gray-500"}`}>
+          💡 <strong>Tip:</strong> You can also create reminders in chat by saying "remind me in 30 minutes to..." or "remind me tomorrow at 9am to..."
+        </p>
+      </div>
+    </div>
+  );
+};
 
 export const Integrations: React.FC<IntegrationsProps> = ({ isOpen, onClose, theme }) => {
   const isDark = theme === "dark";
@@ -461,28 +759,7 @@ export const Integrations: React.FC<IntegrationsProps> = ({ isOpen, onClose, the
           )}
 
           {activeTab === "reminders" && (
-            <div className="space-y-4">
-              <p className={`text-sm mb-4 ${isDark ? "text-gray-400" : "text-gray-600"}`}>
-                Schedule reminders and recurring tasks.
-              </p>
-              
-              <div className={`p-6 rounded-xl border text-center ${
-                isDark ? "border-white/10 bg-white/5" : "border-gray-200 bg-gray-50"
-              }`}>
-                <Calendar size={40} className={`mx-auto mb-3 ${
-                  isDark ? "text-gray-500" : "text-gray-400"
-                }`} />
-                <h3 className={`font-medium mb-2 ${isDark ? "text-white" : "text-gray-900"}`}>
-                  Coming Soon
-                </h3>
-                <p className={`text-sm ${isDark ? "text-gray-500" : "text-gray-500"}`}>
-                  Manage your reminders and scheduled tasks here.
-                </p>
-                <p className={`text-xs mt-3 ${isDark ? "text-gray-600" : "text-gray-400"}`}>
-                  For now, use chat commands like "remind me in 30 minutes to..."
-                </p>
-              </div>
-            </div>
+            <RemindersTab isDark={isDark} />
           )}
         </div>
 
