@@ -149,6 +149,11 @@ async function checkAndProcessChannel(
     }
 
     if (isFromBot) {
+      // Lifecycle DMs (shutdown/online notifications) aren't real responses;
+      // skip them so we don't wrongly mark a user message as answered.
+      if (isLifecycleMessage(msg.content)) {
+        continue;
+      }
       // Bot has responded, so any earlier user messages are answered
       botRespondedAfter = true;
       break;
@@ -180,4 +185,10 @@ async function checkAndProcessChannel(
   await messageHandler(event, client as Parameters<DiscordMessageHandler>[1]);
 
   return true;
+}
+
+const LIFECYCLE_MESSAGES = new Set(["*Back online.*", "*Shutting down...*"]);
+
+function isLifecycleMessage(content: string | undefined): boolean {
+  return !!content && LIFECYCLE_MESSAGES.has(content.trim());
 }
