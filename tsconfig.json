@@ -16,8 +16,12 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "es2023",
-    "useDefineForClassFields": false
+    "useDefineForClassFields": false,
+    "paths": {
+      "*": ["./*"],
+      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"]
+    }
   },
-  "include": ["src/**/*", "ui/**/*"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  "include": ["src/**/*", "ui/**/*", "extensions/**/*"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "extensions/**/*.test.ts"]
 }

@@ -212,7 +212,8 @@ async function createRecord(
 ) {
   const res = await client.bitable.appTableRecord.create({
     path: { app_token: appToken, table_id: tableId },
-    data: { fields },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    data: { fields: fields as any },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -232,7 +233,8 @@ async function updateRecord(
 ) {
   const res = await client.bitable.appTableRecord.update({
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
-    data: { fields },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    data: { fields: fields as any },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);

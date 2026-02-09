@@ -6,9 +6,11 @@ import {
   logInboundDrop,
   logTypingFailure,
   resolveControlCommandGate,
+  type PluginRuntime,
   type RuntimeEnv,
+  type RuntimeLogger,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig, ReplyToMode } from "../../types.js";
+import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import {
   formatPollAsText,
@@ -37,34 +39,14 @@ import { EventType, RelationType } from "./types.js";
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
-  core: {
-    logging: {
-      shouldLogVerbose: () => boolean;
-    };
-    channel: (typeof import("openclaw/plugin-sdk"))["channel"];
-    system: {
-      enqueueSystemEvent: (
-        text: string,
-        meta: { sessionKey?: string | null; contextKey?: string | null },
-      ) => void;
-    };
-  };
+  core: PluginRuntime;
   cfg: CoreConfig;
   runtime: RuntimeEnv;
-  logger: {
-    info: (message: string | Record<string, unknown>, ...meta: unknown[]) => void;
-    warn: (meta: Record<string, unknown>, message: string) => void;
-  };
+  logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
-  roomsConfig: CoreConfig["channels"] extends { matrix?: infer MatrixConfig }
-    ? MatrixConfig extends { groups?: infer Groups }
-      ? Groups
-      : Record<string, unknown> | undefined
-    : Record<string, unknown> | undefined;
-  mentionRegexes: ReturnType<
-    (typeof import("openclaw/plugin-sdk"))["channel"]["mentions"]["buildMentionRegexes"]
-  >;
+  roomsConfig: Record<string, MatrixRoomConfig> | undefined;
+  mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -121,7 +103,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const isPollEvent = isPollStartType(eventType);
-      const locationContent = event.content as LocationMessageEventContent;
+      const locationContent = event.content as unknown as LocationMessageEventContent;
       const isLocationEvent =
         eventType === EventType.Location ||
         (eventType === EventType.RoomMessage && locationContent.msgtype === EventType.Location);
@@ -159,9 +141,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const roomName = roomInfo.name;
       const roomAliases = [roomInfo.canonicalAlias ?? "", ...roomInfo.altAliases].filter(Boolean);
 
-      let content = event.content as RoomMessageEventContent;
+      let content = event.content as unknown as RoomMessageEventContent;
       if (isPollEvent) {
-        const pollStartContent = event.content as PollStartContent;
+        const pollStartContent = event.content as unknown as PollStartContent;
         const pollSummary = parsePollStartContent(pollStartContent);
         if (pollSummary) {
           pollSummary.eventId = event.event_id ?? "";
@@ -435,7 +417,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         hasControlCommandInMessage;
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
-        logger.info({ roomId, reason: "no-mention" }, "skipping room message");
+        logger.info("skipping room message", { roomId, reason: "no-mention" });
         return;
       }
 
@@ -523,14 +505,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
           : undefined,
         onRecordError: (err) => {
-          logger.warn(
-            {
-              error: String(err),
-              storePath,
-              sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-            },
-            "failed updating session meta",
-          );
+          logger.warn("failed updating session meta", {
+            error: String(err),
+            storePath,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+          });
         },
       });
 

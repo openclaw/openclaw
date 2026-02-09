@@ -55,7 +55,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     if (!core.logging.shouldLogVerbose()) {
       return;
     }
-    logger.debug(message);
+    logger.debug?.(message);
   };
 
   const normalizeUserEntry = (raw: string) =>
@@ -75,13 +75,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   ): Promise<string[]> => {
     let allowList = list ?? [];
     if (allowList.length === 0) {
-      return allowList;
+      return allowList.map(String);
     }
     const entries = allowList
       .map((entry) => normalizeUserEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
     if (entries.length === 0) {
-      return allowList;
+      return allowList.map(String);
     }
     const mapping: string[] = [];
     const unresolved: string[] = [];
@@ -118,12 +118,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         `${label} entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored.`,
       );
     }
-    return allowList;
+    return allowList.map(String);
   };
 
   const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
-  let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
-  let groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+  let allowFrom: string[] = (cfg.channels?.matrix?.dm?.allowFrom ?? []).map(String);
+  let groupAllowFrom: string[] = (cfg.channels?.matrix?.groupAllowFrom ?? []).map(String);
   let roomsConfig = cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms;
 
   allowFrom = await resolveUserAllowlist("matrix dm allowlist", allowFrom);
@@ -307,15 +307,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   if (auth.encryption && client.crypto) {
     try {
       // Request verification from other sessions
-      const verificationRequest = await client.crypto.requestOwnUserVerification();
+      const verificationRequest = await (
+        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
+      ).requestOwnUserVerification?.();
       if (verificationRequest) {
         logger.info("matrix: device verification requested - please verify in another client");
       }
     } catch (err) {
-      logger.debug(
-        { error: String(err) },
-        "Device verification request failed (may already be verified)",
-      );
+      logger.debug?.("Device verification request failed (may already be verified)", {
+        error: String(err),
+      });
     }
   }
 
