@@ -119,6 +119,49 @@ describe("Cron issue regressions", () => {
     await store.cleanup();
   });
 
+  it("cron.run does not block list while job executes", async () => {
+    // This regression catches cron store lock being held across long-running job execution.
+    // If that happens, cron.list/status can hang for the duration of the job.
+    vi.useRealTimers();
+
+    const store = await makeStorePath();
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockImplementation(async () => {
+        await delay(200);
+        return { status: "ok", summary: "ok" };
+      }),
+    });
+    await cron.start();
+
+    const created = await cron.add({
+      name: "slow-run",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "slow" },
+    });
+
+    const runPromise = cron.run(created.id, "force");
+
+    const listPromise = cron.list();
+    const list = await Promise.race([
+      listPromise,
+      delay(75).then(() => {
+        throw new Error("cron.list timed out while cron.run was executing");
+      }),
+    ]);
+
+    expect(Array.isArray(list)).toBe(true);
+    await runPromise;
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("schedules isolated jobs with next wake time", async () => {
     const store = await makeStorePath();
     const cron = new CronService({

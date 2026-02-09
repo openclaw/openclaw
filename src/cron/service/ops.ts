@@ -183,8 +183,10 @@ export async function remove(state: CronServiceState, id: string) {
 }
 
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  return await locked(state, async () => {
-    warnIfDisabled(state, "run");
+  warnIfDisabled(state, "run");
+
+  // Phase 1 (under lock): validate + mark running + persist, then return the in-memory job
+  const start = await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
@@ -195,12 +197,30 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    await executeJob(state, job, now, { forced: mode === "force" });
+
+    job.state.runningAtMs = now;
+    job.state.lastError = undefined;
+    await persist(state);
+
+    return { ok: true, ran: true, job, now } as const;
+  });
+
+  if (!start.ran) {
+    return start;
+  }
+
+  // Phase 2 (outside lock): long execution (do NOT hold the cron store lock while waiting)
+  await executeJob(state, start.job, start.now, { forced: mode === "force" });
+
+  // Phase 3 (under lock): persist updated state + recompute next runs
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
-    return { ok: true, ran: true } as const;
   });
+
+  return { ok: true, ran: true } as const;
 }
 
 export function wakeNow(
